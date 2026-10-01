@@ -5,6 +5,8 @@
   "type": "module",
   "description": "Etsy 智能电商运营工作台 · 数字员工前端（Vite）",
   "scripts": {
+    "start": "node server.js",
+    "serve": "node server.js",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4173"
