@@ -7,11 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "serve": "node server.js",
-    "dev": "vite",
+    "dev": "node server.js",
     "build": "vite build",
     "preview": "vite preview --port 4173"
   },
-  "devDependencies": {
-    "vite": "^5.4.0"
-  }
+  "comment": "云端部署使用零依赖 server.js（npm start），无需 npm install。本地开发如想用 Vite HMR，请先手动 `npm i -D vite` 后 `npm run dev`（vite 不再列入依赖，避免云端 npm install 卡住导致端口 3000 起不来）。"
 }
