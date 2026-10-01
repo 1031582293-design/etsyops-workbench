@@ -1,8 +1,13 @@
 # 部署与协作指南（CODING + CloudStudio）
 
-本工程已部署到 CloudStudio 并运行（零依赖 `server.js` 监听 `process.env.PORT || 3000`）。
+本工程已成功部署到 CloudStudio（**纯静态托管，verified:true**）。
 代码源真相（Source of Truth）应放在远程 Git 仓库（推荐腾讯云 CODING，与 CloudStudio 同账号），
 CloudStudio 从仓库拉取代码做持续部署。
+
+> ⚠️ **关键坑（已踩过）**：CloudStudio 部署**只要目录里有 `package.json` 就会走 npm 路径**（`npm install`/`npm start`），
+> 云端沙箱里该路径 30s 内拉不起服务 → 报 `504 service on port 3000 not ready`。
+> **必须部署「不含 package.json 的纯静态目录」**。本仓库用 `dist/`（仅 `index.html` + `src/`，无 package.json）部署，已验证通过。
+> `etsyops/` 根目录保留 package.json + server.js 仅用于**本地** `npm start` 开发，不要直接部署根目录。
 
 ## 1. 本地预览
 ```bash
@@ -25,8 +30,9 @@ git push -u origin main
 ## 3. 自动部署到 CloudStudio（两种接法）
 ### 方式 A（推荐，最简单）：CloudStudio 关联 CODING 仓库
 在 CloudStudio 控制台「导入/关联代码仓库」选择上面的 CODING 仓库，
-配置：运行命令 `npm start`、端口 `3000`。之后**每次 push 到 main 自动重新部署**，
-无需额外 CI 脚本。
+**部署源务必指向纯静态目录（dist/），不要指向含 package.json 的根目录**，端口 `3000`。
+之后**每次 push 到 main 自动重新部署**，无需额外 CI 脚本。
+> 若你的 CODING 仓库根目录就是静态文件（无 package.json），可直接关联根目录；若根目录含 package.json，请配置部署子目录为 dist/。
 
 ### 方式 B：CODING 持续集成（CI）显式构建校验
 工程为零依赖静态站点，`npm install` 为本可选步骤。如需在合并前做校验，
@@ -53,6 +59,6 @@ master:
 - 日常在 `feature/*` 开发，PR 评审后合并到 `main` → CloudStudio 自动部署。
 
 ## 6. 当前已落地资源
-- CloudStudio 线上链接：https://ef0d5973d07043c3858160a2b6c371dc.app.workbuddy.host
+- CloudStudio 线上链接（纯静态，已验证）：https://54cfb13a51384e53bbb43ca2508bd43a.app.workbuddy.host
 - 资料库（SOP / 素材 / 交付归档）：https://www.workbuddy.cn/space/d/nKNS2kaUYoovmCnlil8Yc1
-- 本地仓库：`etsyops/`（main 分支，已提交，待推远端）
+- 本地仓库：`etsyops/`（main 分支，已提交，待推远端）；部署产物 `dist/`（纯静态，不含 package.json）
