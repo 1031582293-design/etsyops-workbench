@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EtsyOps · 智能电商运营工作台</title>
+  <link rel="stylesheet" href="/src/styles/base.css" />
+  <link rel="stylesheet" href="/src/styles/components.css" />
+</head>
+<body>
+  <div class="bg-blob blob-1"></div>
+  <div class="bg-blob blob-2"></div>
+  <div class="bg-blob blob-3"></div>
+  <div class="grid-overlay"></div>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">E</div>
+        <div>
+          <h1>EtsyOps 智能运营工作台</h1>
+          <div class="sub">Digital Workforce</div>
+        </div>
+      </div>
+      <div class="cmd">
+        <span>🔍</span>
+        <input id="cmdInput" placeholder="下达指令：让「选品情报员」分析万圣节趋势…" />
+        <span class="k">⌘K</span>
+      </div>
+      <div class="status-cluster">
+        <div class="stat-chip"><span class="v" style="color:var(--good)">12 名</span><span class="l">在岗数字员工</span></div>
+        <div class="stat-chip"><span class="v">98.6%</span><span class="l">任务达成率</span></div>
+        <div class="avatar">主</div>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <div class="tab active" data-view="overview">总览驾驶舱</div>
+      <div class="tab" data-view="employees">数字员工</div>
+      <div class="tab" data-view="workflow">工作流画布</div>
+      <div class="tab" data-view="social">自媒体矩阵</div>
+    </nav>
+
+    <main>
+      <section class="view active" id="view-overview">
+        <div class="kpis" id="kpiRow"></div>
+        <div class="section-title"><span class="bar"></span>数字员工方阵 <span class="hint">点击卡片进入其工作流</span></div>
+        <div class="emp-grid" id="empGrid"></div>
+        <div class="two-col">
+          <div class="feed" id="actFeed"></div>
+          <div class="pipe">
+            <div class="section-title" style="margin:0 0 12px"><span class="bar"></span>全平台内容流水线（自媒体）</div>
+            <div class="pipe-flow">
+              <div class="pipe-step">🎯 选题库</div><span class="pipe-arrow">→</span>
+              <div class="pipe-step">✍️ 脚本/文案</div><span class="pipe-arrow">→</span>
+              <div class="pipe-step">🎨 素材生成</div><span class="pipe-arrow">→</span>
+              <div class="pipe-step">📐 多平台适配</div><span class="pipe-arrow">→</span>
+              <div class="pipe-step">📅 排期发布</div><span class="pipe-arrow">→</span>
+              <div class="pipe-step">📈 数据复盘</div>
+            </div>
+            <div class="pipe-tags">
+              <span class="ptag">抖音</span><span class="ptag">小红书</span><span class="ptag">微信公众号</span>
+              <span class="ptag">TikTok</span><span class="ptag">Instagram</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-employees">
+        <div class="section-title"><span class="bar"></span>电商运营数字员工</div>
+        <div class="emp-grid" id="empGridEcom"></div>
+        <div class="section-title" style="margin-top:22px"><span class="bar"></span>自媒体运营数字员工</div>
+        <div class="emp-grid" id="empGridSocial"></div>
+      </section>
+
+      <section class="view" id="view-workflow">
+        <div class="wf">
+          <div class="wf-side" id="wfSide"></div>
+          <div class="wf-canvas" id="wfCanvas"></div>
+          <div class="wf-detail" id="wfDetail"></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-social">
+        <div class="section-title"><span class="bar"></span>自媒体账号矩阵 <span class="hint">抖音 · 小红书 · 微信公众号 · TikTok · Instagram</span></div>
+        <div class="social-grid" id="socialGrid"></div>
+        <div class="pipe">
+          <div class="section-title" style="margin:0 0 12px"><span class="bar"></span>今日内容排期（统一由「内容主编」数字员工调度）</div>
+          <div class="pipe-flow" id="socialSchedule"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
