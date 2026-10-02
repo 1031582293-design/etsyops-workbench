@@ -19,7 +19,7 @@ if not exist tunnel-token.txt (
   pause & exit /b 1
 )
 set /p TUNNEL_TOKEN=<tunnel-token.txt
-start "Cloudflare-Tunnel" /min cloudflared tunnel --token %TUNNEL_TOKEN% --url http://localhost:3000
+start "Cloudflare-Tunnel" /min cloudflared tunnel --no-autoupdate --token %TUNNEL_TOKEN% --url http://localhost:3000
 
 echo.
 echo 后端已启动。团队访问 https://etsyops-workbench.pages.dev 即可真实发布。

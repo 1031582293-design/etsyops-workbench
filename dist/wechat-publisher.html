@@ -152,7 +152,7 @@
           </div>
           <button class="btn" id="feishuBtn">拉取</button>
         </div>
-        <div class="hint">飞书真实拉取需接入「飞书」连接器并完成授权；当前为演示模式，点击「拉取」将载入示例文稿。</div>
+        <div class="hint">填入飞书文档链接（docx / wiki / doc），点击「拉取」即从飞书真实获取正文。需后端配置飞书应用凭证（FEISHU_APP_ID / FEISHU_APPSECRET）。<span id="feishuStatus"></span></div>
         <label class="fld">文章标题</label>
         <input type="text" id="title" placeholder="给文章起个标题…" />
         <label class="fld">正文（可编辑，支持 Markdown）</label>
@@ -382,13 +382,25 @@ function handleFile(f){
 }
 function fillText(t){ $('#src').value=t; if(!$('#title').value) $('#title').value='未命名文章'; renderPreview(); }
 
-$('#feishuBtn').onclick=()=>{
+$('#feishuBtn').onclick=async ()=>{
   const u=$('#feishuUrl').value.trim();
   if(!u){ toast('请先填入飞书文档链接'); return; }
-  $('#src').value = SAMPLE;
-  if(!$('#title').value) $('#title').value='手作蜡烛，为什么成了 Z 世代的疗愈刚需？';
-  renderPreview();
-  toast('（演示）已拉取飞书文档示例内容，接入连接器后即为真实拉取');
+  if(!/feishu\.cn|larksuite\.com/.test(u)){ toast('请填入有效的飞书文档链接'); return; }
+  if(!API_BASE){ toast('未连接后端，无法真实拉取（先填入飞书链接并在后端配置凭证）'); return; }
+  const btn=$('#feishuBtn'); const old=btn.textContent; btn.disabled=true; btn.textContent='拉取中…';
+  try{
+    const r=await fetch(API_BASE+'/api/feishu/fetch', {
+      method:'POST', headers: window.apiAuthHeaders(), body: JSON.stringify({ url:u })
+    });
+    const d=await r.json();
+    if(!r.ok || !d.ok) throw new Error(d.note || ('拉取失败('+r.status+')'));
+    fillText(d.content);
+    if(d.title && !$('#title').value) $('#title').value=d.title;
+    renderPreview();
+    toast('✅ 已真实拉取飞书文档');
+  }catch(e){
+    toast('拉取失败：'+e.message); console.error(e);
+  }finally{ btn.disabled=false; btn.textContent=old; }
 };
 
 ['title','src','author','cover','digest'].forEach(id=> $(id).addEventListener('input', renderPreview));
@@ -514,6 +526,12 @@ async function checkBackend(){
     $('#ipHint').innerHTML = (d.ip && d.ip!=='unknown')
       ? '真实发布需把云端出口 IP 加入公众号 IP 白名单：<code style="color:#7fd1ff">'+d.ip+'</code>（公众号后台 → 基本配置 → IP白名单）'
       : '真实发布需把云端服务器出口 IP 加入公众号 IP 白名单（公众号后台 → 基本配置 → IP白名单）。';
+  }catch{}
+  try{
+    const fs=await fetch(API_BASE+'/api/feishu/status'); const d=await fs.json();
+    const el=$('#feishuStatus');
+    if(d.configured){ el.textContent='｜飞书已授权 ✅'; el.style.color='var(--good)'; }
+    else { el.textContent='｜飞书未授权 ⚠'; el.style.color='var(--warn)'; }
   }catch{}
 }
 checkBackend();

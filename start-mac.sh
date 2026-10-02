@@ -20,4 +20,4 @@ if [ ! -f tunnel-token.txt ]; then
 fi
 echo "[2/2] 启动 Cloudflare Tunnel …"
 echo "     隧道起来后，Zero Trust 控制台会显示稳定地址（即 WECHAT_API_BASE）"
-cloudflared tunnel run --token "$(cat tunnel-token.txt)" --url http://localhost:3000
+cloudflared tunnel run --no-autoupdate --token "$(cat tunnel-token.txt)" --url http://localhost:3000

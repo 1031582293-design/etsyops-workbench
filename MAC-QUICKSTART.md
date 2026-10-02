@@ -126,9 +126,12 @@
    WECHAT_APPID=wx1234567890abcdef
    WECHAT_APPSECRET=你的AppSecret抄在这里
    API_KEY=随便打一串字母数字例如 abcd1234efgh5678
+   FEISHU_APP_ID=飞书自建应用AppID
+   FEISHU_APP_SECRET=飞书自建应用AppSecret
    ```
    - 第 1–2 行填第 0 步拿到的微信凭证；
-   - 第 3 行 `API_KEY` 你自己编任意一串（防陌生人乱发草稿，建议填）。
+   - 第 3 行 `API_KEY` 你自己编任意一串（防陌生人乱发草稿，建议填）；
+   - 第 4–5 行填**飞书企业自建应用**的凭证（用于「文稿收集」真实拉取飞书文档）。不填则飞书拉取不可用，但微信发布不受影响。飞书应用需开通「文档」读取权限并发布版本。
 4. 按 `Command+S` 保存，关掉窗口。
 
 ---
@@ -150,23 +153,32 @@ cloudflared tunnel --url http://localhost:3000
 - **复制这个 `https://xxxx.trycloudflare.com`**（下面要用）。这是你 Mac 后端的公网入口。
 - ⚠️ 这个窗口**不要关**。关了隧道就断。
 
-### 方案 B：稳定地址（团队长期使用，地址不变）
+### 方案 B：稳定地址（团队长期使用，地址不变）✅ 推荐
 
-1. 登录 Cloudflare（浏览器）：
-   ```bash
-   cloudflared tunnel login
+> 这条用「Cloudflare Zero Trust 后台令牌」方式——**不用你自己的域名、不用 `cloudflared login`**，一条命令就拿固定地址。Windows 操作人也是同一套（见 OPERATOR-GUIDE.md 第 6 步）。
+
+1. 浏览器开 <https://one.dash.cloudflare.com> → 左侧 **Zero Trust**（免费，首次会让你注册一次）→ **Networks → Tunnels → Create a tunnel**。
+2. 选 **Cloudflared** → 隧道名填 `etsyops-backend` → 点下一步。
+3. 页面会显示一段命令，形如：
    ```
-   自动开网页 → 选你的账号 → 授权。
-2. 建一个命名隧道：
-   ```bash
-   cloudflared tunnel create etsyops-backend
+   cloudflared tunnel run --token eyJhIjoi...一长串...
    ```
-   屏幕会显示一个 **隧道 ID**（一长串字母数字），抄下来。
-3. 起隧道（把 `隧道ID` 换成上一步那串）：
+   把 `--token` **后面那整串**（从 `eyJ` 开头到结尾）全选复制下来。
+4. 回到终端（在 `etsyops-workbench` 目录），把令牌存进文件，避免每次手敲：
    ```bash
-   cloudflared tunnel run --url http://localhost:3000 隧道ID
+   echo 'eyJ...把你复制的那整串粘这里...' > tunnel-token.txt
    ```
-4. 你的稳定地址是：`https://隧道ID.cfargotunnel.com`（把 `隧道ID` 换成你的）。
+   > 这文件只存令牌、已被忽略不会进仓库，安全。
+5. 起隧道（把本地 3000 暴露成公网地址）：
+   ```bash
+   cloudflared tunnel run --no-autoupdate --token "$(cat tunnel-token.txt)" --url http://localhost:3000
+   ```
+   - 或图省事直接贴令牌：`cloudflared tunnel run --no-autoupdate --token eyJ...你的令牌... --url http://localhost:3000`
+6. 约 10 秒后，回 Zero Trust → **Tunnels → etsyops-backend**，状态变 **Healthy**，并给出**固定地址**，类似：
+   ```
+   https://xxxx-xxxx.cfargotunnel.com
+   ```
+   **复制这个地址**（下面第 8 步要填进 Cloudflare）。这是你 Mac 后端的公网入口，**重启/换网络都不变**。
    - ⚠️ 这个窗口**不要关**。
 
 > 建议：先走方案 A 验证能跑通，再换方案 B 给团队用。
