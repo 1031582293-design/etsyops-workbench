@@ -212,3 +212,46 @@ Cloudflare 控制台 → 该项目 **Settings → Build & deployments → 环境
 团队打开 `https://etsyops-workbench.pages.dev/wechat-publisher.html`，顶部「绑定状态」显示 `✅ 已绑定真实公众号` → 上传封面+文稿 → 发布到草稿箱 → 公众号后台草稿箱可见真实文章。
 
 > 运维提醒：操作人电脑**关机或退出那两个窗口**时，团队无法真实发布（前端仍可读、其他模块照用）。长期更稳可选 9.1-① 自有 VPS。
+
+### 9.7 Mac 所有者临时顶替后端（操作人未到位时的过渡方案）
+> 适用：操作人电脑还没配好，但你想让 `https://etsyops-workbench.pages.dev` 立刻变成**真实工作台**。原理与 9.6 完全相同，只是主机换成你自己的 Mac，且用 Mac 版命令（`.bat` 改为 shell）。等操作人员到位后，只需把 Cloudflare 构建变量 `WECHAT_API_BASE` 换成他的隧道地址即可，前端零改动。
+
+**A. 你 Mac 上一次性准备**
+1. 装 **Node.js**（https://nodejs.org LTS；装完终端 `node -v` 有版本即 OK）。
+2. 装 **cloudflared**（Mac 终端二选一）：
+   ```bash
+   brew install cloudflare/cloudflared/cloudflared   # 有 Homebrew
+   # 或：
+   # 去 https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ 下 macOS 版
+   ```
+   装完 `cloudflared --version` 验证。
+3. 进项目目录（仓库已 clone 在你 Mac 上；若没有：`git clone git@github.com:1031582293-design/etsyops-workbench.git`）。
+4. 复制 `.env.example` 为 `.env`，填 `WECHAT_APPID` / `WECHAT_APPSECRET`（mp.weixin.qq.com → 设置与开发 → 基本配置 拿）。
+5. （建议）在 `.env` 加 `API_KEY=一串随机字符串`（和 9.6 第 5 步同理）。
+
+**B. 建 Cloudflare Tunnel（同 9.6 第 6–7 步）**
+6. Cloudflare 控制台 → **Zero Trust** → **Networks → Tunnels → Create a tunnel** → 选 **Cloudflared** → 起名 `etsyops-backend`。
+7. 复制安装命令里的 **token**（`<长串>`），存成仓库目录下的 `tunnel-token.txt`（已被 .gitignore 忽略）。
+
+**C. 在你 Mac 上启动（后台 Node + 隧道）**
+8. 开一个终端，进项目目录，跑：
+   ```bash
+   # 后台起 Node 后端
+   nohup npm start > /tmp/etsyops-backend.log 2>&1 &
+   # 起隧道（用你存好的 token）
+   cloudflared tunnel run --token "$(cat tunnel-token.txt)" --url http://localhost:3000
+   ```
+   隧道起来后，Zero Trust 的 Tunnel 页会显示稳定地址，如 `https://<隧道id>.cfargotunnel.com`（记下 = `<后端地址>`）。
+   > 想让 Mac 重启/合盖后仍尽量常驻，可把上面两条写成一个 `start-mac.sh` 自动运行；但 Mac 睡眠/关机时隧道会断，属预期。
+
+**D. 接前端 + 白名单（同 9.6 第 9–10 步）**
+9. Cloudflare → Pages 项目 `etsyops-workbench` → **Settings → Build & deployments → 环境变量** 加：
+   - `WECHAT_API_BASE = https://<你的隧道地址>`
+   - `WECHAT_API_KEY = <与 .env 相同的随机串>`（设了才填）
+   → **触发重新部署**。
+10. 微信 IP 白名单：开 `https://<你的隧道地址>/api/wechat/ip` 拿出口 IP → mp.weixin.qq.com → 基本配置 → **IP 白名单** 加入。Mac 换网络/宽带重拨导致 IP 变了就重做这步；可预加多个常用网络 IP（上限 100 个）。
+
+**E. 验证**
+团队开 `https://etsyops-workbench.pages.dev/wechat-publisher.html` → 顶部「✅ 已绑定真实公众号」→ 上传封面+文稿 → 发布到草稿箱 → 公众号后台草稿箱可见真实文章；`wechat-dashboard.html` 显示真实粉丝/草稿/已发布数据。
+
+> 过渡说明：这是你 Mac 顶替的临时方案，依赖你 Mac 常开+在线。操作人员到位后走 9.6，并把 `WECHAT_API_BASE` 换成他的隧道地址即可"无缝交接"。
