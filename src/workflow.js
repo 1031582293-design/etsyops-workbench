@@ -56,6 +56,7 @@ export function renderWfDetail() {
     <div class="info-row"><div class="k">状态</div><div class="v">${e.status === 'run' ? '运行中' : e.status === 'learn' ? '学习中' : '待命'}</div></div>
     <div class="info-row"><div class="k">内置节点</div><div class="v">${e.nodes.length} 个（按 SOP 串联）</div></div>
     <div class="info-row"><div class="k">协作对象</div><div class="v">${e.cat === '电商' ? '选品→Listing→客服→数据→广告' : '内容主编→各平台运营→数据复盘'}</div></div>
+    ${e.tool ? `<a class="btn primary" href="${e.tool}" target="_blank" rel="noopener" style="text-decoration:none;width:100%;justify-content:center;margin:12px 0 4px">打开专用工具 ↗</a>` : ''}
     <h4 style="margin-top:18px">交付成果</h4>
     <div class="deliver" id="deliverBox">
       ${e.deliverables.map(d => `

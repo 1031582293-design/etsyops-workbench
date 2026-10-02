@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>EtsyOps · 公众号排版发布工具</title>
+<style>
+  :root{
+    --bg:#0b0e1a; --bg2:#0f1426; --panel:rgba(255,255,255,.045); --panel-2:rgba(255,255,255,.07);
+    --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.18);
+    --text:#eaf0ff; --text-dim:#aab3d0; --text-faint:#6b7596;
+    --grad:linear-gradient(135deg,#7c5cff,#22d3ee); --accent:#22d3ee; --accent-2:#7c5cff;
+    --good:#34d399; --warn:#ffb86b; --bad:#ff6b81; --wx:#07c160;
+    --radius:18px; --radius-sm:13px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:radial-gradient(1200px 700px at 12% -8%,rgba(124,92,255,.22),transparent 60%),
+      radial-gradient(1000px 600px at 100% 0%,rgba(34,211,238,.16),transparent 55%),var(--bg);
+    color:var(--text);min-height:100vh;padding:22px 26px 60px}
+  a{color:var(--accent)}
+  .topbar{display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap}
+  .logo{width:46px;height:46px;border-radius:13px;background:var(--grad);display:grid;place-items:center;font-size:22px}
+  .topbar h1{font-size:19px;margin:0;font-weight:800}
+  .topbar .sub{font-size:12.5px;color:var(--text-dim)}
+  .badge{font-size:11px;font-weight:700;color:#04121a;background:var(--wx);padding:4px 10px;border-radius:999px}
+  .demo-flag{font-size:11px;color:var(--warn);border:1px solid rgba(255,184,107,.35);background:rgba(255,184,107,.1);padding:4px 10px;border-radius:999px}
+
+  /* stepper */
+  .stepper{display:flex;gap:10px;margin:0 0 20px;flex-wrap:wrap}
+  .step-chip{flex:1;min-width:180px;background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    padding:13px 15px;cursor:pointer;transition:.2s;display:flex;gap:12px;align-items:center}
+  .step-chip:hover{border-color:var(--border-strong)}
+  .step-chip.active{border-color:rgba(7,193,96,.5);background:rgba(7,193,96,.08)}
+  .step-chip .num{width:28px;height:28px;border-radius:9px;background:var(--panel-2);display:grid;place-items:center;font-weight:800;font-size:13px;flex-shrink:0}
+  .step-chip.active .num{background:var(--wx);color:#04121a}
+  .step-chip .t{font-size:13.5px;font-weight:700}
+  .step-chip .d{font-size:11.5px;color:var(--text-faint);margin-top:2px}
+
+  .layout{display:grid;grid-template-columns:1fr 400px;gap:20px;align-items:start}
+  @media(max-width:980px){.layout{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:18px}
+  .panel h3{margin:0 0 4px;font-size:15px;display:flex;align-items:center;gap:9px}
+  .panel .ph-sub{font-size:12px;color:var(--text-faint);margin-bottom:16px}
+
+  label.fld{display:block;font-size:12px;color:var(--text-dim);margin:14px 0 7px;font-weight:600}
+  input[type=text],input[type=url],textarea,select{width:100%;background:var(--bg2);border:1px solid var(--border);
+    border-radius:11px;color:var(--text);font-size:13.5px;padding:11px 13px;font-family:inherit;outline:none;transition:.18s}
+  input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+  textarea{min-height:200px;resize:vertical;line-height:1.6}
+
+  .drop{border:1.5px dashed var(--border-strong);border-radius:14px;padding:22px;text-align:center;color:var(--text-dim);
+    cursor:pointer;transition:.2s;background:rgba(255,255,255,.02)}
+  .drop:hover{border-color:var(--accent);background:rgba(34,211,238,.06)}
+  .drop b{color:var(--text)}
+  .row2{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
+
+  .tpls{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:6px}
+  .tpl{padding:9px 13px;border-radius:11px;border:1px solid var(--border);background:var(--panel-2);cursor:pointer;font-size:12.5px;font-weight:600;transition:.18s}
+  .tpl:hover{border-color:var(--border-strong)}
+  .tpl.active{border-color:var(--wx);background:rgba(7,193,96,.14);color:#bff3d4}
+  .swatches{display:flex;gap:9px;margin:6px 0 4px}
+  .sw{width:26px;height:26px;border-radius:8px;cursor:pointer;border:2px solid transparent}
+  .sw.active{border-color:#fff}
+
+  .btn{padding:11px 18px;border-radius:12px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);
+    font-size:13.5px;font-weight:700;cursor:pointer;transition:.18s;display:inline-flex;align-items:center;gap:8px}
+  .btn:hover{border-color:var(--border-strong)}
+  .btn.primary{background:var(--wx);border:none;color:#04121a;box-shadow:0 10px 26px rgba(7,193,96,.35)}
+  .btn.primary:hover{filter:brightness(1.07)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.ghost{background:transparent}
+
+  /* preview phone */
+  .preview-wrap{position:sticky;top:18px}
+  .phone{width:100%;max-width:380px;margin:0 auto;background:#fff;border-radius:22px;overflow:hidden;
+    box-shadow:0 30px 60px rgba(0,0,0,.45);border:1px solid var(--border)}
+  .phone-bar{height:26px;background:#1c1f2b;display:flex;align-items:center;justify-content:center;gap:5px}
+  .phone-bar i{width:5px;height:5px;border-radius:50%;background:#54596e}
+  .wx-top{background:var(--wx);color:#fff;padding:13px 16px;font-size:13px;font-weight:700;display:flex;justify-content:space-between;align-items:center}
+  .wx-top .back{font-size:18px;font-weight:400}
+  .article{background:#fff;color:#3f3f3f;padding:18px 18px 26px;font-size:16px;line-height:1.75}
+  .article .cover{width:100%;border-radius:8px;margin-bottom:14px;display:block;background:#eee;min-height:120px;object-fit:cover}
+  .article h1{font-size:21px;line-height:1.4;color:#1a1a1a;margin:2px 0 14px;font-weight:800}
+  .article .byline{font-size:12.5px;color:#999;margin-bottom:18px;display:flex;gap:12px;align-items:center}
+  .article .byline .avatar{width:22px;height:22px;border-radius:50%;background:var(--wx);display:grid;place-items:center;color:#fff;font-size:12px}
+  .article h2{font-size:18px;margin:22px 0 10px;color:#1a1a1a;font-weight:800;padding-left:10px;position:relative}
+  .article h2::before{content:"";position:absolute;left:0;top:3px;bottom:3px;width:4px;border-radius:3px;background:var(--theme,#07c160)}
+  .article h3{font-size:16px;margin:18px 0 8px;color:#222;font-weight:700}
+  .article p{margin:0 0 14px}
+  .article blockquote{margin:0 0 14px;padding:10px 14px;background:#f6f8fa;border-left:4px solid var(--theme,#07c160);color:#555;border-radius:6px;font-size:14.5px}
+  .article ul,.article ol{margin:0 0 14px;padding-left:22px}
+  .article li{margin:5px 0}
+  .article a{color:#576b95}
+  .article pre{background:#f6f8fa;border-radius:8px;padding:12px;overflow:auto;font-size:13px;color:#333}
+  .article code{background:#f2f3f5;padding:2px 5px;border-radius:4px;font-size:13.5px;color:#c0341d}
+  .article img{max-width:100%;border-radius:8px;margin:6px 0}
+  .article hr{border:none;border-top:1px solid #eee;margin:18px 0}
+  .wx-foot{background:#fafafa;color:#999;font-size:11.5px;text-align:center;padding:12px}
+
+  /* modal */
+  .modal-mask{position:fixed;inset:0;background:rgba(4,7,16,.7);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:50;padding:20px}
+  .modal-mask.show{display:flex}
+  .modal{background:var(--bg2);border:1px solid var(--border-strong);border-radius:18px;max-width:560px;width:100%;padding:24px;max-height:86vh;overflow:auto}
+  .modal h3{margin:0 0 12px;font-size:17px}
+  .modal pre{background:#060912;border:1px solid var(--border);border-radius:12px;padding:14px;overflow:auto;font-size:12px;color:#9fe6c4;line-height:1.6}
+  .req-line{color:#7fd1ff}
+  .ok-box{background:rgba(52,211,153,.12);border:1px solid rgba(52,211,153,.4);border-radius:12px;padding:14px;margin-top:14px;font-size:13px;color:#bff3d4}
+  .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:var(--bg2);border:1px solid var(--border-strong);
+    padding:12px 20px;border-radius:12px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:60}
+  .toast.show{opacity:1}
+  .hint{font-size:11.5px;color:var(--text-faint);margin-top:8px;line-height:1.5}
+  .filetag{display:inline-flex;align-items:center;gap:7px;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:9px;padding:7px 11px;font-size:12px;margin-top:10px}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="logo">💚</div>
+    <div>
+      <h1>公众号运营 · 排版发布工具</h1>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → 公众号排版 → 发布草稿箱</div>
+    </div>
+    <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
+      <span class="demo-flag">演示模式（草稿接口为模拟，飞书为模拟拉取）</span>
+      <a class="btn ghost" href="index.html">← 返回工作台</a>
+    </div>
+  </div>
+
+  <div class="stepper" id="stepper">
+    <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">文稿收集</div><div class="d">本地文件 / 飞书文档</div></div></div>
+    <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">公众号排版</div><div class="d">模板 · 实时预览</div></div></div>
+    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">发布草稿箱</div><div class="d">写入公众号草稿</div></div></div>
+  </div>
+
+  <div class="layout">
+    <!-- 左：操作区 -->
+    <div>
+      <!-- STEP 1 -->
+      <div class="panel" id="panel1">
+        <h3>① 文稿收集</h3>
+        <div class="ph-sub">支持本地文件（.md / .txt / .html / .docx）与飞书文档链接，归一为可编辑正文。</div>
+        <div class="drop" id="drop"><b>点击或拖拽上传文稿</b><br><span style="font-size:12px">md / txt / html / docx</span></div>
+        <input type="file" id="file" accept=".md,.txt,.html,.htm,.docx" hidden />
+        <div id="fileTag"></div>
+        <div class="row2" style="margin-top:14px">
+          <div>
+            <label class="fld" style="margin-top:0">飞书文档链接（可选）</label>
+            <input type="url" id="feishuUrl" placeholder="https://example.feishu.cn/docx/xxxxxxxx" />
+          </div>
+          <button class="btn" id="feishuBtn">拉取</button>
+        </div>
+        <div class="hint">飞书真实拉取需接入「飞书」连接器并完成授权；当前为演示模式，点击「拉取」将载入示例文稿。</div>
+        <label class="fld">文章标题</label>
+        <input type="text" id="title" placeholder="给文章起个标题…" />
+        <label class="fld">正文（可编辑，支持 Markdown）</label>
+        <textarea id="src" placeholder="在这里粘贴或上传你的文稿…"></textarea>
+      </div>
+
+      <!-- STEP 2 -->
+      <div class="panel" id="panel2">
+        <h3>② 公众号排版</h3>
+        <div class="ph-sub">选择版式模板与主题色，右侧实时预览手机效果。</div>
+        <label class="fld" style="margin-top:0">版式模板</label>
+        <div class="tpls" id="tpls">
+          <div class="tpl active" data-tpl="default">默认舒适</div>
+          <div class="tpl" data-tpl="wenyi">文艺清新</div>
+          <div class="tpl" data-tpl="biz">商务专业</div>
+          <div class="tpl" data-tpl="mini">极简</div>
+        </div>
+        <label class="fld">主题色</label>
+        <div class="swatches" id="swatches">
+          <div class="sw active" data-c="#07c160" style="background:#07c160"></div>
+          <div class="sw" data-c="#7c5cff" style="background:#7c5cff"></div>
+          <div class="sw" data-c="#ff6b81" style="background:#ff6b81"></div>
+          <div class="sw" data-c="#ffb86b" style="background:#ffb86b"></div>
+          <div class="sw" data-c="#22d3ee" style="background:#22d3ee"></div>
+          <div class="sw" data-c="#1a1a1a" style="background:#1a1a1a"></div>
+        </div>
+        <label class="fld">正文字号</label>
+        <div class="tpls" id="sizes">
+          <div class="tpl" data-s="15">小 (15px)</div>
+          <div class="tpl active" data-s="16">标准 (16px)</div>
+          <div class="tpl" data-s="17">大 (17px)</div>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:10px">
+          <button class="btn primary" id="toStep3">排版完成，去发布 →</button>
+        </div>
+      </div>
+
+      <!-- STEP 3 -->
+      <div class="panel" id="panel3">
+        <h3>③ 发布草稿箱</h3>
+        <div class="ph-sub">将排版稿写入公众号草稿箱（不群发）。接入真实 AppID 后可直发。</div>
+        <label class="fld" style="margin-top:0">封面图（可选）</label>
+        <input type="url" id="cover" placeholder="封面图 URL，或留空用占位图" />
+        <div class="row2" style="margin-top:14px">
+          <div><label class="fld" style="margin-top:0">作者</label><input type="text" id="author" value="Etsy好物研究所" /></div>
+          <div><label class="fld" style="margin-top:0">摘要</label><input type="text" id="digest" placeholder="一句话摘要（选填）" /></div>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:10px">
+          <button class="btn primary" id="publish">📥 发布到草稿箱</button>
+          <button class="btn ghost" id="copyHtml">复制排版 HTML</button>
+        </div>
+        <div class="hint">草稿接口：POST https://api.weixin.qq.com/cgi-bin/draft/add?access_token=ACCESS_TOKEN 。演示模式返回模拟草稿；接入「微信公众平台」凭证后即为真实写入。</div>
+      </div>
+    </div>
+
+    <!-- 右：实时预览 -->
+    <div class="preview-wrap">
+      <div class="phone">
+        <div class="phone-bar"><i></i><i></i><i></i></div>
+        <div class="wx-top"><span class="back">‹</span><span>公众号文章预览</span><span style="font-size:12px;font-weight:400;opacity:.8">···</span></div>
+        <div class="article" id="article">
+          <img class="cover" id="prevCover" src="https://picsum.photos/seed/etsyops/760/420" alt="cover" />
+          <h1 id="prevTitle">给文章起个标题…</h1>
+          <div class="byline"><span class="avatar">💚</span><span id="prevAuthor">Etsy好物研究所</span><span id="prevDate"></span></div>
+          <div id="prevBody"><p style="color:#bbb">正文预览会随左侧编辑实时更新。支持标题、加粗、引用、列表、分割线等公众号常见版式。</p></div>
+        </div>
+        <div class="wx-foot">EtsyOps · 公众号运营数字员工</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 发布弹窗 -->
+  <div class="modal-mask" id="mask">
+    <div class="modal">
+      <h3>📤 发布到草稿箱（演示模式）</h3>
+      <div style="font-size:12.5px;color:var(--text-dim);margin-bottom:10px">将向微信公众平台草稿箱接口发送以下请求：</div>
+      <pre id="reqPreview"></pre>
+      <div class="ok-box" id="respBox" style="display:none"></div>
+      <div style="margin-top:16px;display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn ghost" id="closeModal">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+/* ---------- 状态 ---------- */
+const state = { tpl:'default', color:'#07c160', size:16, cover:'' };
+const SAMPLE = `# 手作蜡烛，为什么成了 Z 世代的疗愈刚需？
+
+最近和几位买家聊下来，发现一个有趣的现象：**买蜡烛的人，买的不是光，是氛围感。**
+
+## 三个被低估的使用场景
+
+- **独居疗愈**：下班后点一支，仪式感瞬间拉满
+- **礼物属性**：包装精致，送礼不出错
+- **空间香氛**：比香水更克制，比香薰更持久
+
+> 好的选品，解决的是情绪，而不是功能。
+
+---
+
+想看我们这周的选品清单？评论区扣「清单」，我发你。
+
+了解更多可访问 [Etsy 店铺](https://etsy.com)。`;
+
+/* ---------- 工具函数 ---------- */
+const $ = s => document.querySelector(s);
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
+
+function ensureMammoth(cb){
+  if(window.mammoth) return cb();
+  const s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js';
+  s.onload=()=>cb();
+  s.onerror=()=>cb(new Error('docx 解析库加载失败（需联网）'));
+  document.head.appendChild(s);
+}
+
+/* ---------- 极简 Markdown 解析 ---------- */
+function mdToHtml(src){
+  const lines = src.replace(/\r\n/g,'\n').split('\n');
+  let html='', i=0, inCode=false, codeBuf=[];
+  const inline = t => t
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g,'<img alt="$1" src="$2">')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>')
+    .replace(/`([^`]+)`/g,'<code>$1</code>');
+  while(i<lines.length){
+    let ln = lines[i];
+    if(ln.trim().startsWith('```')){ if(!inCode){inCode=true;codeBuf=[];} else {html+='<pre><code>'+codeBuf.join('\n')+'</code></pre>';inCode=false;} i++;continue; }
+    if(inCode){ codeBuf.push(ln); i++; continue; }
+    if(/^\s*#\s/.test(ln)){ html+='<h1>'+inline(ln.replace(/^\s*#\s/,''))+'</h1>'; i++;continue; }
+    if(/^\s*##\s/.test(ln)){ html+='<h2>'+inline(ln.replace(/^\s*##\s/,''))+'</h2>'; i++;continue; }
+    if(/^\s*###\s/.test(ln)){ html+='<h3>'+inline(ln.replace(/^\s*###\s/,''))+'</h3>'; i++;continue; }
+    if(/^\s*>\s?/.test(ln)){ html+='<blockquote>'+inline(ln.replace(/^\s*>\s?/,''))+'</blockquote>'; i++;continue; }
+    if(/^\s*---\s*$/.test(ln)){ html+='<hr>'; i++;continue; }
+    if(/^\s*[-*]\s+/.test(ln)){
+      const items=[]; while(i<lines.length && /^\s*[-*]\s+/.test(lines[i])){ items.push('<li>'+inline(lines[i].replace(/^\s*[-*]\s+/,''))+'</li>'); i++; }
+      html+='<ul>'+items.join('')+'</ul>'; continue;
+    }
+    if(/^\s*\d+\.\s+/.test(ln)){
+      const items=[]; while(i<lines.length && /^\s*\d+\.\s+/.test(lines[i])){ items.push('<li>'+inline(lines[i].replace(/^\s*\d+\.\s+/,''))+'</li>'); i++; }
+      html+='<ol>'+items.join('')+'</ol>'; continue;
+    }
+    if(ln.trim()===''){ i++;continue; }
+    let para=''; while(i<lines.length && lines[i].trim()!=='' && !/^\s*(#|##|###|>|[-*]|\d+\.|---|```)/.test(lines[i])){ para+=(para?' ':'')+lines[i]; i++; }
+    html+='<p>'+inline(para)+'</p>';
+  }
+  return html;
+}
+
+/* ---------- 预览渲染 ---------- */
+function renderPreview(){
+  const theme = state.color;
+  const art = $('#article');
+  art.style.setProperty('--theme', theme);
+  art.style.fontSize = state.size+'px';
+  const tplBody = { default:'', wenyi:'font-family:"Songti SC",serif;', biz:'', mini:'line-height:1.7;' }[state.tpl]||'';
+  if(tplBody) art.querySelector('#prevBody').setAttribute('style', tplBody);
+  else art.querySelector('#prevBody').removeAttribute('style');
+
+  $('#prevTitle').textContent = $('#title').value || '给文章起个标题…';
+  $('#prevAuthor').textContent = $('#author').value || 'Etsy好物研究所';
+  const cover = state.cover || $('#cover').value;
+  $('#prevCover').src = cover || 'https://picsum.photos/seed/etsyops/760/420';
+  const raw = $('#src').value.trim();
+  $('#prevBody').innerHTML = raw ? mdToHtml(raw) : '<p style="color:#bbb">正文预览会随左侧编辑实时更新。</p>';
+  const d = new Date();
+  $('#prevDate').textContent = (d.getMonth()+1)+'月'+d.getDate()+'日';
+}
+
+/* 当模板需要不同视觉（文艺/极简）时在 h2 上叠加风格 */
+function applyTplStyle(){
+  const map = {
+    wenyi: { h1:'font-family:"Songti SC",serif;letter-spacing:.5px', h2:'font-family:"Songti SC",serif' },
+    mini:  { h1:'font-weight:800;letter-spacing:-.3px', h2:'background:transparent;padding-left:0' },
+    biz:   { h1:'', h2:'' }, default:{ h1:'', h2:'' }
+  };
+  const st = map[state.tpl]||{};
+  const a=$('#article');
+  a.querySelector('h1').setAttribute('style', st.h1||'');
+}
+
+/* ---------- 步骤切换 ---------- */
+function goStep(n){
+  document.querySelectorAll('.step-chip').forEach(c=>c.classList.toggle('active', +c.dataset.step===n));
+  ['panel1','panel2','panel3'].forEach((p,idx)=>{ $(p).style.display = (idx+1)===n ? '' : 'none'; });
+  window.scrollTo({top:0,behavior:'smooth'});
+  if(n===2) applyTplStyle();
+}
+document.querySelectorAll('.step-chip').forEach(c=>c.onclick=()=>goStep(+c.dataset.step));
+
+/* ---------- 事件绑定 ---------- */
+$('#drop').onclick=()=>$('#file').click();
+$('#file').onchange=e=>handleFile(e.target.files[0]);
+['dragover','dragenter'].forEach(ev=>$('#drop').addEventListener(ev,e=>{e.preventDefault();$('#drop').style.borderColor='var(--accent)';}));
+['dragleave','drop'].forEach(ev=>$('#drop').addEventListener(ev,e=>{e.preventDefault();$('#drop').style.borderColor='';}));
+$('#drop').addEventListener('drop',e=>{const f=e.dataTransfer.files[0]; if(f) handleFile(f);});
+
+function handleFile(f){
+  if(!f) return;
+  const name=f.name.toLowerCase();
+  $('#fileTag').innerHTML='<span class="filetag">📄 '+f.name+' <span style="opacity:.6">· '+ (f.size/1024).toFixed(0) +'KB</span></span>';
+  const reader=new FileReader();
+  if(name.endsWith('.docx')){
+    ensureMammoth(err=>{
+      if(err){ toast('docx 解析库加载失败，请联网后重试'); return; }
+      reader.onload=()=>window.mammoth.convertToHtml({arrayBuffer:reader.result}).then(r=>{ fillText(r.value); toast('docx 已解析'); }).catch(()=>toast('docx 解析失败'));
+      reader.readAsArrayBuffer(f);
+    });
+  } else if(name.endsWith('.html')||name.endsWith('.htm')){
+    reader.onload=()=>{ const doc=new DOMParser().parseFromString(reader.result,'text/html'); fillText(doc.body.innerText); toast('HTML 已抽取正文'); };
+    reader.readAsText(f);
+  } else {
+    reader.onload=()=>{ fillText(reader.result); toast('文稿已载入'); };
+    reader.readAsText(f);
+  }
+}
+function fillText(t){ $('#src').value=t; if(!$('#title').value) $('#title').value='未命名文章'; renderPreview(); }
+
+$('#feishuBtn').onclick=()=>{
+  const u=$('#feishuUrl').value.trim();
+  if(!u){ toast('请先填入飞书文档链接'); return; }
+  $('#src').value = SAMPLE;
+  if(!$('#title').value) $('#title').value='手作蜡烛，为什么成了 Z 世代的疗愈刚需？';
+  renderPreview();
+  toast('（演示）已拉取飞书文档示例内容，接入连接器后即为真实拉取');
+};
+
+['title','src','author','cover','digest'].forEach(id=> $(id).addEventListener('input', renderPreview));
+$('#toStep3').onclick=()=>goStep(3);
+
+/* 模板 / 颜色 / 字号 */
+document.querySelectorAll('#tpls .tpl').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('#tpls .tpl').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active'); state.tpl=t.dataset.tpl; applyTplStyle(); renderPreview();
+});
+document.querySelectorAll('#swatches .sw').forEach(s=>s.onclick=()=>{
+  document.querySelectorAll('#swatches .sw').forEach(x=>x.classList.remove('active'));
+  s.classList.add('active'); state.color=s.dataset.c; renderPreview();
+});
+document.querySelectorAll('#sizes .tpl').forEach(s=>s.onclick=()=>{
+  document.querySelectorAll('#sizes .tpl').forEach(x=>x.classList.remove('active'));
+  s.classList.add('active'); state.size=+s.dataset.s; renderPreview();
+});
+
+/* ---------- 发布草稿箱 ---------- */
+function buildPayload(){
+  const bodyHtml = mdToHtml($('#src').value);
+  return {
+    articles:[{
+      title: $('#title').value || '未命名文章',
+      author: $('#author').value || '',
+      digest: $('#digest').value || '',
+      content: bodyHtml,
+      content_source_url: '',
+      thumb_media_id: '',
+      need_open_comment: 1,
+      only_fans_can_comment: 0
+    }]
+  };
+}
+$('#publish').onclick=()=>{
+  if(!$('#title').value.trim() || !$('#src').value.trim()){ toast('请先填写标题与正文'); return; }
+  const payload = buildPayload();
+  const req = `POST https://api.weixin.qq.com/cgi-bin/draft/add?access_token=ACCESS_TOKEN
+
+{
+  "articles": [{
+    "title": ${JSON.stringify(payload.articles[0].title)},
+    "author": ${JSON.stringify(payload.articles[0].author)},
+    "digest": ${JSON.stringify(payload.articles[0].digest)},
+    "content": "<!-- HTML 长度 "+payload.articles[0].content.length+" 字符 -->",
+    "need_open_comment": 1
+  }]
+}`;
+  $('#reqPreview').textContent = req;
+  $('#mask').classList.add('show');
+  // 模拟接口返回
+  const draftId = 'DR' + Date.now().toString(36).toUpperCase();
+  setTimeout(()=>{
+    $('#respBox').style.display='block';
+    $('#respBox').innerHTML = '✅ <b>已写入草稿箱（演示）</b><br>草稿 media_id：<code style="color:#04121a">'+draftId+'</code><br>'+
+      '标题：'+payload.articles[0].title+'<br><span style="opacity:.8">接入真实 AppID + access_token 后，此处即为微信返回的真实 media_id，可在公众号后台「草稿箱」查看并群发。</span>';
+    toast('已发布到草稿箱（演示）');
+  }, 600);
+};
+$('#copyHtml').onclick=()=>{
+  const html = '<h1>'+($('#title').value)+'</h1>'+mdToHtml($('#src').value);
+  navigator.clipboard.writeText(html).then(()=>toast('排版 HTML 已复制')).catch(()=>toast('复制失败'));
+};
+$('#closeModal').onclick=()=>$('#mask').classList.remove('show');
+$('#mask').onclick=e=>{ if(e.target===$('#mask')) $('#mask').classList.remove('show'); };
+
+/* 初始化 */
+$('#src').value = SAMPLE;
+$('#title').value = '手作蜡烛，为什么成了 Z 世代的疗愈刚需？';
+renderPreview();
+goStep(1);
+</script>
+</body>
+</html>

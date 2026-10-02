@@ -17,6 +17,9 @@ export function renderKPIs() {
 }
 
 export function empCard(e) {
+  const toolBtn = e.tool
+    ? `<a class="emp-tool-btn" href="${e.tool}" target="_blank" rel="noopener">打开专用工具 ↗</a>`
+    : '';
   return `<div class="emp-card" data-emp="${e.id}">
     <div class="top">
       <div class="emp-ava" style="background:${e.color}">${e.icon}</div>
@@ -24,6 +27,7 @@ export function empCard(e) {
     </div>
     <div class="desc">${e.tagline}</div>
     <div class="meta">${statusPill(e.status)}<span>${e.nodes.length} 个工作节点</span></div>
+    ${toolBtn ? `<div class="emp-foot">${toolBtn}</div>` : ''}
   </div>`;
 }
 

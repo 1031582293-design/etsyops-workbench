@@ -120,15 +120,16 @@ export const EMPLOYEES = [
   },
   {
     id: 'wechat', name: '公众号运营', role: 'WeChat Ops', cat: '自媒体', icon: '💚',
-    color: 'linear-gradient(135deg,#07c160,#22d3ee)', status: 'idle',
-    tagline: '深度长文沉淀品牌与私域，承接复购与会员运营。',
+    color: 'linear-gradient(135deg,#07c160,#22d3ee)', status: 'run',
+    tagline: '深度长文沉淀品牌与私域：文稿收集 → 公众号排版 → 发布草稿箱，承接复购与会员运营。',
+    tool: 'wechat-publisher.html',
     nodes: [
-      { t: '选题规划', skill: 'Plan Pro', sop: '栏目化内容矩阵', d: '每周 2 篇。', out: '选题表' },
-      { t: '长文撰写', skill: 'Article AI', sop: '品牌故事+教程', d: '可读性强。', out: '长文稿' },
-      { t: '排版群发', skill: 'Typeset', sop: 'SVG 排版+定时', d: '美观易读。', out: '排版稿' },
-      { t: '数据分析', skill: 'Wx Metrics', sop: '打开/分享/转化', d: '优化选题。', out: '数据周报' }
+      { t: '① 文稿收集', skill: 'Doc Intake', sop: '上传本地文稿（md/txt/html/docx）或拉取飞书文档，归一为可编辑正文', d: '多格式入稿，自动转纯文本/HTML。', out: '归一化文稿' },
+      { t: '② 公众号排版', skill: 'Typeset Pro', sop: '套用公众号版式模板（标题/正文/引用/分隔），实时预览手机效果', d: '多模板一键切换，配色与封面可调。', out: '排版稿（HTML）' },
+      { t: '③ 发布草稿箱', skill: 'Draft Push', sop: '调用微信草稿箱接口，将排版稿写入公众号草稿（不群发）', d: '演示模式模拟 cgi-bin/draft/add；接入真实 AppID 后直发。', out: '草稿箱草稿' },
+      { t: '数据复盘', skill: 'Wx Metrics', sop: '草稿转群发后追踪打开/分享/转化', d: '优化选题与排版。', out: '数据周报' }
     ],
-    deliverables: [{ t: '品牌长文', d: '打开率 18%，分享 460' }]
+    deliverables: [{ t: '排版发布工具', d: 'wechat-publisher.html · 三步闭环已打通（演示模式）' }]
   },
   {
     id: 'tiktok', name: 'TikTok 运营', role: 'TikTok Ops', cat: '自媒体', icon: '🎶',
