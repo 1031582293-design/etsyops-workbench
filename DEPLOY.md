@@ -23,13 +23,14 @@ npm start                 # 零依赖，默认 http://localhost:3000（含 /api/
 ---
 
 ## 2. 代码仓库（代码源真相 / Source of Truth）
-代码主库 = **GitHub**（新建 `etsyops-workbench`，见第 8 节），`git@github.com:<用户名>/etsyops-workbench.git`（main 分支）。
-本地认证复用专用 SSH 密钥 `~/.ssh/etsyops_ed25519`（公钥需加进 GitHub，与 Gitee 同一把可复用）。
+代码主库 = **GitHub**：`git@github.com:1031582293-design/etsyops-workbench.git`（main 分支，已推送）。
+本地认证用专用 SSH 密钥 `~/.ssh/etsyops_ed25519`，`~/.ssh/config` 已配 `Host github.com` 指向该密钥（公钥已加进 GitHub）。
 Gitee `git@gitee.com:fu-po-fa-cai/etsyops-workbench.git` 保留为只读镜像/备份。
 
-日常提交：
+日常提交（github 是 Cloudflare 自动部署源）：
 ```bash
-git add -A && git commit -m "说明" && git push
+git push github main     # 推 GitHub → Cloudflare 自动构建部署
+git push origin main     # 同步到 Gitee 备份（可选）
 ```
 
 > CODING（dev.tencent.com / coding.net）正在下线（2028-09-30 全停），别新建 CODING 仓库。
@@ -107,7 +108,7 @@ https://54cfb13a51384e53bbb43ca2508bd43a.app.workbuddy.host
    `~/.ssh/etsyops_ed25519.pub` 的内容（与 Gitee 同一把密钥可复用，个人 demo 可接受）。
 3. 之后由 agent 推送：
    ```bash
-   git remote add github git@github.com:<你的GitHub用户名>/etsyops-workbench.git
+   git remote add github git@github.com:1031582293-design/etsyops-workbench.git
    git push github main
    ```
    > 若不想给 agent 授权，也可自己在 Mac 终端跑上面两条（需你本机已登录 GitHub）。
