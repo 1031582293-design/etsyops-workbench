@@ -128,6 +128,63 @@ async function addDraft(article) {
   return { media_id: data.media_id };
 }
 
+// 获取草稿箱列表（no_content=1 不返回正文，减轻体积）
+async function getDraftList(offset = 0, count = 20) {
+  const token = await getAccessToken();
+  const r = await fetch(`${WX_BASE}/cgi-bin/draft/batchget?access_token=${token}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ offset, count, no_content: 1 }),
+  });
+  const d = await r.json();
+  if (d.errcode) throw Object.assign(new Error('获取草稿箱失败：' + JSON.stringify(d)), { wx: d });
+  return d;
+}
+
+// 获取已发布文章列表
+async function getPublishedList(offset = 0, count = 20) {
+  const token = await getAccessToken();
+  const r = await fetch(`${WX_BASE}/cgi-bin/freepublish/batchget?access_token=${token}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ offset, count }),
+  });
+  const d = await r.json();
+  if (d.errcode) throw Object.assign(new Error('获取已发布文章失败：' + JSON.stringify(d)), { wx: d });
+  return d;
+}
+
+// 粉丝总数（优先 datacube 累计；订阅号等无权限时回退 user/get 首页 total）
+async function getFansTotal() {
+  const token = await getAccessToken();
+  const y = new Date(Date.now() - 86400000);
+  const ds = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+  try {
+    const r = await fetch(`${WX_BASE}/cgi-bin/datacube/getusercumulate?access_token=${token}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ begin_date: ds, end_date: ds }),
+    });
+    const d = await r.json();
+    if (d.list && d.list.length) return d.list[d.list.length - 1].cumulate_user;
+  } catch { /* 忽略，走回退 */ }
+  const r = await fetch(`${WX_BASE}/cgi-bin/user/get?access_token=${token}`);
+  const d = await r.json();
+  return d.total ?? null;
+}
+
+// 图文数据概览（最近 days 天）；需认证服务号·数据统计权限，无权限抛错由调用方捕获
+async function getArticleSummary(days = 7) {
+  const token = await getAccessToken();
+  const fmt = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const r = await fetch(`${WX_BASE}/cgi-bin/datacube/getarticlesummary?access_token=${token}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ begin_date: fmt(new Date(Date.now() - days * 86400000)), end_date: fmt(new Date()) }),
+  });
+  const d = await r.json();
+  if (d.errcode) throw Object.assign(new Error('获取图文数据失败（需认证服务号·数据统计权限）：' + JSON.stringify(d)), { wx: d });
+  return d;
+}
+
 async function readJson(req) {
   let raw = '';
   for await (const chunk of req) raw += chunk;
@@ -207,6 +264,26 @@ async function handleApi(req, res) {
       return json(res, 200, result);
     } catch (e) {
       return json(res, 502, { error: 'wechat_error', note: e.message, wx: e.wx || null });
+    }
+  }
+
+  // 数据总览（粉丝 / 草稿 / 已发布 / 图文数据）—— 供媒体矩阵与数据看板
+  if (p === '/api/wechat/overview' && req.method === 'GET') {
+    try {
+      const [fans, drafts, published] = await Promise.allSettled([getFansTotal(), getDraftList(0, 10), getPublishedList(0, 10)]);
+      let articleStats = null, articleNote = '';
+      try { articleStats = (await getArticleSummary(7)).list; } catch (e) { articleNote = e.message; }
+      return json(res, 200, {
+        fans: fans.status === 'fulfilled' ? fans.value : null,
+        fansNote: fans.status === 'rejected' ? String((fans.reason && fans.reason.message) || fans.reason) : '',
+        draftTotal: drafts.status === 'fulfilled' ? (drafts.value.total_count ?? null) : null,
+        drafts: drafts.status === 'fulfilled' ? drafts.value : { error: String(drafts.reason) },
+        publishedTotal: published.status === 'fulfilled' ? (published.value.total_count ?? null) : null,
+        published: published.status === 'fulfilled' ? published.value : { error: String(published.reason) },
+        articleStats, articleNote,
+      });
+    } catch (e) {
+      return json(res, 502, { error: 'wechat_error', note: e.message });
     }
   }
 

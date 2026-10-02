@@ -49,19 +49,20 @@ export function renderFeed() {
 
 export function renderSocial() {
   $('#socialGrid').innerHTML = SOCIAL.map(s => `
-    <div class="social-card">
+    <div class="social-card"${s.id ? ` data-id="${s.id}"` : ''}>
       <div class="head">
         <div class="ico" style="background:${s.c}">${s.icon}</div>
         <div><div class="pname">${s.name}</div><div class="phandle">${s.handle}</div></div>
       </div>
       <div class="metrics">
-        <div class="m"><div class="mv">${s.fans}</div><div class="ml">粉丝</div></div>
-        <div class="m"><div class="mv">${s.views}</div><div class="ml">曝光</div></div>
+        <div class="m"><div class="mv" data-f="fans">${s.fans}</div><div class="ml">粉丝</div></div>
+        <div class="m"><div class="mv" data-f="views">${s.views}</div><div class="ml">曝光</div></div>
         <div class="m"><div class="mv">${s.eng}</div><div class="ml">互动率</div></div>
         <div class="m"><div class="mv" style="font-size:13px">${s.post}</div><div class="ml">今日产出</div></div>
       </div>
       <div class="pstat"><span class="dot" style="width:7px;height:7px;border-radius:50%;background:${s.st === '活跃' ? 'var(--good)' : s.st === '待群发' ? 'var(--warn)' : 'var(--text-faint)'}"></span>${s.st}</div>
       <div class="mini-prog"><i style="width:${s.prog}%"></i></div>
+      ${s.id === 'wechat' ? `<a class="social-link" href="${window.withApi('wechat-dashboard.html')}" target="_blank" rel="noopener">查看真实数据 ↗</a>` : ''}
     </div>`).join('');
 
   const sched = [
@@ -71,4 +72,36 @@ export function renderSocial() {
     const [time, txt] = s.split(' ');
     return `${i ? '<span class="pipe-arrow">→</span>' : ''}<div class="pipe-step">🕐 ${time}<br><span style="color:var(--text-dim);font-weight:500">${txt}</span></div>`;
   }).join('');
+
+  // 接入真实公众号数据（无后端时静默保留静态数据）
+  refreshWechatMatrix();
+}
+
+// 媒体矩阵「微信公众号」卡片拉取真实数据（best-effort，失败不影响其余展示）
+async function refreshWechatMatrix() {
+  const base = window.getApiBase ? window.getApiBase() : '';
+  const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  if (!base && !local) return;
+  try {
+    const r = await fetch((base || '') + '/api/wechat/overview', { headers: window.apiAuthHeaders ? window.apiAuthHeaders() : {} });
+    if (!r.ok) return;
+    const d = await r.json();
+    const card = document.querySelector('.social-card[data-id="wechat"]');
+    if (!card) return;
+    if (d.fans != null) {
+      card.querySelector('[data-f="fans"]').textContent = fmtNum(d.fans);
+      card.querySelector('.pstat').innerHTML = '<span class="dot" style="width:7px;height:7px;border-radius:50%;background:var(--good)"></span>已接入真实数据';
+    }
+    if (d.articleStats && d.articleStats.length) {
+      const tot = d.articleStats.reduce((a, b) => a + (b.int_page_read_count || 0), 0);
+      card.querySelector('[data-f="views"]').textContent = fmtNum(tot);
+    }
+  } catch { /* 忽略：保留静态展示 */ }
+}
+
+function fmtNum(n) {
+  if (n == null) return n;
+  if (n >= 10000) return (n / 10000).toFixed(1) + 'w';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return String(n);
 }

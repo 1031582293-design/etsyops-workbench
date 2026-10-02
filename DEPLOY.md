@@ -180,6 +180,11 @@ Cloudflare 控制台 → 该项目 **Settings → Build & deployments → 环境
 ### 9.5 验证
 前端「绑定状态」显示 `✅ 已绑定真实公众号 xxxx****xxxx` → 上传封面+文稿 → 发布到草稿箱 → 公众号后台草稿箱可见真实文章。
 
+**真实数据看板**（媒体矩阵「微信公众号」卡片 → 「查看真实数据」即进入 `wechat-dashboard.html`）：
+- 后端新增 `/api/wechat/overview`，聚合粉丝总数（`user/get` 或 `datacube/getusercumulate`）、草稿箱（`draft/batchget`）、已发布（`freepublish/batchget`）、图文数据（`datacube/getarticlesummary` 近 7 天）。
+- **注意**：粉丝/草稿/已发布 对任意已认证公众号可用；**图文趋势与粉丝累计**依赖 `datacube`，需 **认证服务号 + 数据统计接口权限**，订阅号会返回 `articleNote` 提示，前端已优雅降级（只显示可用的三项）。
+- 媒体矩阵卡片在后端可用时自动用真实粉丝数/阅读量覆盖静态占位值。
+
 ### 9.6 Windows 操作人电脑 + Cloudflare Tunnel（免费推荐·团队真实发布）
 
 > 适用：不想花钱、用团队操作人的 Windows 电脑当后端主机。前端（Cloudflare Pages）团队任意设备可访问，后端只需这一台电脑常开。

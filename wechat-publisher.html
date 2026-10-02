@@ -124,6 +124,7 @@
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
+      <a class="btn ghost" id="goDash" href="wechat-dashboard.html">📊 数据看板</a>
       <a class="btn ghost" href="index.html">← 返回工作台</a>
     </div>
   </div>
@@ -245,6 +246,7 @@
 /* ---------- 状态 ---------- */
 const state = { tpl:'default', color:'#07c160', size:16, cover:'' };
 const API_BASE = window.getApiBase() || '';
+document.getElementById('goDash').href = window.withApi ? window.withApi('wechat-dashboard.html') : 'wechat-dashboard.html';
 const SAMPLE = `# 手作蜡烛，为什么成了 Z 世代的疗愈刚需？
 
 最近和几位买家聊下来，发现一个有趣的现象：**买蜡烛的人，买的不是光，是氛围感。**
