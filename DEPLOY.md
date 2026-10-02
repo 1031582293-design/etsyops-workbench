@@ -30,35 +30,22 @@ npm start                     # 零依赖，http://localhost:3000（自动读取
 ---
 
 ## 2. 代码仓库（代码源真相 / Source of Truth）
-代码主库 = **GitHub**：`git@github.com:1031582293-design/etsyops-workbench.git`（main 分支，已推送）。
+代码主库 = **GitHub（唯一）**：`git@github.com:1031582293-design/etsyops-workbench.git`（main 分支，Cloudflare Pages 自动部署源）。
 本地认证用专用 SSH 密钥 `~/.ssh/etsyops_ed25519`，`~/.ssh/config` 已配 `Host github.com` 指向该密钥（公钥已加进 GitHub）。
-Gitee `git@gitee.com:fu-po-fa-cai/etsyops-workbench.git` 保留为只读镜像/备份。
 
-日常提交（github 是 Cloudflare 自动部署源）：
+> ⚠️ **Gitee 已不再同步**：Gitee 仓库仅作为云端旧存档保留，本地已解绑，以后所有 push 只推 GitHub，不要 `git push origin`。
+
+日常提交（GitHub 即自动部署源）：
 ```bash
 git push github main     # 推 GitHub → Cloudflare 自动构建部署
-git push origin main     # 同步到 Gitee 备份（可选）
 ```
 
 > CODING（dev.tencent.com / coding.net）正在下线（2028-09-30 全停），别新建 CODING 仓库。
 
 ---
 
-## 3. 🚀 Gitee → CloudStudio 自动部署（静态站）
-自动部署 = CloudStudio 在控制台**关联 Gitee 仓库**并监听 push。部署目录必须指向 `dist/`（纯静态、无 package.json）。
-
-### 你在 CloudStudio 控制台操作（我这边无对应工具，需你点几下）
-1. 打开 CloudStudio（WorkBuddy/腾讯云账号下）→ 新建应用 / 导入代码仓库；
-2. 授权并选择 Gitee 仓库 **`fu-po-fa-cai/etsyops-workbench`**；
-3. **部署目录 / 服务目录设为 `dist/`**（关键！选根目录会 504）；端口填 `3000`；
-4. 开启 **「推送到 main 自动重新部署」**（即 Gitee WebHook）；
-5. 保存并部署 → 生成新的公网链接。
-> 之后 `git push origin main` 即可**自动更新线上**（无需再找我手动部署）。
-
-### 前提（仓库侧我已备好）
-- `dist/` 已提交进 Gitee（见 `.gitignore` 注释），云端直接读取静态文件；
-- ⚠️ 每次 push 前务必先 `npm run build:static` 重建 dist，否则线上是旧构建；
-- 若 CloudStudio 不允许选子目录 `dist/`、只能部署根目录 → 自动部署会 504，此时退回「手动部署」（见第 4 节）。
+## 3. （已废弃）Gitee → CloudStudio 部署
+早期曾用 CloudStudio 关联 Gitee 自动部署，因「沙箱无网 + 根目录 504」已弃用；后 Gitee Pages 也于 2025 年下线。**当前唯一生产部署 = Cloudflare Pages（见第 8 / 9 节），代码源 = GitHub。** 本节仅作历史记录，勿再使用。
 
 ---
 
