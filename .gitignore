@@ -16,3 +16,6 @@ node_modules/
 .DS_Store
 .vscode/
 .idea/
+
+# 构建产物/临时压缩包
+*.zip
