@@ -17,8 +17,15 @@ cd etsyops
 npm start                 # 零依赖，默认 http://localhost:3000（含 /api/wechat/*）
 # 仅看静态页也可： python3 -m http.server 3000
 ```
-本地真实发布：先 `export WECHAT_APPID=xxx WECHAT_APPSECRET=yyy` 再 `npm start`，
-开 http://localhost:3000/wechat-publisher.html 即真实写入你公众号草稿箱。
+本地真实发布（最短路径）：
+```bash
+cd etsyops
+cp .env.example .env          # 仅首次；在 .env 填入 WECHAT_APPID / WECHAT_APPSECRET
+npm start                     # 零依赖，http://localhost:3000（自动读取 .env）
+# 或等价地： export WECHAT_APPID=xxx WECHAT_APPSECRET=yyy && npm start
+```
+开 http://localhost:3000/wechat-publisher.html → 后端检测到凭证即真实写入你公众号草稿箱。
+（也可用系统环境变量注入，server.js 优先用已存在的环境变量，.env 仅作本地便捷填充。）
 
 ---
 

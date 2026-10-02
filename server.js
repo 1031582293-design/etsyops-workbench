@@ -4,10 +4,28 @@
 // 无需 npm install，npm start 即可监听 process.env.PORT || 3000。
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { join, normalize, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)));
+
+// 零依赖读取 .env（不引入 dotenv 依赖；.env 已被 .gitignore 忽略，凭证不入库）
+function loadDotEnv() {
+  try {
+    const txt = readFileSync(join(ROOT, '.env'), 'utf8');
+    for (const line of txt.split('\n')) {
+      const m = line.match(/^\s*([\w.-]+)\s*=\s*(.*)\s*$/);
+      if (!m) continue;
+      const k = m[1];
+      let v = m[2];
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+      if (!(k in process.env)) process.env[k] = v;
+    }
+  } catch { /* 没有 .env 则忽略，回退到系统环境变量 / 模拟模式 */ }
+}
+loadDotEnv();
+
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
@@ -112,7 +130,7 @@ async function handleApi(req, res) {
       appid: wechatConfigured() ? WX_APPID.slice(0, 4) + '****' + WX_APPID.slice(-4) : '',
       note: wechatConfigured()
         ? '已检测到公众号凭证，发布将写入真实草稿箱。'
-        : '未配置 WECHAT_APPID / WECHAT_APPSECRET（请在 CloudStudio 环境变量中设置），当前前端为模拟发布。',
+        : '未配置 WECHAT_APPID / WECHAT_APPSECRET（请在 .env 或系统环境变量中设置），当前前端为模拟发布。',
     });
   }
 
