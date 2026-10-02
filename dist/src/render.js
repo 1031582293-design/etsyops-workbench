@@ -18,7 +18,7 @@ export function renderKPIs() {
 
 export function empCard(e) {
   const toolBtn = e.tool
-    ? `<a class="emp-tool-btn" href="${e.tool}" target="_blank" rel="noopener">打开专用工具 ↗</a>`
+    ? `<a class="emp-tool-btn" href="${window.withApi(e.tool)}" target="_blank" rel="noopener">打开专用工具 ↗</a>`
     : '';
   return `<div class="emp-card" data-emp="${e.id}">
     <div class="top">

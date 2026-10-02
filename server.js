@@ -29,6 +29,18 @@ loadDotEnv();
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
+// 允许跨域的前端源（Cloudflare Pages 前端需访问本后端）。逗号分隔可配多个，* 表示任意。
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'https://etsyops-workbench.pages.dev,http://localhost:3000').split(',').map(s => s.trim());
+function corsHeaders(res, req) {
+  const origin = req.headers.origin;
+  if (origin && (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin))) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Vary', 'Origin');
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -122,6 +134,7 @@ async function readJson(req) {
 
 async function handleApi(req, res) {
   const p = (req.url || '').split('?')[0];
+  corsHeaders(res, req);
 
   // 绑定状态检测
   if (p === '/api/wechat/status' && req.method === 'GET') {
@@ -223,7 +236,14 @@ async function serveStatic(req, res) {
 const server = http.createServer(async (req, res) => {
   try {
     const p = (req.url || '').split('?')[0];
-    if (p.startsWith('/api/')) return await handleApi(req, res);
+    if (p.startsWith('/api/')) {
+      if (req.method === 'OPTIONS') { // 跨域预检
+        corsHeaders(res, req);
+        res.writeHead(204).end();
+        return;
+      }
+      return await handleApi(req, res);
+    }
     return await serveStatic(req, res);
   } catch (err) {
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' }).end('500 ' + err.message);

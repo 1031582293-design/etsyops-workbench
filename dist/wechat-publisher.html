@@ -27,6 +27,7 @@
   .demo-flag{font-size:11px;color:var(--warn);border:1px solid rgba(255,184,107,.35);background:rgba(255,184,107,.1);padding:4px 10px;border-radius:999px}
 
   /* stepper */
+
   .stepper{display:flex;gap:10px;margin:0 0 20px;flex-wrap:wrap}
   .step-chip{flex:1;min-width:180px;background:var(--panel);border:1px solid var(--border);border-radius:14px;
     padding:13px 15px;cursor:pointer;transition:.2s;display:flex;gap:12px;align-items:center}
@@ -239,9 +240,11 @@
 
   <div class="toast" id="toast"></div>
 
+<script src="config.js"></script>
 <script>
 /* ---------- 状态 ---------- */
 const state = { tpl:'default', color:'#07c160', size:16, cover:'' };
+const API_BASE = window.getApiBase() || '';
 const SAMPLE = `# 手作蜡烛，为什么成了 Z 世代的疗愈刚需？
 
 最近和几位买家聊下来，发现一个有趣的现象：**买蜡烛的人，买的不是光，是氛围感。**
@@ -426,14 +429,14 @@ async function publishReal(){
   const f = $('#coverFile').files[0];
   if(f){
     const b64 = await fileToBase64(f);
-    const up = await fetch('/api/wechat/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f.name,data:b64})});
+    const up = await fetch(API_BASE+'/api/wechat/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f.name,data:b64})});
     const ur = await up.json();
     if(!up.ok || !ur.media_id) throw new Error((ur.note||'封面上传失败')+(ur.wx?(' · '+JSON.stringify(ur.wx)):''));
     thumb = ur.media_id;
   }
   if(!thumb) throw new Error('真实发布需要上传封面图（微信要求 thumb_media_id）');
   const payload = buildPayload(thumb);
-  const r = await fetch('/api/wechat/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const r = await fetch(API_BASE+'/api/wechat/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   const dr = await r.json();
   if(!r.ok || !dr.media_id) throw new Error((dr.note||'创建草稿失败')+(dr.wx?(' · '+JSON.stringify(dr.wx)):''));
   return dr.media_id;
@@ -448,7 +451,7 @@ function showResp(html, ok){
 $('#publish').onclick=async()=>{
   if(!$('#title').value.trim() || !$('#src').value.trim()){ toast('请先填写标题与正文'); return; }
   const payload = buildPayload('');
-  const req = `POST /api/wechat/draft
+  const req = `POST ${API_BASE}/api/wechat/draft
 {
   "articles": [{
     "title": ${JSON.stringify(payload.title)},
@@ -492,7 +495,7 @@ goStep(1);
 /* 后端绑定状态 + 出口 IP 探测 */
 async function checkBackend(){
   try{
-    const s = await fetch('/api/wechat/status'); const d = await s.json();
+    const s = await fetch(API_BASE+'/api/wechat/status'); const d = await s.json();
     backend.configured = d.configured;
     const el = $('#bindStatus');
     if(d.configured){
@@ -504,7 +507,7 @@ async function checkBackend(){
     }
   }catch{ $('#bindStatus').textContent='⚠ 无法连接后端（模拟模式）'; }
   try{
-    const ip = await fetch('/api/wechat/ip'); const d = await ip.json();
+    const ip = await fetch(API_BASE+'/api/wechat/ip'); const d = await ip.json();
     backend.ip = d.ip;
     $('#ipHint').innerHTML = (d.ip && d.ip!=='unknown')
       ? '真实发布需把云端出口 IP 加入公众号 IP 白名单：<code style="color:#7fd1ff">'+d.ip+'</code>（公众号后台 → 基本配置 → IP白名单）'

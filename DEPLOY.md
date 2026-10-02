@@ -137,6 +137,44 @@ https://54cfb13a51384e53bbb43ca2508bd43a.app.workbuddy.host
 3. Policy：Action = **Allow**，加 `Email` 规则限定你能登录的邮箱（可多个）；
 4. 保存。此后打开站点需先 Cloudflare 登录，未授权 403。
 
-### 8.4 公众号真实发布
-Cloudflare Pages 是纯静态，**云端仍无 Node 后端**，线上 wechat-publisher.html 仍是模拟发布。
-真实发布同第 5 节：在本地 Mac 或 PaaS（Railway / CloudBase）跑 `server.js` 注入 `WECHAT_APPID/WECHAT_APPSECRET`。
+### 8.4 让 Cloudflare 前端也能真实发布（接云端后端）
+Cloudflare Pages 是纯静态，本身跑不了 Node，所以前端需要一个**独立的云端后端**来代理微信 API。
+架构：`Cloudflare 前端（静态）→ 跨域调用 → 云端后端（server.js，持有 AppSecret）→ 微信 API`。
+
+前端已做「后端地址可配置」：
+- 优先级：`?api=https://后端地址` 查询参数 ＞ 构建注入的 `window.ETSYOPS_API_BASE` ＞ 同源（本机）。
+- 构建时若设 Cloudflare 环境变量 `WECHAT_API_BASE=https://后端地址`，前端自动指向该后端，团队无需带参数。
+- `server.js` 已加 CORS（默认允许 `https://etsyops-workbench.pages.dev` 与 `localhost:3000`，可用 `ALLOWED_ORIGIN` 改成 `*` 或追加其他源）。
+
+步骤见第 9 节。
+
+---
+
+## 9. 🚀 云端后端部署（团队真实发布总入口）
+选一个能跑 Node、且有**稳定出口公网 IP** 的平台（微信要求给 `cgi-bin/token` 调用方加 IP 白名单，动态 IP 会报 `40164`）。
+
+### 9.1 候选平台（按"出口 IP 是否稳定"排序）
+1. **自有 VPS / 轻量云服务器**（最稳）：固定公网 IP，直接加白名单即可。跑 `npm start`、开端口、`WECHAT_APPID/SECRET` 进环境变量。
+2. **Railway**：连 GitHub 仓库自动部署；但默认出口 IP 会变，需开通 **Static Outbound IP** 付费插件（约 $/月）拿到固定 IP 再加白名单。
+3. **Render / Vercel / Fly 等**：免费额度可用，但出口 IP 动态或多变，加白名单易失效，不推荐用于微信 token。
+4. **腾讯云 CloudBase 云托管**：国内、微信调用低延迟；出口 IP 为腾讯 NAT，需在「IP 白名单」加腾讯相应网段（或咨询工单），稳定性待验证。
+
+> 一句话：要团队稳定真实发布，**固定 IP 的 VPS 最省心**；想省事且愿付少量费用，Railway + 静态 IP 插件亦可。
+
+### 9.2 部署后端（以任意能跑 Node 的平台为例）
+1. 部署仓库 `etsyops-workbench`（已含 `server.js` + `package.json` 的 `start` 脚本），启动命令 `npm start`、监听 `process.env.PORT`。
+2. 配环境变量：`WECHAT_APPID`、`WECHAT_APPSECRET`、`ALLOWED_ORIGIN=https://etsyops-workbench.pages.dev`（可加多个逗号分隔）。
+3. 拿到后端地址，如 `https://etsyops-backend.railway.app` 或 `http://<vps-ip>:3000`。
+
+### 9.3 把前端指向后端（Cloudflare 构建注入）
+Cloudflare 控制台 → 该项目 **Settings → Build & deployments → 环境变量** 加：
+`WECHAT_API_BASE = https://<你的后端地址>`（不含结尾斜杠）
+→ **触发重新部署** → 前端自动调用该后端。团队直接访问 `https://etsyops-workbench.pages.dev` 即为真实工作台。
+（临时调试也可不开变量，直接访问 `https://etsyops-workbench.pages.dev/wechat-publisher.html?api=https://<后端地址>`。）
+
+### 9.4 微信 IP 白名单（必做，否则 40164）
+后端那台机器的**出口公网 IP**：打开 `https://<后端地址>/api/wechat/ip` 拿到。
+去 mp.weixin.qq.com → 设置与开发 → 基本配置 → **IP 白名单** 加入该 IP。动态 IP 平台换了 IP 需重加。
+
+### 9.5 验证
+前端「绑定状态」显示 `✅ 已绑定真实公众号 xxxx****xxxx` → 上传封面+文稿 → 发布到草稿箱 → 公众号后台草稿箱可见真实文章。
