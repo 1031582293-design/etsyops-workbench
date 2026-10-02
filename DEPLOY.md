@@ -186,7 +186,7 @@ Cloudflare 控制台 → 该项目 **Settings → Build & deployments → 环境
 **B. 建 Cloudflare Tunnel（拿到稳定地址，免费）**
 6. Cloudflare 控制台 → **Zero Trust**（免费注册）→ **Networks → Tunnels → Create a tunnel** → 选 **Cloudflared** → 起名 `etsyops-backend`。
 7. 复制页面给的安装命令里的 **token**（形如 `cloudflared tunnel run --token <长串>` 的 `<长串>`），把它**单独存成**仓库目录下的 `tunnel-token.txt`（此文件已被 .gitignore 忽略，不会进仓库）。
-8. 双击运行仓库里的 **`start-backend.bat`** → 它会后台起 `node server.js` 和隧道。启动后 Zero Trust 的 Tunnel 页会显示一个稳定地址，如 `https://<隧道id>.cfargotunnel.com`（记下，即 `<后端地址>`）。
+8. 双击运行仓库里的 **`start-backend.bat`** → 它会后台起 `node server.js` 和隧道。启动后 Zero Trust 的 Tunnel 页状态为 **Healthy**（表示通道已通）。稳定地址需在隧道详情 **Published application routes / 公共主机名** 里绑定自己的域名后获得（如 `https://api.你的域名`，记下 = `<后端地址>`；`<隧道id>.cfargotunnel.com` 本身**不是**可直接访问的地址，只是 CNAME 指向目标）。
 
 **C. 把前端接到该后端（你来做，在 Cloudflare 控制台）**
 9. Cloudflare → Pages 项目 `etsyops-workbench` → **Settings → Build & deployments → 环境变量** 加：
@@ -228,7 +228,7 @@ Cloudflare 控制台 → 该项目 **Settings → Build & deployments → 环境
    # 起隧道（用你存好的 token）
    cloudflared tunnel run --token "$(cat tunnel-token.txt)" --url http://localhost:3000
    ```
-   隧道起来后，Zero Trust 的 Tunnel 页会显示稳定地址，如 `https://<隧道id>.cfargotunnel.com`（记下 = `<后端地址>`）。
+   隧道起来后，Zero Trust 的 Tunnel 页状态为 **Healthy**。稳定地址需在隧道详情 **Published application routes / 公共主机名** 绑定自己的域名后获得（如 `https://api.你的域名` = `<后端地址>`）。
    > 想让 Mac 重启/合盖后仍尽量常驻，可把上面两条写成一个 `start-mac.sh` 自动运行；但 Mac 睡眠/关机时隧道会断，属预期。
 
 **D. 接前端 + 白名单（同 9.6 第 9–10 步）**

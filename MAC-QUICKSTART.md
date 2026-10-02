@@ -174,14 +174,27 @@ cloudflared tunnel --url http://localhost:3000
    cloudflared tunnel run --no-autoupdate --token "$(cat tunnel-token.txt)" --url http://localhost:3000
    ```
    - 或图省事直接贴令牌：`cloudflared tunnel run --no-autoupdate --token eyJ...你的令牌... --url http://localhost:3000`
-6. 约 10 秒后，回 Zero Trust → **Tunnels → etsyops-backend**，状态变 **Healthy**，并给出**固定地址**，类似：
-   ```
-   https://xxxx-xxxx.cfargotunnel.com
-   ```
-   **复制这个地址**（下面第 8 步要填进 Cloudflare）。这是你 Mac 后端的公网入口，**重启/换网络都不变**。
-   - ⚠️ 这个窗口**不要关**。
+6. 约 10 秒后，回 Zero Trust → **Tunnels → etsyops-backend**，状态变 **Healthy**。
+   > ⚠️ **注意：Healthy ≠ 有公网地址**。它只代表「你的电脑 ↔ Cloudflare」这条隧道通了。
+   > **要拿到稳定公网地址，还必须给隧道配一个「公共主机名」，而这需要你自己的域名**（操作见下）。
+
+7. **配公共主机名（拿稳定地址的关键一步）**：
+   - 前提：你有一个**已添加到 Cloudflare** 的域名（没有就花约 ¥9 买个 `.top`/`.xyz` 首年域名，任意注册商都行，然后 Cloudflare 控制台 →「添加站点」按提示把 DNS 托管过来，免费套餐即可）。
+   - 回到隧道详情页 → 标签 **「Published application routes」（或 Public Hostname / 公共主机名）** → 点 **Add a published application route（添加）**：
+     - **Subdomain（子域）**：`api`
+     - **Domain（域）**：选你的域名
+     - **Path**：留空
+     - **Service Type（类型）**：`HTTP`
+     - **URL**：`localhost:3000`
+   - 保存后，你的**稳定公网地址**就是：
+     ```
+     https://api.你的域名
+     ```
+     **重启、换网络都不变**，这就是要填进 Cloudflare 环境变量 `WECHAT_API_BASE` 的地址。
+   - ❌ 没有"添加公共主机名"这个入口/选项 → 说明你账号里没有域名，先完成上面的"前提"。
 
 > 建议：先走方案 A 验证能跑通，再换方案 B 给团队用。
+> 💡 不想买域名？那就只能用方案 A 的临时地址（每次重启都变，团队没法长期用）。**「稳定地址」绕不开一个自己的域名**——这是 Cloudflare 的机制，不是操作问题。
 
 ---
 
@@ -215,7 +228,7 @@ cloudflared tunnel --url http://localhost:3000
 https://etsyops-workbench.pages.dev/wechat-publisher.html?api=https://xxxx.trycloudflare.com
 ```
 
-（方案 B 就把 `xxxx.trycloudflare.com` 换成 `隧道ID.cfargotunnel.com`）
+（方案 B 就把地址换成第 6 步配好的 `https://api.你的域名`）
 
 - 顶部「绑定状态」显示 `✅ 已绑定真实公众号` → 上传封面+文稿 → 发布到草稿箱 → 去公众号后台草稿箱能看到真实文章 = 成功！
 
@@ -223,7 +236,7 @@ https://etsyops-workbench.pages.dev/wechat-publisher.html?api=https://xxxx.trycl
 
 1. 浏览器开 Cloudflare → **Workers & Pages** → `etsyops-workbench` → **Settings → Build & deployments → 环境变量(Environment variables)**。
 2. 点 **Add variable**（生产环境 Production）：
-   - 变量名 `WECHAT_API_BASE`，值 = 你的隧道地址（如 `https://隧道ID.cfargotunnel.com`）
+   - 变量名 `WECHAT_API_BASE`，值 = 你的隧道地址（方案 B 如 `https://api.你的域名`；方案 A 则每次重启都要改）
    - 再添加一个 `WECHAT_API_KEY`，值 = 第 5 步你编的那串
 3. 保存 → 回到项目页点 **Deployments → 最新一次 → Retry deployment**（或随便 push 一次 GitHub 触发重建）。
 4. 部署完，团队直接开 `https://etsyops-workbench.pages.dev` 就是真实工作台了（不再需要 `?api=`）。
