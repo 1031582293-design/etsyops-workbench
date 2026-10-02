@@ -58,6 +58,7 @@
    cloudflared --version
    ```
    > 走的是 **ghproxy 国内镜像**（代理 GitHub 下载），不直连 github.com。若 `ghproxy.net` 抽风，把上面链接里的 `https://ghproxy.net/` 换成 `https://ghproxy.com/` 或 `https://mirror.ghproxy.com/` 再试。
+   > ⚠️ 若报 `SSL certificate problem: self signed certificate`，二选一：① 把链接开头的 `https://` 改成 `http://`（即 `http://ghproxy.net/https://...`）；② 或给 curl 加 `-k`：`curl -kL -o cloudflared "https://ghproxy.net/https://github.com/.../$BIN"`（跳过证书校验，仅本地下载用）。
    > 看到版本号（如 `cloudflared version 2024.x.x`）即成功 ✅。
 3. 验证：
    ```bash
