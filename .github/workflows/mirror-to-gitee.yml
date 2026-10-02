@@ -23,6 +23,7 @@ jobs:
             echo "⚠️ 未配置 GITEE_TOKEN,跳过同步。请在 GitHub 仓库 Settings → Secrets → Actions 添加名为 GITEE_TOKEN 的 Gitee 私人令牌后自动生效。"
             exit 0
           fi
-          git remote add gitee "https://oauth2:${GITEE_TOKEN}@gitee.com/fu-po-fa-cai/etsyops-workbench.git"
+          # Gitee 私人令牌走 HTTPS 时,令牌放在【用户名】位置(非 oauth2 前缀)
+          git remote add gitee "https://${GITEE_TOKEN}@gitee.com/fu-po-fa-cai/etsyops-workbench.git"
           git push gitee --force --all
           git push gitee --force --tags
