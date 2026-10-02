@@ -48,11 +48,17 @@
      > /bin/bash -c "$(curl -fsSL https://gitee.com/ineo6/homebrew-install/raw/master/install.sh)"
      > ```
      > 装完若提示粘贴两行 `eval "$(...)"` 配置命令，**照提示复制贴进终端回车**（只此一次，让终端认识 `brew`）。
-2. 装 cloudflared：
+2. 装 cloudflared（**不要**用 `brew install`，它要从 github.com 拉，国内会超时）：
    ```bash
-   brew install cloudflare/cloudflared/cloudflared
+   cd /tmp
+   ARCH=$(uname -m); BIN=cloudflared-darwin-amd64; [ "$ARCH" = "arm64" ] && BIN=cloudflared-darwin-arm64
+   curl -L -o cloudflared "https://ghproxy.net/https://github.com/cloudflare/cloudflared/releases/latest/download/$BIN"
+   chmod +x cloudflared
+   sudo mv cloudflared /usr/local/bin/
+   cloudflared --version
    ```
-   > 🇨🇳 **国内网络坑**：`brew install` 也是从 GitHub 拉包，若同样卡在 `Recv failure`，改用 Cloudflare 官方安装包（不走 GitHub）：浏览器开 <https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/> → 选 **macOS** 下载 `.pkg` → 双击安装 → 验证 `cloudflared --version`。
+   > 走的是 **ghproxy 国内镜像**（代理 GitHub 下载），不直连 github.com。若 `ghproxy.net` 抽风，把上面链接里的 `https://ghproxy.net/` 换成 `https://ghproxy.com/` 或 `https://mirror.ghproxy.com/` 再试。
+   > 看到版本号（如 `cloudflared version 2024.x.x`）即成功 ✅。
 3. 验证：
    ```bash
    cloudflared --version
@@ -63,15 +69,15 @@
 
 ## 4. 把项目弄到 Mac 上
 
-> 项目在 GitHub（公开仓库），直接下载一份到 Mac。
+> 🇨🇳 **国内网络坑**：你 Mac 直连 `github.com` 不通（clone / raw 都会超时）。项目代码改用 **Gitee 镜像仓库**下载（代码同步到 90e0b27，功能完整；仅少一次文档微调，不影响运行）。代码主库仍是 GitHub，等网络通畅再切回。
 
 1. 选一个放代码的地方，比如"下载"文件夹。终端粘贴：
    ```bash
    cd ~/Downloads
    ```
-2. 下载项目（公开仓库，不用账号密码）：
+2. 用 Gitee 下载项目（公开仓库，不用账号密码）：
    ```bash
-   git clone https://github.com/1031582293-design/etsyops-workbench.git
+   git clone https://gitee.com/fu-po-fa-cai/etsyops-workbench.git
    ```
 3. 进目录：
    ```bash
