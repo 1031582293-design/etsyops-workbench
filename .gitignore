@@ -1,6 +1,9 @@
-# 依赖与构建产物（按需）
+# 依赖（不提交）
 node_modules/
-dist/
+
+# 构建产物 dist/ 需要提交进仓库：CloudStudio 只能托管纯静态、无法 npm build，
+# 故把 build:static 的产物纳入版本控制，供 Gitee→CloudStudio 自动部署直接读取。
+# ⚠️ 每次 push 前务必先 `npm run build:static`，否则线上会是旧构建。
 
 # 密钥 / 环境变量（切勿提交）
 .env
