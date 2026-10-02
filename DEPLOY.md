@@ -154,12 +154,13 @@ Cloudflare Pages 是纯静态，本身跑不了 Node，所以前端需要一个*
 选一个能跑 Node、且有**稳定出口公网 IP** 的平台（微信要求给 `cgi-bin/token` 调用方加 IP 白名单，动态 IP 会报 `40164`）。
 
 ### 9.1 候选平台（按"出口 IP 是否稳定"排序）
-1. **自有 VPS / 轻量云服务器**（最稳）：固定公网 IP，直接加白名单即可。跑 `npm start`、开端口、`WECHAT_APPID/SECRET` 进环境变量。
+0. **本机 / 团队操作人电脑 + Cloudflare Tunnel（免费·推荐）**：不花钱、不开新账号（Cloudflare 你已有）。后端跑在任意一台常开的电脑（Win/Mac 均可），用 `cloudflared` 免费隧道把 `localhost:3000` 暴露给 Cloudflare 前端。代价：该电脑须常开+在线；家用出口 IP 变了需去微信后台重加白名单（一般几天到几周一次，可预加多个常用 IP）。详见 **9.6**。
+1. **自有 VPS / 轻量云服务器**（最稳·付费）：固定公网 IP，直接加白名单即可。跑 `npm start`、开端口、`WECHAT_APPID/SECRET` 进环境变量。约 ¥30–60/月。
 2. **Railway**：连 GitHub 仓库自动部署；但默认出口 IP 会变，需开通 **Static Outbound IP** 付费插件（约 $/月）拿到固定 IP 再加白名单。
 3. **Render / Vercel / Fly 等**：免费额度可用，但出口 IP 动态或多变，加白名单易失效，不推荐用于微信 token。
 4. **腾讯云 CloudBase 云托管**：国内、微信调用低延迟；出口 IP 为腾讯 NAT，需在「IP 白名单」加腾讯相应网段（或咨询工单），稳定性待验证。
 
-> 一句话：要团队稳定真实发布，**固定 IP 的 VPS 最省心**；想省事且愿付少量费用，Railway + 静态 IP 插件亦可。
+> 一句话：**免费且能真·团队发布**→ 操作人电脑 + Cloudflare Tunnel（9.6）；**最省心稳定**→ 自有 VPS（付费）。
 
 ### 9.2 部署后端（以任意能跑 Node 的平台为例）
 1. 部署仓库 `etsyops-workbench`（已含 `server.js` + `package.json` 的 `start` 脚本），启动命令 `npm start`、监听 `process.env.PORT`。
@@ -178,3 +179,31 @@ Cloudflare 控制台 → 该项目 **Settings → Build & deployments → 环境
 
 ### 9.5 验证
 前端「绑定状态」显示 `✅ 已绑定真实公众号 xxxx****xxxx` → 上传封面+文稿 → 发布到草稿箱 → 公众号后台草稿箱可见真实文章。
+
+### 9.6 Windows 操作人电脑 + Cloudflare Tunnel（免费推荐·团队真实发布）
+
+> 适用：不想花钱、用团队操作人的 Windows 电脑当后端主机。前端（Cloudflare Pages）团队任意设备可访问，后端只需这一台电脑常开。
+
+**A. 操作人电脑一次性准备**
+1. 装 **Node.js**（https://nodejs.org LTS，装完 `node -v` 有版本即 OK）。
+2. 装 **cloudflared**：管理员 PowerShell 跑 `winget install Cloudflare.cloudflared`（或去 https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ 下 Windows 版），装完 `cloudflared --version` 验证。
+3. 克隆仓库：`git clone git@github.com:1031582293-design/etsyops-workbench.git`（或下 ZIP 解压）。
+4. 复制 `.env.example` 为 `.env`，填 `WECHAT_APPID` / `WECHAT_APPSECRET`（微信后台「基本配置」拿）。
+5. （可选但建议）在 `.env` 加一行 `API_KEY=一串随机字符串`，并在 Cloudflare 构建变量 `WECHAT_API_KEY` 填同样的值——公开隧道多一道防护，防陌生人乱发草稿。
+
+**B. 建 Cloudflare Tunnel（拿到稳定地址，免费）**
+6. Cloudflare 控制台 → **Zero Trust**（免费注册）→ **Networks → Tunnels → Create a tunnel** → 选 **Cloudflared** → 起名 `etsyops-backend`。
+7. 复制页面给的安装命令里的 **token**（形如 `cloudflared tunnel run --token <长串>` 的 `<长串>`），把它**单独存成**仓库目录下的 `tunnel-token.txt`（此文件已被 .gitignore 忽略，不会进仓库）。
+8. 双击运行仓库里的 **`start-backend.bat`** → 它会后台起 `node server.js` 和隧道。启动后 Zero Trust 的 Tunnel 页会显示一个稳定地址，如 `https://<隧道id>.cfargotunnel.com`（记下，即 `<后端地址>`）。
+
+**C. 把前端接到该后端（你来做，在 Cloudflare 控制台）**
+9. Cloudflare → Pages 项目 `etsyops-workbench` → **Settings → Build & deployments → 环境变量** 加：
+   - `WECHAT_API_BASE = https://<你的隧道地址>`（不含结尾斜杠）
+   - `WECHAT_API_KEY = <与 .env 里相同的随机串>`（若设了 API_KEY）
+   → **触发重新部署**（或 push 一次 main）。
+10. **微信 IP 白名单（必做，否则 40164）**：浏览器开 `https://<你的隧道地址>/api/wechat/ip` → 记下返回的 `ip` → mp.weixin.qq.com → 设置与开发 → 基本配置 → **IP 白名单** 加入。出口 IP 变了（电脑换网络/宽带重拨）就重做这步；可预加多个常用网络 IP（微信白名单最多 100 个）。
+
+**D. 验证**
+团队打开 `https://etsyops-workbench.pages.dev/wechat-publisher.html`，顶部「绑定状态」显示 `✅ 已绑定真实公众号` → 上传封面+文稿 → 发布到草稿箱 → 公众号后台草稿箱可见真实文章。
+
+> 运维提醒：操作人电脑**关机或退出那两个窗口**时，团队无法真实发布（前端仍可读、其他模块照用）。长期更稳可选 9.1-① 自有 VPS。

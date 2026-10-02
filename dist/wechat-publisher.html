@@ -429,14 +429,14 @@ async function publishReal(){
   const f = $('#coverFile').files[0];
   if(f){
     const b64 = await fileToBase64(f);
-    const up = await fetch(API_BASE+'/api/wechat/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f.name,data:b64})});
+    const up = await fetch(API_BASE+'/api/wechat/upload',{method:'POST',headers:window.apiAuthHeaders(),body:JSON.stringify({filename:f.name,data:b64})});
     const ur = await up.json();
     if(!up.ok || !ur.media_id) throw new Error((ur.note||'封面上传失败')+(ur.wx?(' · '+JSON.stringify(ur.wx)):''));
     thumb = ur.media_id;
   }
   if(!thumb) throw new Error('真实发布需要上传封面图（微信要求 thumb_media_id）');
   const payload = buildPayload(thumb);
-  const r = await fetch(API_BASE+'/api/wechat/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const r = await fetch(API_BASE+'/api/wechat/draft',{method:'POST',headers:window.apiAuthHeaders(),body:JSON.stringify(payload)});
   const dr = await r.json();
   if(!r.ok || !dr.media_id) throw new Error((dr.note||'创建草稿失败')+(dr.wx?(' · '+JSON.stringify(dr.wx)):''));
   return dr.media_id;

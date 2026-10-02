@@ -31,6 +31,8 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 // 允许跨域的前端源（Cloudflare Pages 前端需访问本后端）。逗号分隔可配多个，* 表示任意。
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'https://etsyops-workbench.pages.dev,http://localhost:3000').split(',').map(s => s.trim());
+// 可选 API Key：设置了之后，发布/上传等写操作接口必须携带正确 key，挡住公开隧道的滥用。
+const API_KEY = process.env.API_KEY || '';
 function corsHeaders(res, req) {
   const origin = req.headers.origin;
   if (origin && (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin))) {
@@ -135,6 +137,17 @@ async function readJson(req) {
 async function handleApi(req, res) {
   const p = (req.url || '').split('?')[0];
   corsHeaders(res, req);
+
+  // 可选 API Key 防护：除状态/出口 IP 探测外，写操作接口必须携带正确 key
+  if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip') {
+    const url = new URL(req.url, 'http://localhost');
+    const provided = req.headers['x-api-key'] || url.searchParams.get('key');
+    if (provided !== API_KEY) {
+      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: 'invalid_api_key', note: '缺少或错误的 API Key' }));
+      return;
+    }
+  }
 
   // 绑定状态检测
   if (p === '/api/wechat/status' && req.method === 'GET') {

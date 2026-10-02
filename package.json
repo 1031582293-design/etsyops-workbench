@@ -8,7 +8,7 @@
     "start": "node server.js",
     "serve": "node server.js",
     "dev": "node server.js",
-    "build:static": "rm -rf dist && mkdir -p dist && cp index.html wechat-publisher.html config.js dist/ && cp -r src dist/ && node -e \"const fs=require('fs');const b=process.env.WECHAT_API_BASE||'';const c=fs.readFileSync('dist/config.js','utf8');fs.writeFileSync('dist/config.js','// 注入：后端基地址（构建环境变量 WECHAT_API_BASE）\\nwindow.ETSYOPS_API_BASE='+JSON.stringify(b)+';\\n'+c);\""
+    "build:static": "rm -rf dist && mkdir -p dist && cp index.html wechat-publisher.html config.js dist/ && cp -r src dist/ && node -e \"const fs=require('fs');const b=process.env.WECHAT_API_BASE||'';const k=process.env.WECHAT_API_KEY||'';const c=fs.readFileSync('dist/config.js','utf8');fs.writeFileSync('dist/config.js','// 注入：后端基地址（WECHAT_API_BASE）与可选 API Key（WECHAT_API_KEY）\\nwindow.ETSYOPS_API_BASE='+JSON.stringify(b)+';\\nwindow.ETSYOPS_API_KEY='+JSON.stringify(k)+';\\n'+c);\""
   },
   "comment": "云端部署使用零依赖 server.js（npm start），无需 npm install。本地开发如想用 Vite HMR，请先手动 `npm i -D vite` 后 `npm run dev`（vite 不再列入依赖，避免云端 npm install 卡住导致端口 3000 起不来）。"
 }
