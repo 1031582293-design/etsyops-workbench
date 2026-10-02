@@ -23,8 +23,9 @@ npm start                 # 零依赖，默认 http://localhost:3000（含 /api/
 ---
 
 ## 2. 代码仓库（代码源真相 / Source of Truth）
-代码放在 Gitee：`git@gitee.com:fu-po-fa-cai/etsyops-workbench.git`（main 分支，已推送）。
-本地认证用专用 SSH 密钥 `~/.ssh/etsyops_ed25519`（公钥已加进 Gitee）。
+代码主库 = **GitHub**（新建 `etsyops-workbench`，见第 8 节），`git@github.com:<用户名>/etsyops-workbench.git`（main 分支）。
+本地认证复用专用 SSH 密钥 `~/.ssh/etsyops_ed25519`（公钥需加进 GitHub，与 Gitee 同一把可复用）。
+Gitee `git@gitee.com:fu-po-fa-cai/etsyops-workbench.git` 保留为只读镜像/备份。
 
 日常提交：
 ```bash
@@ -94,3 +95,40 @@ https://54cfb13a51384e53bbb43ca2508bd43a.app.workbuddy.host
 ## 7. 分支策略（团队协作）
 - `main`：受保护，接生产（CloudStudio 部署源 = `dist/`）。
 - 日常 `feature/*` 开发，PR 评审合并 → 自动重新部署。
+
+---
+
+## 8. 🚀 Cloudflare Pages 自动部署（推荐 · 当前落地路径 A）
+代码主库迁 GitHub 后，Cloudflare Pages 直连 GitHub，**push 即自动构建部署**，库与应用永远同步。
+
+### 8.1 一次性前提
+1. GitHub 新建**空**仓库 `etsyops-workbench`（Public 即可；demo 代码，Gitee 也已公开）。**不要**勾选 README / .gitignore / License，保持空。
+2. 把本机公钥加进 GitHub：`Settings → SSH and GPG keys → New SSH key`，粘贴
+   `~/.ssh/etsyops_ed25519.pub` 的内容（与 Gitee 同一把密钥可复用，个人 demo 可接受）。
+3. 之后由 agent 推送：
+   ```bash
+   git remote add github git@github.com:<你的GitHub用户名>/etsyops-workbench.git
+   git push github main
+   ```
+   > 若不想给 agent 授权，也可自己在 Mac 终端跑上面两条（需你本机已登录 GitHub）。
+
+### 8.2 Cloudflare 控制台（你点几下）
+1. Cloudflare 控制台 → **Workers & Pages → Create → Pages → 连接 GitHub**；
+2. 选 `etsyops-workbench` 仓库并授权；
+3. 构建设置：
+   - **Build command**：`npm run build:static`
+   - **Build output directory**：`dist`
+   （Cloudflare 会先 `npm install`——本仓库无依赖秒过——再执行 build:static 产出 dist 并发布）
+4. 保存并部署 → 得到 `https://etsyops-workbench.pages.dev`（可绑自定义域）。
+5. 此后 `git push github main` 自动重新部署。
+
+### 8.3 访问管控（Cloudflare Access，免费 ≤50 人真鉴权）
+线上谁都能看有风险 → 用 Access 加登录层：
+1. Cloudflare → 左侧 **Zero Trust**（免费注册）→ **Access → Applications → Add application → Self-hosted**；
+2. Application host 填 Pages 域名（如 `etsyops-workbench.pages.dev`）；
+3. Policy：Action = **Allow**，加 `Email` 规则限定你能登录的邮箱（可多个）；
+4. 保存。此后打开站点需先 Cloudflare 登录，未授权 403。
+
+### 8.4 公众号真实发布
+Cloudflare Pages 是纯静态，**云端仍无 Node 后端**，线上 wechat-publisher.html 仍是模拟发布。
+真实发布同第 5 节：在本地 Mac 或 PaaS（Railway / CloudBase）跑 `server.js` 注入 `WECHAT_APPID/WECHAT_APPSECRET`。
