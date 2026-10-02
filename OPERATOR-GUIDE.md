@@ -37,7 +37,7 @@
 ---
 
 ## 3. 装 cloudflared（免费隧道工具）
-1. 在 **管理员身份** 的 PowerShell 里粘贴：
+1. 在 **管理员身份** 的 PowerShell 里先试官方安装器（走微软 CDN，国内通常能下）：
    ```powershell
    winget install Cloudflare.cloudflared
    ```
@@ -47,21 +47,31 @@
    cloudflared --version
    ```
    ✅ 显示版本号 = 好了。
-   ❌ 若 `winget` 不可用（老系统），去 https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/ 下载 Windows 版（`.msi`），双击安装。
+   ❌ 若 `winget` 报错 / 卡住 / 下不下来（多半是 GitHub 被墙），改用「代理直下安装包」：
+   - 浏览器打开下面这个链接（已套国内代理，**注意文件名是 `.msi` 带后缀**，别漏）：
+     ```
+     https://ghproxy.net/https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-windows-amd64.msi
+     ```
+   - 若这个链接也打不开 / 下到的是网页错误页，就换前缀再试：`https://mirror.ghproxy.com/https://...` 或 `https://ghproxy.com/https://...`（同一串后半部分）。
+   - 下到的 `.msi` 双击安装即可（一路 Next）。装完**重开一个 PowerShell** 再验证 `cloudflared --version`。
+   > ⚠️ 不要从 Cloudflare 官网 downloads 页直接下 —— 那个页面里的安装包其实也来自 github.com，国内一样会超时。
 
 ---
 
 ## 4. 把项目弄到这台电脑上
-> 项目在 GitHub 公开仓库，直接下载即可（不用账号）。
-- **有 Git**（可选）：在你放代码的目录（比如桌面）右键"在终端中打开"，执行：
+> 🇨🇳 **国内网络坑**：直接连 github.com 通常超时，项目改用 **Gitee 镜像仓库**下（代码是同一份，主库仍是 GitHub）。
+- **有 Git（推荐，方便以后更新）**：在你放代码的目录（比如桌面）右键"在终端中打开"，执行：
   ```powershell
-  git clone https://github.com/1031582293-design/etsyops-workbench.git
+  git clone https://gitee.com/fu-po-fa-cai/etsyops-workbench.git
   ```
   然后 `cd etsyops-workbench` 进目录。
-- **没 Git（更简单）**：浏览器开 https://github.com/1031582293-design/etsyops-workbench → 点绿色 **Code** → **Download ZIP** → 解压到桌面。
+- **没 Git（更简单）**：浏览器开 https://gitee.com/fu-po-fa-cai/etsyops-workbench → 点右侧 **克隆/下载** → **下载 ZIP** → 解压到桌面。
   打开解压后的文件夹，会看到 `server.js`、`start-backend.bat`、`.env.example` 等文件。
+  > 若 Gitee 也慢，可给地址套代理：`https://ghproxy.net/https://gitee.com/fu-po-fa-cai/etsyops-workbench/repository/archive/master.zip`
 
 > 💡 下面第 5–9 步，假设你就在 `etsyops-workbench` 这个文件夹里操作（资源管理器打开它即可）。
+> 💡 **以后更新后端**：在这个文件夹里重新 `git pull`（或重新下 ZIP 覆盖），再双击 `start-backend.bat` 即可。前端不用你管（老板推 GitHub 会自动部署）。
+> ⚠️ Gitee 这份是老板之前手动推的镜像，**可能不是最新**（主库在 GitHub，且我们已停止自动同步）。目前后端代码几乎不变，直接下没问题；若老板说"后端改过了"但 Gitee 上没更新，让老板把 Gitee 重新推一次，或直接发你一份最新 ZIP 覆盖即可。
 
 ---
 

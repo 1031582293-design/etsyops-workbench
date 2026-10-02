@@ -1,0 +1,28 @@
+name: Mirror to Gitee
+
+# 每次推送到 GitHub 后,自动把代码镜像到 Gitee(国内可访问的备份/下载源)
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch: # 允许在 Actions 页面手动触发一次
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 需要完整历史才能 force-push 镜像
+
+      - name: Mirror to Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "⚠️ 未配置 GITEE_TOKEN,跳过同步。请在 GitHub 仓库 Settings → Secrets → Actions 添加名为 GITEE_TOKEN 的 Gitee 私人令牌后自动生效。"
+            exit 0
+          fi
+          git remote add gitee "https://oauth2:${GITEE_TOKEN}@gitee.com/fu-po-fa-cai/etsyops-workbench.git"
+          git push gitee --force --all
+          git push gitee --force --tags

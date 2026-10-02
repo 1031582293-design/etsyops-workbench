@@ -48,18 +48,41 @@
      > /bin/bash -c "$(curl -fsSL https://gitee.com/ineo6/homebrew-install/raw/master/install.sh)"
      > ```
      > 装完若提示粘贴两行 `eval "$(...)"` 配置命令，**照提示复制贴进终端回车**（只此一次，让终端认识 `brew`）。
-2. 装 cloudflared（**不要**用 `brew install`，它要从 github.com 拉，国内会超时）：
+2. 装 cloudflared（**不要**用 `brew install`，它要从 github.com 拉，国内会超时）。下面这段**一次性整段复制粘贴**到终端回车即可——它会自动选架构、固定版本、依次试多个国内镜像，并且**先校验下到的是真二进制（gzip、>1MB）才安装**，避免再把坏文件装进系统：
    ```bash
    cd /tmp
-   ARCH=$(uname -m); BIN=cloudflared-darwin-amd64; [ "$ARCH" = "arm64" ] && BIN=cloudflared-darwin-arm64
-   curl -L -o cloudflared "https://ghproxy.net/https://github.com/cloudflare/cloudflared/releases/latest/download/$BIN"
-   chmod +x cloudflared
-   sudo mv cloudflared /usr/local/bin/
+   # 先清掉之前可能装错的"假 cloudflared"(它其实是网页, 不是程序)
+   sudo rm -f /usr/local/bin/cloudflared
+   rm -f /tmp/cloudflared /tmp/cf.tgz
+   # 自动选架构 + 固定版本 2026.9.3 + 多镜像依次尝试
+   ARCH=$(uname -m)
+   BIN=cloudflared-darwin-amd64.tgz
+   [ "$ARCH" = "arm64" ] && BIN=cloudflared-darwin-arm64.tgz
+   VER=2026.9.3
+   OK=""
+   for M in \
+     "https://ghproxy.net/https://github.com/cloudflare/cloudflared/releases/download/$VER/$BIN" \
+     "https://mirror.ghproxy.com/https://github.com/cloudflare/cloudflared/releases/download/$VER/$BIN" \
+     "https://ghproxy.com/https://github.com/cloudflare/cloudflared/releases/download/$VER/$BIN" \
+     "https://gh.api.99988866.xyz/https://github.com/cloudflare/cloudflared/releases/download/$VER/$BIN" ; do
+     echo ">> 尝试镜像: $M"
+     curl -kL --max-time 60 -o /tmp/cf.tgz "$M" 2>/dev/null
+     SZ=$(stat -f%z /tmp/cf.tgz 2>/dev/null || echo 0)
+     if [ "$SZ" -gt 1000000 ] && file /tmp/cf.tgz | grep -q gzip; then
+       echo ">> 成功, 文件大小: $SZ 字节"; OK=1; break
+     else
+       echo ">> 不是真二进制(大小 $SZ), 换下一个"; rm -f /tmp/cf.tgz
+     fi
+   done
+   [ -z "$OK" ] && echo "!! 所有镜像都失败, 见下方『兜底方案』" && exit 1
+   # 解压并安装
+   tar -xzf /tmp/cf.tgz -C /tmp
+   sudo mv /tmp/cloudflared /usr/local/bin/cloudflared
+   sudo chmod +x /usr/local/bin/cloudflared
    cloudflared --version
    ```
-   > 走的是 **ghproxy 国内镜像**（代理 GitHub 下载），不直连 github.com。若 `ghproxy.net` 抽风，把上面链接里的 `https://ghproxy.net/` 换成 `https://ghproxy.com/` 或 `https://mirror.ghproxy.com/` 再试。
-   > ⚠️ 若报 `SSL certificate problem: self signed certificate`，二选一：① 把链接开头的 `https://` 改成 `http://`（即 `http://ghproxy.net/https://...`）；② 或给 curl 加 `-k`：`curl -kL -o cloudflared "https://ghproxy.net/https://github.com/.../$BIN"`（跳过证书校验，仅本地下载用）。
-   > 看到版本号（如 `cloudflared version 2024.x.x`）即成功 ✅。
+   > 说明：GitHub 上真实的文件名是带 **`.tgz`** 后缀的（之前漏写后缀才会下到一坨 HTML 错误页）。命令里已写对，且 `-kL` 跳过证书校验、自动跟重定向。看到版本号（如 `cloudflared version 2026.9.3`）即成功 ✅。
+   > **兜底方案（上面 4 个镜像全失败时才用）**：① 改用 `.pkg` 安装包——浏览器开 `https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-arm64.pkg`（Intel 芯片把 `arm64` 换成 `amd64`），若打不开就给它套个网页代理再下，下完双击安装即可；② 或把"隧道"改到 **Windows 操作人那台机器**做（网络通常更好），照 `OPERATOR-GUIDE.md` / DEPLOY.md 第 9.6 节来，本机就不用装 cloudflared。
 3. 验证：
    ```bash
    cloudflared --version
