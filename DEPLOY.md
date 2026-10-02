@@ -1,64 +1,107 @@
-# 部署与协作指南（CODING + CloudStudio）
+# 部署 · 协作 · 真实绑定公众号 指南
 
-本工程已成功部署到 CloudStudio（**纯静态托管，verified:true**）。
-代码源真相（Source of Truth）应放在远程 Git 仓库（推荐腾讯云 CODING，与 CloudStudio 同账号），
-CloudStudio 从仓库拉取代码做持续部署。
+EtsyOps 工作台 = 前端看板 + 一个**零依赖 Node 后端**（`server.js`）。
+后端同时承担两件事：① 静态托管前端页面；② 公众号真实 API 的**安全代理**（把 AppSecret 留在服务端，
+前端只调同源 `/api/wechat/*`，绝不直接暴露密钥）。
 
-> ⚠️ **关键坑（已踩过）**：CloudStudio 部署**只要目录里有 `package.json` 就会走 npm 路径**（`npm install`/`npm start`），
-> 云端沙箱里该路径 30s 内拉不起服务 → 报 `504 service on port 3000 not ready`。
-> **必须部署「不含 package.json 的纯静态目录」**。本仓库用 `dist/`（仅 `index.html` + `src/`，无 package.json）部署，已验证通过。
-> `etsyops/` 根目录保留 package.json + server.js 仅用于**本地** `npm start` 开发，不要直接部署根目录。
+> ⚠️ **历史坑（已解决）**：CloudStudio 部署只要目录里有 `package.json` 就会走 `npm install` + `npm start`。
+> 早期我们挂了 `vite` 依赖，云端装不上 → 端口 3000 起不来 → `504`。
+> 现在 `package.json` **零依赖**，`server.js` 只用 Node 内置模块，`npm install` 秒过、`npm start` 立刻监听 3000，
+> **因此直接部署根目录即可**（无需再用纯静态 dist/ 规避）。
+
+---
 
 ## 1. 本地预览
 ```bash
 cd etsyops
-npm start              # 零依赖静态服务器，默认 http://localhost:3000
-# 或本地用 Python 直跑：
+npm start                 # 零依赖，默认 http://localhost:3000（含 /api/wechat/*）
+# 仅想看静态页也可：
 python3 -m http.server 3000
 ```
+本地调试公众号接口：先 `export WECHAT_APPID=xxx WECHAT_APPSECRET=yyy` 再 `npm start`，
+打开 http://localhost:3000/wechat-publisher.html 即可真实写入你公众号草稿箱。
 
-## 2. 推送到远程仓库（CODING）
-1. 在 CODING（dev.tencent.com）新建一个**私有/团队**仓库（如 `etsyops-workbench`），**不要**勾选自动生成 README（保持空仓库）。
-2. 拿到仓库地址（HTTPS 形如 `https://e.coding.net/<团队>/<项目>/etsyops-workbench.git`）。
-3. 在本机执行：
+---
+
+## 2. 代码仓库（代码源真相 / Source of Truth）
+**不要**把 CloudStudio 当唯一代码库（它是运行环境，沙箱可被回收、无 Git 版本/协作）。
+代码必须放在真正的 Git 仓库。
+
+> 📌 CODING（`dev.tencent.com` / `coding.net`）正在下线：标准版 2025-09 停服、2028-09-30 全停，官方建议迁移到 **CNB（cnb.cool，云原生构建）**。
+> 所以**别新建 CODING 仓库了**。可选：
+> - **CNB（cnb.cool）**：腾讯生态新一代代码托管，免费，与 CloudStudio 同账号体系，迁移首选；
+> - **GitHub**：全球标准，跨平台协作；
+> - **Gitee**：国内访问快。
+>
+> CloudStudio 工作台内的代码也会保留，但仅作运行副本，不作为版本库。
+
+关联远程并推送：
 ```bash
-git remote add origin <仓库地址>
+git remote add origin <仓库地址>     # 例如 https://cnb.cool/<你>/etsyops-workbench.git
 git branch -M main
 git push -u origin main
 ```
 
-## 3. 自动部署到 CloudStudio（两种接法）
-### 方式 A（推荐，最简单）：CloudStudio 关联 CODING 仓库
-在 CloudStudio 控制台「导入/关联代码仓库」选择上面的 CODING 仓库，
-**部署源务必指向纯静态目录（dist/），不要指向含 package.json 的根目录**，端口 `3000`。
-之后**每次 push 到 main 自动重新部署**，无需额外 CI 脚本。
-> 若你的 CODING 仓库根目录就是静态文件（无 package.json），可直接关联根目录；若根目录含 package.json，请配置部署子目录为 dist/。
+---
 
-### 方式 B：CODING 持续集成（CI）显式构建校验
-工程为零依赖静态站点，`npm install` 为本可选步骤。如需在合并前做校验，
-可在 CODING 的「持续集成」中加一个阶段：
-```yaml
-# .coding/ci.yml（CODING 自有 YAML 语法示意）
-master:
-  push:
-    - stages:
-        - name: verify
-          image: node:20
-          commands:
-            - node --version
-            - 'test -f server.js && echo "server entry ok"'
-```
-> 注：实际部署仍由 CloudStudio 关联仓库触发，CI 仅做质量门禁。
+## 3. 部署到 CloudStudio（根目录，含后端）
+直接部署 `etsyops/` 根目录（含 `package.json` + `server.js`），端口 `3000`。
+由于零依赖，`npm install` 不会卡住，部署稳定。
+- 部署完成后在「设置 - 数据管理 - 我发布的应用」可管理；
+- 首次访问稍等几秒预热。
 
-## 4. 密钥与敏感信息
-- **前端静态文件对浏览器完全可见**，切勿把平台密钥 / API Token 写进 `src/` 源码。
-- 真实密钥应在后端（未来 `server/` 编排层）通过环境变量注入，`.env` 已被 `.gitignore` 忽略。
+> 若你只想托管纯前端（不要公众号真实接口），也可部署 `dist/`（见 `npm run build:static`），但那种模式发布只能是模拟。
 
-## 5. 分支策略（团队协作）
-- `main`：受保护，仅接生产（CloudStudio 部署源）。
-- 日常在 `feature/*` 开发，PR 评审后合并到 `main` → CloudStudio 自动部署。
+---
 
-## 6. 当前已落地资源
-- CloudStudio 线上链接（纯静态，已验证）：https://54cfb13a51384e53bbb43ca2508bd43a.app.workbuddy.host
+## 4. 🎯 真实绑定公众号（让"发布草稿箱"真正写入你的号）
+工具页 `wechat-publisher.html` 会自动检测后端是否配置凭证：
+- 已配置 → 「真实模式」，发布真实写入你公众号草稿箱；
+- 未配置 → 「模拟模式」，仅演示流程。
+
+### 4 步接通（一次性）
+1. **准备公众号**：登录 [mp.weixin.qq.com](https://mp.weixin.qq.com)，需要**已认证公众号**（个人/企业认证均可创建草稿；
+   正式群发 `freepublish` 需认证服务号）。未认证会报 `48001`。
+2. **取凭证**：`设置与开发 → 基本配置` → 记下 **AppID**；点击「开发者密码(AppSecret)」启用/重置，得到 **AppSecret**（只显示一次，务必保存）。
+3. **注入 CloudStudio 环境变量**（⚠️ 千万别写进代码或发到聊天里）：
+   在 CloudStudio 该应用的环境变量里加：
+   ```
+   WECHAT_APPID=wx你的AppID
+   WECHAT_APPSECRET=你的AppSecret
+   ```
+   改完**重启应用**使环境变量生效。工具页右上角会从「⚠ 未绑定·模拟」变成「✅ 已绑定真实公众号」。
+4. **加 IP 白名单**（最常见失败原因）：
+   在 `基本配置 → IP白名单` 加入**云端服务器出口 IP**。该 IP 工具页第③步会自动显示
+   （打开工具页 → 发布草稿箱 → 文案里那串 `code` 就是），或调 `GET /api/wechat/ip` 查询。
+   没加白名单会报 `40164 invalid ip`。云环境 IP 可能变动，报错时按提示补加即可。
+
+### 然后正常用
+打开工具页 → ① 上传文稿（md/txt/html/docx）或填飞书链接 → ② 选模板排版 →
+③ **上传封面图**（真实发布必填，微信要求 `thumb_media_id`）+ 填作者/摘要 →「发布到草稿箱」。
+后端会：上传封面为永久素材 → `draft/add` 写入草稿 → 返回真实 `media_id`。
+去公众号后台「草稿箱」即可看到，确认后群发。
+
+### 官方接口与报错对照
+- 获取 token：`GET cgi-bin/token`（2h 有效，后端已缓存）
+- 封面素材：`POST cgi-bin/material/add_material?type=image`（永久素材，返回 `media_id`）
+- 草稿：`POST cgi-bin/draft/add`（返回 `media_id`）
+- 正文图片也必须是 `mmbiz.qpic.cn` 域名（需先上传素材），外链图在微信内不显示。
+- 报错：`40164` IP 未白名单｜`48001` 账号未认证/无权限｜`40007` 封面 media_id 无效｜`45009` 当日限额
+
+---
+
+## 5. 安全须知
+- **AppSecret 只在服务端**，前端永远看不到；CloudStudio 环境变量方式注入，不入库、不聊天传输。
+- 飞书文档真实拉取需接入「飞书」连接器并授权（当前工具页为演示拉取）。
+- 正文含外链图片时，发布前请先上传为微信素材（本期未自动处理，属已知限制）。
+
+---
+
+## 6. 分支策略（团队协作）
+- `main`：受保护，接生产（CloudStudio 部署源）。
+- 日常 `feature/*` 开发，PR 评审合并 → CloudStudio 自动重新部署。
+
+## 7. 当前已落地资源
+- CloudStudio 线上链接（含后端，真实公众号可接通）：见最新部署返回的地址
 - 资料库（SOP / 素材 / 交付归档）：https://www.workbuddy.cn/space/d/nKNS2kaUYoovmCnlil8Yc1
-- 本地仓库：`etsyops/`（main 分支，已提交，待推远端）；部署产物 `dist/`（纯静态，不含 package.json）
+- 本地仓库：`etsyops/`（main 分支，已提交，待推远端 Git）

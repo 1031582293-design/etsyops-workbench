@@ -122,7 +122,7 @@
       <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → 公众号排版 → 发布草稿箱</div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
-      <span class="demo-flag">演示模式（草稿接口为模拟，飞书为模拟拉取）</span>
+      <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
       <a class="btn ghost" href="index.html">← 返回工作台</a>
     </div>
   </div>
@@ -191,18 +191,20 @@
       <!-- STEP 3 -->
       <div class="panel" id="panel3">
         <h3>③ 发布草稿箱</h3>
-        <div class="ph-sub">将排版稿写入公众号草稿箱（不群发）。接入真实 AppID 后可直发。</div>
-        <label class="fld" style="margin-top:0">封面图（可选）</label>
-        <input type="url" id="cover" placeholder="封面图 URL，或留空用占位图" />
+        <div class="ph-sub">将排版稿写入公众号草稿箱（不群发）。服务端配置凭证后即为真实写入，否则为模拟。</div>
+        <label class="fld" style="margin-top:0">封面图（真实发布必填）</label>
+        <input type="url" id="cover" placeholder="封面图预览 URL（可选，仅影响预览）" />
+        <input type="file" id="coverFile" accept="image/*" style="margin-top:8px" />
+        <div class="hint" id="ipHint">真实发布需把云端服务器出口 IP 加入公众号 IP 白名单，正在探测…</div>
         <div class="row2" style="margin-top:14px">
           <div><label class="fld" style="margin-top:0">作者</label><input type="text" id="author" value="Etsy好物研究所" /></div>
-          <div><label class="fld" style="margin-top:0">摘要</label><input type="text" id="digest" placeholder="一句话摘要（选填）" /></div>
+          <div><label class="fld" style="margin-top:0">摘要</label><input type="text" id="digest" placeholder="一句话摘要（选填，≤120字）" /></div>
         </div>
         <div style="margin-top:16px;display:flex;gap:10px">
           <button class="btn primary" id="publish">📥 发布到草稿箱</button>
           <button class="btn ghost" id="copyHtml">复制排版 HTML</button>
         </div>
-        <div class="hint">草稿接口：POST https://api.weixin.qq.com/cgi-bin/draft/add?access_token=ACCESS_TOKEN 。演示模式返回模拟草稿；接入「微信公众平台」凭证后即为真实写入。</div>
+        <div class="hint">真实接口：封面图 → <code>material/add_material</code> 取 thumb_media_id；正文 → <code>draft/add</code> 写入草稿箱。<b id="modeHint">当前：模拟模式</b></div>
       </div>
     </div>
 
@@ -225,7 +227,7 @@
   <!-- 发布弹窗 -->
   <div class="modal-mask" id="mask">
     <div class="modal">
-      <h3>📤 发布到草稿箱（演示模式）</h3>
+      <h3 id="modalTitle">📤 发布到草稿箱</h3>
       <div style="font-size:12.5px;color:var(--text-dim);margin-bottom:10px">将向微信公众平台草稿箱接口发送以下请求：</div>
       <pre id="reqPreview"></pre>
       <div class="ok-box" id="respBox" style="display:none"></div>
@@ -402,45 +404,77 @@ document.querySelectorAll('#sizes .tpl').forEach(s=>s.onclick=()=>{
 });
 
 /* ---------- 发布草稿箱 ---------- */
-function buildPayload(){
+const backend = { configured:false, ip:'' };
+function buildPayload(thumb_media_id){
   const bodyHtml = mdToHtml($('#src').value);
   return {
-    articles:[{
-      title: $('#title').value || '未命名文章',
-      author: $('#author').value || '',
-      digest: $('#digest').value || '',
-      content: bodyHtml,
-      content_source_url: '',
-      thumb_media_id: '',
-      need_open_comment: 1,
-      only_fans_can_comment: 0
-    }]
+    title: $('#title').value || '未命名文章',
+    author: $('#author').value || '',
+    digest: ($('#digest').value || '').slice(0,120),
+    content: bodyHtml,
+    content_source_url: '',
+    thumb_media_id: thumb_media_id || '',
+    need_open_comment: 1,
+    only_fans_can_comment: 0
   };
 }
-$('#publish').onclick=()=>{
+function fileToBase64(f){
+  return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(',')[1]);fr.onerror=rej;fr.readAsDataURL(f);});
+}
+async function publishReal(){
+  let thumb='';
+  const f = $('#coverFile').files[0];
+  if(f){
+    const b64 = await fileToBase64(f);
+    const up = await fetch('/api/wechat/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f.name,data:b64})});
+    const ur = await up.json();
+    if(!up.ok || !ur.media_id) throw new Error((ur.note||'封面上传失败')+(ur.wx?(' · '+JSON.stringify(ur.wx)):''));
+    thumb = ur.media_id;
+  }
+  if(!thumb) throw new Error('真实发布需要上传封面图（微信要求 thumb_media_id）');
+  const payload = buildPayload(thumb);
+  const r = await fetch('/api/wechat/draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const dr = await r.json();
+  if(!r.ok || !dr.media_id) throw new Error((dr.note||'创建草稿失败')+(dr.wx?(' · '+JSON.stringify(dr.wx)):''));
+  return dr.media_id;
+}
+function showResp(html, ok){
+  const box=$('#respBox');
+  box.style.display='block';
+  box.style.background = ok ? 'rgba(52,211,153,.12)' : 'rgba(255,107,129,.12)';
+  box.style.borderColor = ok ? 'rgba(52,211,153,.4)' : 'rgba(255,107,129,.4)';
+  box.innerHTML = html;
+}
+$('#publish').onclick=async()=>{
   if(!$('#title').value.trim() || !$('#src').value.trim()){ toast('请先填写标题与正文'); return; }
-  const payload = buildPayload();
-  const req = `POST https://api.weixin.qq.com/cgi-bin/draft/add?access_token=ACCESS_TOKEN
-
+  const payload = buildPayload('');
+  const req = `POST /api/wechat/draft
 {
   "articles": [{
-    "title": ${JSON.stringify(payload.articles[0].title)},
-    "author": ${JSON.stringify(payload.articles[0].author)},
-    "digest": ${JSON.stringify(payload.articles[0].digest)},
-    "content": "<!-- HTML 长度 "+payload.articles[0].content.length+" 字符 -->",
+    "title": ${JSON.stringify(payload.title)},
+    "author": ${JSON.stringify(payload.author)},
+    "digest": ${JSON.stringify(payload.digest)},
+    "content": "<!-- HTML 长度 "+payload.content.length+" 字符 -->",
+    "thumb_media_id": "<封面 media_id>",
     "need_open_comment": 1
   }]
 }`;
   $('#reqPreview').textContent = req;
+  $('#modalTitle').textContent = backend.configured ? '📤 发布到草稿箱（真实）' : '📤 发布到草稿箱（模拟）';
   $('#mask').classList.add('show');
-  // 模拟接口返回
-  const draftId = 'DR' + Date.now().toString(36).toUpperCase();
-  setTimeout(()=>{
-    $('#respBox').style.display='block';
-    $('#respBox').innerHTML = '✅ <b>已写入草稿箱（演示）</b><br>草稿 media_id：<code style="color:#04121a">'+draftId+'</code><br>'+
-      '标题：'+payload.articles[0].title+'<br><span style="opacity:.8">接入真实 AppID + access_token 后，此处即为微信返回的真实 media_id，可在公众号后台「草稿箱」查看并群发。</span>';
-    toast('已发布到草稿箱（演示）');
-  }, 600);
+  $('#respBox').style.display='none';
+  try{
+    let draftId, real=backend.configured;
+    if(real){ draftId = await publishReal(); }
+    else { await new Promise(r=>setTimeout(r,600)); draftId = 'DR' + Date.now().toString(36).toUpperCase(); }
+    showResp(real
+      ? '✅ <b>已写入真实草稿箱</b><br>草稿 media_id：<code style="color:#04121a">'+draftId+'</code><br>标题：'+payload.title+'<br><a href="https://mp.weixin.qq.com" target="_blank" rel="noopener">前往公众号后台「草稿箱」查看并群发 →</a>'
+      : '✅ <b>已写入草稿箱（模拟）</b><br>草稿 media_id：<code style="color:#04121a">'+draftId+'</code><br>标题：'+payload.title+'<br><span style="opacity:.8">服务端配置 WECHAT_APPID/SECRET 后即为真实写入。</span>', true);
+    toast(real?'已真实发布到草稿箱':'已发布到草稿箱（模拟）');
+  }catch(e){
+    showResp('❌ <b>发布失败</b><br>'+e.message+'<br><span style="opacity:.8">常见原因：IP 未加白名单(40164)、账号未认证(48001)、封面素材无效(40007)。</span>', false);
+    toast('发布失败，查看详情');
+  }
 };
 $('#copyHtml').onclick=()=>{
   const html = '<h1>'+($('#title').value)+'</h1>'+mdToHtml($('#src').value);
@@ -454,6 +488,30 @@ $('#src').value = SAMPLE;
 $('#title').value = '手作蜡烛，为什么成了 Z 世代的疗愈刚需？';
 renderPreview();
 goStep(1);
+
+/* 后端绑定状态 + 出口 IP 探测 */
+async function checkBackend(){
+  try{
+    const s = await fetch('/api/wechat/status'); const d = await s.json();
+    backend.configured = d.configured;
+    const el = $('#bindStatus');
+    if(d.configured){
+      el.textContent='✅ 已绑定真实公众号 '+d.appid;
+      el.style.borderColor='rgba(52,211,153,.5)'; el.style.color='var(--good)'; el.style.background='rgba(52,211,153,.12)';
+      $('#modeHint').textContent='当前：真实模式';
+    } else {
+      el.textContent='⚠ 未绑定 · 模拟模式';
+    }
+  }catch{ $('#bindStatus').textContent='⚠ 无法连接后端（模拟模式）'; }
+  try{
+    const ip = await fetch('/api/wechat/ip'); const d = await ip.json();
+    backend.ip = d.ip;
+    $('#ipHint').innerHTML = (d.ip && d.ip!=='unknown')
+      ? '真实发布需把云端出口 IP 加入公众号 IP 白名单：<code style="color:#7fd1ff">'+d.ip+'</code>（公众号后台 → 基本配置 → IP白名单）'
+      : '真实发布需把云端服务器出口 IP 加入公众号 IP 白名单（公众号后台 → 基本配置 → IP白名单）。';
+  }catch{}
+}
+checkBackend();
 </script>
 </body>
 </html>
