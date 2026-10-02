@@ -1,25 +1,28 @@
 # Mac 傻瓜式操作手册：把 etsyops-workbench.pages.dev 变成真实工作台
 
-> 目标：让你 Mac 跑起后端 + 一条免费隧道，使线上 `https://etsyops-workbench.pages.dev` 能**真实发布公众号草稿箱 + 拉真实数据**。
-> 适合：完全不懂命令的人，照着复制粘贴即可。每一步都写明了"复制什么 / 粘贴到哪 / 你会看到什么"。
+> 目标：让你 Mac 跑起后端 + 一条免费隧道，使线上 `https://etsyops-workbench.pages.dev` 能**真实发布公众号草稿箱 + 拉真实数据**。  
+> 适合：完全不懂命令的人，照着复制粘贴即可。每一步都写明了"复制什么 / 粘贴到哪 / 你会看到什么"。  
 > 预计耗时：第一次约 15–20 分钟（装工具较慢），之后每次开机只需 1 条命令。
 
 ---
 
 ## 0. 先准备两样"原料"（只有你有）
-- **A. 微信 AppID 和 AppSecret**：登录 https://mp.weixin.qq.com → 左侧「设置与开发」→「基本配置」→ 开发者ID(AppID) 直接能看到；开发者密码(AppSecret) 点「重置」后**只显示一次**，马上抄下来。
+
+- **A. 微信 AppID 和 AppSecret**：登录 <https://mp.weixin.qq.com> → 左侧「设置与开发」→「基本配置」→ 开发者ID(AppID) 直接能看到；开发者密码(AppSecret) 点「重置」后**只显示一次**，马上抄下来。
 - **B. 一个 Cloudflare 账号**：你已有（etsyops-workbench 就部署在那）。隧道功能在 **Zero Trust**（免费）里。
 
 ---
 
 ## 1. 打开"终端"（你输入命令的窗口）
+
 - 同时按 `Command(⌘) + 空格`，输入 `终端`（或 `Terminal`），回车。
 - 出来一个白底/黑底窗口，光标在闪，就是它。**后面所有"复制粘贴"都粘到这里，然后按回车**。
 
 ---
 
 ## 2. 装 Node.js（后端运行环境）
-1. 浏览器开 https://nodejs.org （中文界面）→ 点绿色 **LTS 长期支持版** 下载（.pkg 文件）。
+
+1. 浏览器开 <https://nodejs.org> （中文界面）→ 点绿色 **LTS 长期支持版** 下载（.pkg 文件）。
 2. 双击下载的文件 → 一路「继续 / 同意 / 安装」→ 输 Mac 开机密码 → 完成。
 3. 回到终端，粘贴下面这行，回车：
    ```bash
@@ -30,6 +33,7 @@
 ---
 
 ## 3. 装 cloudflared（免费隧道工具）
+
 1. 先确认有没有 Homebrew（Mac 的软件管理器）。终端粘贴：
    ```bash
    brew --version
@@ -39,10 +43,16 @@
      ```bash
      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
      ```
+     > 🇨🇳 **国内网络坑**：若报错 `curl: (35) Recv failure: Connection reset by peer` 或一直卡住，说明 `raw.githubusercontent.com` 连不上。改用 **Gitee 镜像安装脚本**（国内可达，且会自动配好清华/中科大镜像，之后 `brew install` 也快）：
+     > ```bash
+     > /bin/bash -c "$(curl -fsSL https://gitee.com/ineo6/homebrew-install/raw/master/install.sh)"
+     > ```
+     > 装完若提示粘贴两行 `eval "$(...)"` 配置命令，**照提示复制贴进终端回车**（只此一次，让终端认识 `brew`）。
 2. 装 cloudflared：
    ```bash
    brew install cloudflare/cloudflared/cloudflared
    ```
+   > 🇨🇳 **国内网络坑**：`brew install` 也是从 GitHub 拉包，若同样卡在 `Recv failure`，改用 Cloudflare 官方安装包（不走 GitHub）：浏览器开 <https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/> → 选 **macOS** 下载 `.pkg` → 双击安装 → 验证 `cloudflared --version`。
 3. 验证：
    ```bash
    cloudflared --version
@@ -52,7 +62,9 @@
 ---
 
 ## 4. 把项目弄到 Mac 上
+
 > 项目在 GitHub（公开仓库），直接下载一份到 Mac。
+
 1. 选一个放代码的地方，比如"下载"文件夹。终端粘贴：
    ```bash
    cd ~/Downloads
@@ -70,6 +82,7 @@
 ---
 
 ## 5. 填微信凭证（.env 文件）
+
 1. 先复制一个模板：
    ```bash
    cp .env.example .env
@@ -93,10 +106,13 @@
 ## 6. 起隧道，拿到一个公网地址（二选一）
 
 ### 方案 A：最快测试（1 条命令，地址每次重启会变）
+
 终端粘贴（确保你还在 `etsyops-workbench` 目录）：
+
 ```bash
 cloudflared tunnel --url http://localhost:3000
 ```
+
 - 它会滚几行字，最后出现一行类似：
   ```
   INF + https://xxxx.trycloudflare.com  <- 你的隧道地址
@@ -105,6 +121,7 @@ cloudflared tunnel --url http://localhost:3000
 - ⚠️ 这个窗口**不要关**。关了隧道就断。
 
 ### 方案 B：稳定地址（团队长期使用，地址不变）
+
 1. 登录 Cloudflare（浏览器）：
    ```bash
    cloudflared tunnel login
@@ -127,7 +144,9 @@ cloudflared tunnel --url http://localhost:3000
 ---
 
 ## 7. 启动后端（另开一个终端窗口）
+
 > 第 6 步的终端在跑隧道，**别动它**。点终端顶部「壳」→「新建窗口」（或 `Command+N`）开第二个终端。
+
 1. 进目录：
    ```bash
    cd ~/Downloads/etsyops-workbench
@@ -147,14 +166,19 @@ cloudflared tunnel --url http://localhost:3000
 ## 8. 让线上站点指向你的后端
 
 ### 立刻测试（不动 Cloudflare 设置）
+
 浏览器开（把地址换成你第 6 步拿到的）：
+
 ```
 https://etsyops-workbench.pages.dev/wechat-publisher.html?api=https://xxxx.trycloudflare.com
 ```
+
 （方案 B 就把 `xxxx.trycloudflare.com` 换成 `隧道ID.cfargotunnel.com`）
+
 - 顶部「绑定状态」显示 `✅ 已绑定真实公众号` → 上传封面+文稿 → 发布到草稿箱 → 去公众号后台草稿箱能看到真实文章 = 成功！
 
 ### 正式给全团队用（设一次，地址稳定后）
+
 1. 浏览器开 Cloudflare → **Workers & Pages** → `etsyops-workbench` → **Settings → Build & deployments → 环境变量(Environment variables)**。
 2. 点 **Add variable**（生产环境 Production）：
    - 变量名 `WECHAT_API_BASE`，值 = 你的隧道地址（如 `https://隧道ID.cfargotunnel.com`）
@@ -165,6 +189,7 @@ https://etsyops-workbench.pages.dev/wechat-publisher.html?api=https://xxxx.trycl
 ---
 
 ## 9. 微信 IP 白名单（不做会报 40164 发不出去）
+
 1. 浏览器开（地址换成你的）：
    ```
    https://xxxx.trycloudflare.com/api/wechat/ip
@@ -176,6 +201,7 @@ https://etsyops-workbench.pages.dev/wechat-publisher.html?api=https://xxxx.trycl
 ---
 
 ## 10. 日常开关机
+
 - **开机想让团队能真实发布**：重复第 6 步（隧道）+ 第 7 步（后端），两个窗口都开着即可。
 - **关机 / 合盖 / 关那两个窗口**：团队暂时不能"真实发布"（前端照常能看、其他模块照用）。
 - 长期更稳可选：自有 VPS（付费，IP 固定，详见 DEPLOY.md 9.1）。
@@ -183,11 +209,12 @@ https://etsyops-workbench.pages.dev/wechat-publisher.html?api=https://xxxx.trycl
 ---
 
 ## 排错速查
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| `node: command not found` | Node 没装好 | 重做第 2 步 |
-| `cloudflared: command not found` | cloudflared 没装好 | 重做第 3 步 |
-| `wechat proxy: OFF` | .env 没填对 | 重做第 5 步，确认保存 |
-| 发布报 `40164` | 微信白名单 IP 不对 | 重做第 9 步 |
-| 发布报 `401` | API_KEY 不符 | 确认 .env 与 Cloudflare 变量里的 key 一致 |
-| 前端打不开后端 | 隧道窗口关了 / Mac 睡了 | 重开第 6、7 步 |
+
+| 现象                               | 原因              | 处理                               |
+| -------------------------------- | --------------- | -------------------------------- |
+| `node: command not found`        | Node 没装好        | 重做第 2 步                          |
+| `cloudflared: command not found` | cloudflared 没装好 | 重做第 3 步                          |
+| `wechat proxy: OFF`              | .env 没填对        | 重做第 5 步，确认保存                     |
+| 发布报 `40164`                      | 微信白名单 IP 不对     | 重做第 9 步                          |
+| 发布报 `401`                        | API_KEY 不符      | 确认 .env 与 Cloudflare 变量里的 key 一致 |
+| 前端打不开后端                          | 隧道窗口关了 / Mac 睡了 | 重开第 6、7 步                        |
