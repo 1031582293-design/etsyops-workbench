@@ -117,7 +117,7 @@
      - **Path**：留空
      - **Type（类型）**：`HTTP`
      - **URL**：`localhost:3000`
-   - 保存后，**稳定地址** = `https://api.你的域名`（重启/换网络都不变，第 7、8、9 步都用它）。
+   - 保存后，**稳定地址** = `https://api.mailili-agency.com`（重启/换网络都不变，第 7、8、9 步都用它）。
 
 ### 情形二：你**没有** Cloudflare 权限（老板发你）
 - 老板会把一段 `eyJ...` 开头的 token 发给你 → 在 `etsyops-workbench` 文件夹新建 `tunnel-token.txt`，
@@ -137,7 +137,7 @@
    状态变成 **Healthy**（表示通道已通）。
    你的**稳定地址**就是第 6 步第 5 条配好的「公共主机名」：
    ```
-   https://api.你的域名
+   https://api.mailili-agency.com
    ```
    **把这个地址复制下来**（下面第 8 步要发给老板）。
    > ❌ 如果第 6 步还没配「公共主机名」（没有自己的域名），这里就**不会**有任何对外地址——Healthy 也一样。先回第 6 步完成第 5 条。
@@ -149,7 +149,7 @@
 
 ## 8. 把两样东西发给老板
 打开微信/聊天，把下面两样发给工作台老板（他来接 Cloudflare）：
-1. **隧道地址**：`https://api.你的域名`（第 6 步第 5 条配「公共主机名」拿到的）
+1. **隧道地址**：`https://api.mailili-agency.com`（第 6 步第 5 条配「公共主机名」拿到的）
 2. **API_KEY**：你第 5 步编的那串（如 `X7kP9qW2mT4nR8vZ3bC5`）
 
 老板会在 Cloudflare Pages 项目 `etsyops-workbench` 的
@@ -161,9 +161,9 @@
 ---
 
 ## 9. 微信 IP 白名单（必做，否则发布报 40164）
-1. 在这台电脑的浏览器，打开（把地址换成你第 7 步的）：
+1. 在这台电脑的浏览器，打开：
    ```
-   https://api.你的域名/api/wechat/ip
+   https://api.mailili-agency.com/api/wechat/ip
    ```
    页面返回一段文字，里面有 `"ip":"1.2.3.4"` —— 抄下这个 IP。
 2. 去 https://mp.weixin.qq.com → 设置与开发 → 基本配置 → **IP 白名单** → 添加 `1.2.3.4` → 保存。
