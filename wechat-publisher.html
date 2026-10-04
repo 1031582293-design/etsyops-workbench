@@ -120,7 +120,7 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿(可选) → 公众号排版 → 发布草稿箱</div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿(可选) → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build v20261005c</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
@@ -680,9 +680,15 @@ renderPreview();
 goStep(1);
 
 /* 后端绑定状态 + 出口 IP 探测 */
+/* 兼容所有 Safari 的超时 fetch（AbortSignal.timeout 老版本 Safari 不支持） */
+function fetchT(url, ms){
+  const c = new AbortController();
+  const t = setTimeout(()=>c.abort(), ms);
+  return fetch(url, { signal: c.signal }).finally(()=>clearTimeout(t));
+}
 async function checkBackend(){
   try{
-    const s = await fetch(API_BASE+'/api/wechat/status', { signal: AbortSignal.timeout(8000) }); const d = await s.json();
+    const s = await fetchT(API_BASE+'/api/wechat/status', 8000); const d = await s.json();
     backend.configured = d.configured;
     const el = $('#bindStatus');
     if(d.configured){
@@ -694,7 +700,7 @@ async function checkBackend(){
     }
   }catch{ $('#bindStatus').textContent='⚠ 无法连接后端（模拟模式）'; }
   try{
-    const ip = await fetch(API_BASE+'/api/wechat/ip', { signal: AbortSignal.timeout(8000) }); const d = await ip.json();
+    const ip = await fetchT(API_BASE+'/api/wechat/ip', 8000); const d = await ip.json();
     backend.ip = d.ip;
     $('#ipHint').innerHTML = (d.ip && d.ip!=='unknown')
       ? '真实发布需把云端出口 IP 加入公众号 IP 白名单：<code style="color:#7fd1ff">'+d.ip+'</code>（公众号后台 → 基本配置 → IP白名单）'
@@ -702,6 +708,14 @@ async function checkBackend(){
   }catch{}
 }
 checkBackend();
+/* 兜底：10 秒后若徽章仍是初始文案，强制给出明确结论（防止任何未知的挂起） */
+setTimeout(()=>{
+  const el = document.getElementById('bindStatus');
+  if(el && /检测绑定/.test(el.textContent)){
+    el.textContent='⚠ 检测超时：后端无响应（后端可能休眠/隧道断开），请刷新或联系排查';
+    el.style.color='var(--warn)';
+  }
+}, 10000);
 
 /* AI 生稿状态检测 + 初始化生稿要求 */
 async function checkAI(){
