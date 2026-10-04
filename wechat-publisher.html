@@ -261,6 +261,10 @@
 /* ---------- 状态 ---------- */
 const state = { tpl:'default', color:'#07c160', size:16, cover:'' };
 const API_BASE = window.getApiBase() || '';
+if(!API_BASE){
+  const b=document.getElementById('bindStatus'); if(b){ b.textContent='⚠ 未配置后端地址'; b.style.color='var(--warn)'; b.style.borderColor='rgba(255,107,129,.4)'; }
+  const h=document.getElementById('modeHint'); if(h) h.textContent='当前：未知 · 请在网址后加 ?api=https://api.mailili-agency.com 再打开';
+}
 document.getElementById('goDash').href = window.withApi ? window.withApi('wechat-dashboard.html') : 'wechat-dashboard.html';
 const SAMPLE = `# 手作蜡烛，为什么成了 Z 世代的疗愈刚需？
 
@@ -678,7 +682,7 @@ goStep(1);
 /* 后端绑定状态 + 出口 IP 探测 */
 async function checkBackend(){
   try{
-    const s = await fetch(API_BASE+'/api/wechat/status'); const d = await s.json();
+    const s = await fetch(API_BASE+'/api/wechat/status', { signal: AbortSignal.timeout(8000) }); const d = await s.json();
     backend.configured = d.configured;
     const el = $('#bindStatus');
     if(d.configured){
@@ -690,7 +694,7 @@ async function checkBackend(){
     }
   }catch{ $('#bindStatus').textContent='⚠ 无法连接后端（模拟模式）'; }
   try{
-    const ip = await fetch(API_BASE+'/api/wechat/ip'); const d = await ip.json();
+    const ip = await fetch(API_BASE+'/api/wechat/ip', { signal: AbortSignal.timeout(8000) }); const d = await ip.json();
     backend.ip = d.ip;
     $('#ipHint').innerHTML = (d.ip && d.ip!=='unknown')
       ? '真实发布需把云端出口 IP 加入公众号 IP 白名单：<code style="color:#7fd1ff">'+d.ip+'</code>（公众号后台 → 基本配置 → IP白名单）'
