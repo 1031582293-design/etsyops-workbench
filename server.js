@@ -188,7 +188,7 @@ async function getArticleSummary(days = 7) {
 /* ===================== AI 生稿（OpenAI 兼容接口，凭证留服务端） ===================== */
 const AI_API_KEY = process.env.AI_API_KEY || '';
 const AI_BASE_URL = (process.env.AI_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
-const AI_MODEL = process.env.AI_MODEL || 'deepseek-chat';
+const AI_MODEL = process.env.AI_MODEL || 'deepseek-v4-flash'; // 注意：deepseek-chat 老模型名已于 2026-07-24 停用
 const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 300000; // 长文生稿可能要 1~3 分钟
 
 function aiConfigured() {
