@@ -84,7 +84,7 @@ https://54cfb13a51384e53bbb43ca2508bd43a.app.workbuddy.host
 
 ## 6. 安全须知
 - AppSecret 只在服务端；CloudStudio 环境变量或本地 export 注入，不入库。
-- 飞书文档真实拉取：后端 `server.js` 已接入 `/api/feishu/fetch`，前端「拉取」按钮调它从飞书真实获取正文（支持 docx / wiki / doc）。需后端 `.env` 配置 `FEISHU_APP_ID` / `FEISHU_APPSECRET`（飞书企业自建应用凭证，并开通文档读取权限）。未配置时前端会提示「飞书未授权」。
+- 飞书文档真实拉取：**当前版本已暂时移除**（本次调整删除了 `/api/feishu/fetch` 与前端「拉取」按钮）。当前「文稿收集」仅支持本地文件（md / txt / html / docx）上传。若后续需重新启用，再按 `OPERATOR-GUIDE.md` 第 11 步接入飞书自建应用。
 - 正文外链图片需先上传为微信素材（本期未自动处理，已知限制）。
 
 ## 7. 分支策略（团队协作）

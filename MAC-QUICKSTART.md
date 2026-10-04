@@ -44,9 +44,11 @@
      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
      ```
      > 🇨🇳 **国内网络坑**：若报错 `curl: (35) Recv failure: Connection reset by peer` 或一直卡住，说明 `raw.githubusercontent.com` 连不上。改用 **Gitee 镜像安装脚本**（国内可达，且会自动配好清华/中科大镜像，之后 `brew install` 也快）：
+     >
      > ```bash
      > /bin/bash -c "$(curl -fsSL https://gitee.com/ineo6/homebrew-install/raw/master/install.sh)"
      > ```
+     >
      > 装完若提示粘贴两行 `eval "$(...)"` 配置命令，**照提示复制贴进终端回车**（只此一次，让终端认识 `brew`）。
 2. 装 cloudflared（**不要**用 `brew install`，它要从 github.com 拉，国内会超时）。下面这段**一次性整段复制粘贴**到终端回车即可——它会自动选架构、固定版本、依次试多个国内镜像，并且**先校验下到的是真二进制（gzip、>1MB）才安装**，避免再把坏文件装进系统：
    ```bash
@@ -81,7 +83,7 @@
    sudo chmod +x /usr/local/bin/cloudflared
    cloudflared --version
    ```
-   > 说明：GitHub 上真实的文件名是带 **`.tgz`** 后缀的（之前漏写后缀才会下到一坨 HTML 错误页）。命令里已写对，且 `-kL` 跳过证书校验、自动跟重定向。看到版本号（如 `cloudflared version 2026.9.3`）即成功 ✅。
+   > 说明：GitHub 上真实的文件名是带 **`.tgz`** 后缀的（之前漏写后缀才会下到一坨 HTML 错误页）。命令里已写对，且 `-kL` 跳过证书校验、自动跟重定向。看到版本号（如 `cloudflared version 2026.9.3`）即成功 ✅。  
    > **兜底方案（上面 4 个镜像全失败时才用）**：① 改用 `.pkg` 安装包——浏览器开 `https://github.com/cloudflare/cloudflared/releases/download/2026.9.3/cloudflared-arm64.pkg`（Intel 芯片把 `arm64` 换成 `amd64`），若打不开就给它套个网页代理再下，下完双击安装即可；② 或把"隧道"改到 **Windows 操作人那台机器**做（网络通常更好），照 `OPERATOR-GUIDE.md` / DEPLOY.md 第 9.6 节来，本机就不用装 cloudflared。
 3. 验证：
    ```bash
@@ -171,13 +173,12 @@ cloudflared tunnel --url http://localhost:3000
    > 这文件只存令牌、已被忽略不会进仓库，安全。
 5. 起隧道（把本地 3000 暴露成公网地址）：
    ```bash
-   cloudflared tunnel run --no-autoupdate --token "$(cat tunnel-token.txt)" --url http://localhost:3000
+   cloudflared tunnel run --no-autupdate --token "$(cat tunnel-token.txt)" --url http://localhost:3000
    ```
    - 或图省事直接贴令牌：`cloudflared tunnel run --no-autoupdate --token eyJ...你的令牌... --url http://localhost:3000`
 6. 约 10 秒后，回 Zero Trust → **Tunnels → etsyops-backend**，状态变 **Healthy**。
-   > ⚠️ **注意：Healthy ≠ 有公网地址**。它只代表「你的电脑 ↔ Cloudflare」这条隧道通了。
+   > ⚠️ **注意：Healthy ≠ 有公网地址**。它只代表「你的电脑 ↔ Cloudflare」这条隧道通了。  
    > **要拿到稳定公网地址，还必须给隧道配一个「公共主机名」，而这需要你自己的域名**（操作见下）。
-
 7. **配公共主机名（拿稳定地址的关键一步）**：
    - 前提：你有一个**已添加到 Cloudflare** 的域名（没有就花约 ¥9 买个 `.top`/`.xyz` 首年域名，任意注册商都行，然后 Cloudflare 控制台 →「添加站点」按提示把 DNS 托管过来，免费套餐即可）。
    - 回到隧道详情页 → 标签 **「Published application routes」（或 Public Hostname / 公共主机名）** → 点 **Add a published application route（添加）**：
@@ -193,7 +194,7 @@ cloudflared tunnel --url http://localhost:3000
      **重启、换网络都不变**，这就是要填进 Cloudflare 环境变量 `WECHAT_API_BASE` 的地址。
    - ❌ 没有"添加公共主机名"这个入口/选项 → 说明你账号里没有域名，先完成上面的"前提"。
 
-> 建议：先走方案 A 验证能跑通，再换方案 B 给团队用。
+> 建议：先走方案 A 验证能跑通，再换方案 B 给团队用。  
 > 💡 不想买域名？那就只能用方案 A 的临时地址（每次重启都变，团队没法长期用）。**「稳定地址」绕不开一个自己的域名**——这是 Cloudflare 的机制，不是操作问题。
 
 ---

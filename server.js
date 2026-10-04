@@ -185,107 +185,6 @@ async function getArticleSummary(days = 7) {
   return d;
 }
 
-/* ===================== 飞书文档拉取代理 ===================== */
-// 把飞书应用凭证留在服务端，前端只调本机 /api/feishu/fetch，避免 AppSecret 暴露在前端。
-// 支持 docx / wiki / 旧版 doc 三种文档链接。
-const FS_APP_ID = process.env.FEISHU_APP_ID || '';
-const FS_SECRET = process.env.FEISHU_APP_SECRET || '';
-const FS_BASE = (process.env.FEISHU_BASE || 'https://open.feishu.cn').replace(/\/$/, '');
-let fsTokenCache = { token: '', expiresAt: 0 };
-
-function feishuConfigured() {
-  return Boolean(FS_APP_ID && FS_SECRET);
-}
-
-// 获取 tenant_access_token（企业内部应用，app_id + app_secret），带缓存
-async function getFsToken() {
-  if (fsTokenCache.token && Date.now() < fsTokenCache.expiresAt - 60000) return fsTokenCache.token;
-  const r = await fetch(`${FS_BASE}/open-apis/auth/v3/tenant_access_token/internal`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ app_id: FS_APP_ID, app_secret: FS_SECRET }),
-  });
-  const d = await r.json();
-  if (!d.tenant_access_token) throw Object.assign(new Error('获取飞书 tenant_access_token 失败：' + JSON.stringify(d)), { fs: d });
-  fsTokenCache = { token: d.tenant_access_token, expiresAt: Date.now() + (d.expire || 7200) * 1000 };
-  return fsTokenCache.token;
-}
-
-// 从飞书链接解析文档类型与标识
-function parseFeishuUrl(url) {
-  let m = url.match(/\/docx\/([a-zA-Z0-9]+)/);
-  if (m) return { type: 'docx', id: m[1] };
-  m = url.match(/\/wiki\/([a-zA-Z0-9]+)/);
-  if (m) return { type: 'wiki', id: m[1] };
-  m = url.match(/\/doc\/([a-zA-Z0-9]+)/);
-  if (m) return { type: 'doc', id: m[1] };
-  throw new Error('无法识别的飞书链接（仅支持 docx / wiki / doc 文档）');
-}
-
-// 取 docx 纯文本正文
-async function fsDocxRaw(token, docId) {
-  const r = await fetch(`${FS_BASE}/open-apis/docx/v1/documents/${docId}/raw_content`, {
-    method: 'GET', headers: { Authorization: 'Bearer ' + token },
-  });
-  const d = await r.json();
-  if (d.code !== 0) throw Object.assign(new Error('获取飞书 docx 正文失败：' + JSON.stringify(d)), { fs: d });
-  return d.data?.content || '';
-}
-
-// 取 docx 标题
-async function fsDocxTitle(token, docId) {
-  try {
-    const r = await fetch(`${FS_BASE}/open-apis/docx/v1/documents/${docId}`, {
-      method: 'GET', headers: { Authorization: 'Bearer ' + token },
-    });
-    const d = await r.json();
-    return d.data?.document?.title || '';
-  } catch { return ''; }
-}
-
-// 解析 wiki 节点 → 返回底层 docx/doc 标识
-async function fsResolveWiki(token, wikiToken) {
-  const r = await fetch(`${FS_BASE}/open-apis/wiki/v2/spaces/get_node?token=${wikiToken}&node_type=wiki`, {
-    method: 'GET', headers: { Authorization: 'Bearer ' + token },
-  });
-  const d = await r.json();
-  if (d.code !== 0) throw Object.assign(new Error('解析飞书 wiki 失败：' + JSON.stringify(d)), { fs: d });
-  const obj = d.data?.node?.obj;          // 'docx' | 'doc' | 'sheet' | 'mindnote' ...
-  const nodeToken = d.data?.node?.node_token;
-  if (obj === 'docx') return { type: 'docx', id: nodeToken };
-  if (obj === 'doc') return { type: 'doc', id: nodeToken };
-  throw new Error('wiki 节点类型暂不支持（仅支持 docx / doc）：' + obj);
-}
-
-// 取旧版 doc 纯文本正文
-async function fsDocRaw(token, docId) {
-  const r = await fetch(`${FS_BASE}/open-apis/doc/v2/raw_content?doc_id=${docId}`, {
-    method: 'GET', headers: { Authorization: 'Bearer ' + token },
-  });
-  const d = await r.json();
-  if (d.code !== 0) throw Object.assign(new Error('获取飞书 doc 正文失败：' + JSON.stringify(d)), { fs: d });
-  return d.data?.content || '';
-}
-
-// 统一入口：根据链接真实拉取飞书文档正文
-async function fetchFeishuDoc(url) {
-  const token = await getFsToken();
-  const parsed = parseFeishuUrl(url);
-  if (parsed.type === 'wiki') {
-    const resolved = await fsResolveWiki(token, parsed.id);
-    if (resolved.type === 'docx') {
-      const [content, title] = await Promise.all([fsDocxRaw(token, resolved.id), fsDocxTitle(token, resolved.id)]);
-      return { title, content };
-    }
-    return { title: '', content: await fsDocRaw(token, resolved.id) };
-  }
-  if (parsed.type === 'doc') {
-    return { title: '', content: await fsDocRaw(token, parsed.id) };
-  }
-  const [content, title] = await Promise.all([fsDocxRaw(token, parsed.id), fsDocxTitle(token, parsed.id)]);
-  return { title, content };
-}
-
 async function readJson(req) {
   let raw = '';
   for await (const chunk of req) raw += chunk;
@@ -297,7 +196,7 @@ async function handleApi(req, res) {
   corsHeaders(res, req);
 
   // 可选 API Key 防护：除状态/出口 IP 探测外，写操作接口必须携带正确 key
-  if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/feishu/status') {
+  if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip') {
     const url = new URL(req.url, 'http://localhost');
     const provided = req.headers['x-api-key'] || url.searchParams.get('key');
     if (provided !== API_KEY) {
@@ -326,31 +225,6 @@ async function handleApi(req, res) {
       return json(res, 200, { ip: d.ip });
     } catch {
       return json(res, 200, { ip: 'unknown', note: '无法探测出口 IP' });
-    }
-  }
-
-  /* ---- 飞书文档真实拉取 ---- */
-  if (p === '/api/feishu/status' && req.method === 'GET') {
-    return json(res, 200, {
-      configured: feishuConfigured(),
-      note: feishuConfigured()
-        ? '已检测到飞书凭证，可真实拉取文档。'
-        : '未配置 FEISHU_APP_ID / FEISHU_APPSECRET（请在 .env 或系统环境变量中设置），飞书拉取不可用。',
-    });
-  }
-
-  if (p === '/api/feishu/fetch' && req.method === 'POST') {
-    if (!feishuConfigured()) {
-      return json(res, 400, { error: 'not_configured', note: '服务端未配置飞书凭证（FEISHU_APP_ID / FEISHU_APPSECRET）。' });
-    }
-    try {
-      const b = await readJson(req);
-      if (!b.url) return json(res, 400, { error: 'bad_request', note: '缺少 url' });
-      const { title, content } = await fetchFeishuDoc(b.url);
-      if (!content) return json(res, 502, { error: 'empty_content', note: '飞书文档正文为空（可能是无权限或文档类型不支持）。' });
-      return json(res, 200, { ok: true, title, content });
-    } catch (e) {
-      return json(res, 502, { error: 'feishu_error', note: e.message, fs: e.fs || null });
     }
   }
 

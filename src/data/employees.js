@@ -124,7 +124,7 @@ export const EMPLOYEES = [
     tagline: '深度长文沉淀品牌与私域：文稿收集 → 公众号排版 → 发布草稿箱，承接复购与会员运营。',
     tool: 'wechat-dashboard.html',
     nodes: [
-      { t: '① 文稿收集', skill: 'Doc Intake', sop: '上传本地文稿（md/txt/html/docx）或拉取飞书文档，归一为可编辑正文', d: '多格式入稿，自动转纯文本/HTML。', out: '归一化文稿' },
+      { t: '① 文稿收集', skill: 'Doc Intake', sop: '上传本地文稿（md/txt/html/docx），归一为可编辑正文', d: '多格式入稿，自动转纯文本/HTML。', out: '归一化文稿' },
       { t: '② 公众号排版', skill: 'Typeset Pro', sop: '套用公众号版式模板（标题/正文/引用/分隔），实时预览手机效果', d: '多模板一键切换，配色与封面可调。', out: '排版稿（HTML）' },
       { t: '③ 发布草稿箱', skill: 'Draft Push', sop: '调用微信草稿箱接口，将排版稿写入公众号草稿（不群发）', d: '演示模式模拟 cgi-bin/draft/add；接入真实 AppID 后直发。', out: '草稿箱草稿' },
       { t: '数据复盘', skill: 'Wx Metrics', sop: '草稿转群发后追踪打开/分享/转化', d: '优化选题与排版。', out: '数据周报' }

@@ -130,7 +130,7 @@
   </div>
 
   <div class="stepper" id="stepper">
-    <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">文稿收集</div><div class="d">本地文件 / 飞书文档</div></div></div>
+    <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">文稿收集</div><div class="d">本地文件</div></div></div>
     <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">公众号排版</div><div class="d">模板 · 实时预览</div></div></div>
     <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">发布草稿箱</div><div class="d">写入公众号草稿</div></div></div>
   </div>
@@ -141,18 +141,10 @@
       <!-- STEP 1 -->
       <div class="panel" id="panel1">
         <h3>① 文稿收集</h3>
-        <div class="ph-sub">支持本地文件（.md / .txt / .html / .docx）与飞书文档链接，归一为可编辑正文。</div>
+        <div class="ph-sub">支持本地文件（.md / .txt / .html / .docx），上传后归一为可编辑正文。</div>
         <div class="drop" id="drop"><b>点击或拖拽上传文稿</b><br><span style="font-size:12px">md / txt / html / docx</span></div>
         <input type="file" id="file" accept=".md,.txt,.html,.htm,.docx" hidden />
         <div id="fileTag"></div>
-        <div class="row2" style="margin-top:14px">
-          <div>
-            <label class="fld" style="margin-top:0">飞书文档链接（可选）</label>
-            <input type="url" id="feishuUrl" placeholder="https://example.feishu.cn/docx/xxxxxxxx" />
-          </div>
-          <button class="btn" id="feishuBtn">拉取</button>
-        </div>
-        <div class="hint">填入飞书文档链接（docx / wiki / doc），点击「拉取」即从飞书真实获取正文。需后端配置飞书应用凭证（FEISHU_APP_ID / FEISHU_APPSECRET）。<span id="feishuStatus"></span></div>
         <label class="fld">文章标题</label>
         <input type="text" id="title" placeholder="给文章起个标题…" />
         <label class="fld">正文（可编辑，支持 Markdown）</label>
@@ -382,27 +374,6 @@ function handleFile(f){
 }
 function fillText(t){ $('#src').value=t; if(!$('#title').value) $('#title').value='未命名文章'; renderPreview(); }
 
-$('#feishuBtn').onclick=async ()=>{
-  const u=$('#feishuUrl').value.trim();
-  if(!u){ toast('请先填入飞书文档链接'); return; }
-  if(!/feishu\.cn|larksuite\.com/.test(u)){ toast('请填入有效的飞书文档链接'); return; }
-  if(!API_BASE){ toast('未连接后端，无法真实拉取（先填入飞书链接并在后端配置凭证）'); return; }
-  const btn=$('#feishuBtn'); const old=btn.textContent; btn.disabled=true; btn.textContent='拉取中…';
-  try{
-    const r=await fetch(API_BASE+'/api/feishu/fetch', {
-      method:'POST', headers: window.apiAuthHeaders(), body: JSON.stringify({ url:u })
-    });
-    const d=await r.json();
-    if(!r.ok || !d.ok) throw new Error(d.note || ('拉取失败('+r.status+')'));
-    fillText(d.content);
-    if(d.title && !$('#title').value) $('#title').value=d.title;
-    renderPreview();
-    toast('✅ 已真实拉取飞书文档');
-  }catch(e){
-    toast('拉取失败：'+e.message); console.error(e);
-  }finally{ btn.disabled=false; btn.textContent=old; }
-};
-
 ['title','src','author','cover','digest'].forEach(id=> $(id).addEventListener('input', renderPreview));
 $('#toStep3').onclick=()=>goStep(3);
 
@@ -526,12 +497,6 @@ async function checkBackend(){
     $('#ipHint').innerHTML = (d.ip && d.ip!=='unknown')
       ? '真实发布需把云端出口 IP 加入公众号 IP 白名单：<code style="color:#7fd1ff">'+d.ip+'</code>（公众号后台 → 基本配置 → IP白名单）'
       : '真实发布需把云端服务器出口 IP 加入公众号 IP 白名单（公众号后台 → 基本配置 → IP白名单）。';
-  }catch{}
-  try{
-    const fs=await fetch(API_BASE+'/api/feishu/status'); const d=await fs.json();
-    const el=$('#feishuStatus');
-    if(d.configured){ el.textContent='｜飞书已授权 ✅'; el.style.color='var(--good)'; }
-    else { el.textContent='｜飞书未授权 ⚠'; el.style.color='var(--warn)'; }
   }catch{}
 }
 checkBackend();
