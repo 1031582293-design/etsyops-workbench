@@ -205,3 +205,82 @@ WorkBuddy 自带"沙箱发布"能力（如 CloudStudio 等，把静态站一键�
 | `start-mac.sh` | Mac 版启动脚本 | ✅ 入库 |
 | `.env` | 微信+飞书凭证 + API_KEY | ❌ 不入库（已 gitignore，**必须本地备份**） |
 | `tunnel-token.txt` | 隧道令牌 | ❌ 不入库（已 gitignore，**必须本地备份**） |
+
+---
+
+## 八、2026-10-05 进展补充（工作台四步流 + AI 生稿 + 稳定地址已打通）
+
+> 本次轮次完成：① 稳定公网地址 `api.mailili-agency.com` 正式生效、后端真绑定公众号；② 工作台升级为四步工作流并新增 AI 生稿；③ 一连串稳定性/兼容性修复。**改动全部在 `etsyops` 仓库，推 GitHub 即 Pages 自动部署 + 操作人 `start-robust.bat` 自动 git pull。**
+
+### 1. 稳定地址已就绪 + 后端真绑定公众号（此前卡点已解除）
+- 域名 `mailili-agency.com` 已绑 Cloudflare，隧道配公共主机名 `api.mailili-agency.com`，实测 `/api/wechat/status` 返回：
+  ```json
+  {"configured":true,"appid":"wxea****c150","note":"已检测到公众号凭证，发布将写入真实草稿箱。"}
+  ```
+  → 此前「隧道稳定地址」卡点（10-02 文档第四步待办）**已解除**。
+- 微信 IP 白名单入口已**迁移到微信开发者平台**（`developers.weixin.qq.com` → 我的业务 → 公众号 → 基础信息 → 开发密钥与 API IP 白名单）。MP 后台「基本配置」只剩迁移通知。**加白名单时只动「API IP 白名单」，AppSecret 旁是「重置」按钮、千万别点**（点了旧 Secret 全部失效）。
+- 出口 IP 探测 `/api/wechat/ip` 已做**多镜像兜底**（ipify 国内常不可达 → 依次试 ip.sb / ifconfig.me / ipip.net），操作者后端重开即生效。
+
+### 2. 工作台升级为「四步工作流」（提交 `d0e4e6f`）
+- 原「文稿收集 → 排版 → 发布（3 步）」改为：
+  1. **文稿收集**：上传支持 `md / txt / html / docx / pdf`，可**一次多选**（多文件自动合并、带文件名分隔），也可直接粘贴。
+  2. **AI 生稿（可选）**：内置完整生稿要求为默认 Prompt（角色/内容处理/结构/风格 + 硬性规则：引流《Etsy 0-1运营笔记》付费课程、规避与课程内容重复、减少 AI 腔、风险/侵权自查、输出分区）。Prompt **默认折叠可编辑**；「存为风格」保存风格1/风格2…（存浏览器 localStorage）可切换/删除。生稿结果拆分：主标题填标题、正文填编辑区、备选标题/风险审核/配图建议/转发文案单独展示（后两者不进发布正文）。后端未配 AI 时优雅降级可跳过。
+  3. **公众号排版**：沿用原模板/主题色/实时预览。
+  4. **发布草稿箱**：沿用原真实发布链路。
+
+### 3. 后端新增 AI 生稿接口（提交 `d0e4e6f`）
+- 新增 `GET /api/ai/status`（返回 `{available, model}`）与 `POST /api/ai/generate`（OpenAI 兼容 chat/completions，300s 长超时）。
+- 凭证留在操作人 `.env`，**不暴露到前端**（符合「密钥不下前端」原则）；受可选 `API_KEY` 防护（status 接口豁免）。
+- `.env` 新增三行（不配则第 2 步不可用，其余功能不受影响）：
+  ```ini
+  AI_API_KEY=sk-xxxx
+  AI_BASE_URL=https://api.deepseek.com      # 或硅基流动 https://api.siliconflow.cn/v1
+  AI_MODEL=deepseek-v4-flash                 # 见下方坑：deepseek-chat 已停用
+  ```
+
+### 4. AI 默认模型紧急修正（提交 `2f0261e`）
+- **`deepseek-chat` 已于 2026-07-24 永久停用**，原默认值会直接报错。已改为 `deepseek-v4-flash`（更贵更强可选 `deepseek-v4-pro`）。`.env` 务必用新名，别照老教程写 `deepseek-chat`。
+
+### 5. 稳定性 / 兼容性改造（提交 `5a35f5f` / `4dd09a3` / `8488fa8`）
+- 修复工作台「检测绑定状态」**永久卡死**（TDZ：守卫代码在 `$` 定义前访问导致脚本中断）→ 改用 `getElementById` + 加超时（详见 PITFALLS 新增坑）。
+- 超时写法兼容旧 Safari（`AbortSignal.timeout` 需 16.4+，改为 `AbortController`+`setTimeout`），并加 10s 兜底强提示。
+- **前端自愈**：工作台 + 数据看板后端状态检测加**自动重连（3 次，间隔 1.5s）+ 手动「↻ 重试连接」按钮**；隧道闪断瞬间自愈，不再钉死「不可达」。
+- 两页加**可见版本号**（`build v20261005d`），一眼判断是否部署到最新、是否还在跑旧缓存。
+- 新增 **`start-robust.bat`**（替换 `start-backend.bat`）：git pull + cloudflared 独立窗口崩溃 3s 重连 + server.js 崩溃 3s 重启循环 + 接电源禁睡眠。**任一阵列崩溃自动拉起，不用人点。**
+
+### 6. 免费 AI key（已验证可用，替代付费 OpenAI）
+- **硅基流动 SiliconFlow** `https://cloud.siliconflow.cn`：国内直连、免信用卡、新用户送 2000~3000 万 Tokens（基本等于免费）；key 在「账户 → API 密钥」；填 `AI_BASE_URL=https://api.siliconflow.cn/v1`、`AI_MODEL=deepseek-ai/DeepSeek-V3`。
+- **阿里云百炼** `https://bailian.aliyun.com`：新用户每模型送 100 万 Tokens（90 天）；填 `AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`、`AI_MODEL=qwen-plus`。
+- 备选（免信用卡、需境外网络）：Groq、OpenRouter（模型名加 `:free`）。**OpenAI 官方已无免费 key，Gemini 不兼容 OpenAI 格式，先别碰。**
+
+### 7. 约定固化（写进 `~/.workbuddy/MEMORY.md`）
+- **「改工作台」一律指公网版**（Pages 前端 + 操作人后端），不再动沙盒里发布的应用。
+- 用户用 **Safari**：硬刷新是 `Cmd+Option+R`（不是 `Cmd+Shift+R`，那是阅读模式）；隔离缓存用私人窗口 `Cmd+Shift+N`。
+
+### 8. 当前进度看板（更新 10-02 版）
+| 组件 | 状态 | 说明 |
+|---|---|---|
+| 前端 (pages.dev) | ✅ 已上线 | 四步流 + AI 生稿 + 重试自愈，推 GitHub 自动更新 |
+| 稳定地址 (api.mailili-agency.com) | ✅ 已通 | 隧道公共主机名已配，域名已绑 Cloudflare |
+| 后端真绑定公众号 | ✅ configured:true | appid wxea****c150，草稿/数据可真实拉取 |
+| AI 生稿 | ⚠️ 代码就绪 | 待操作人 `.env` 填 AI_API_KEY（硅基流动/百炼免费 key）后亮「✅ 已就绪」 |
+| 微信 IP 白名单 | ⚠️ 待加 | 出口 IP 已可探测，加白后真实发布不再 40164 |
+| 数据看板 | ✅ 可用 | 真实粉丝/草稿/已发布（图文分析需认证服务号+数据权限） |
+| 稳定性 | ✅ 强化 | 前端自动重试 + start-robust.bat 崩溃自拉 |
+
+### 9. 下一步待办（明天校验用）
+1. 操作人 `.env` 填 `AI_API_KEY` 等三行（硅基流动/百炼免费 key），重开 `start-robust.bat`，确认日志 `ai: <model>`。
+2. 微信开发者平台把出口 IP 加进「API IP 白名单」，保存（管理员扫码）。
+3. 浏览器用 `?api=https://api.mailili-agency.com` 打开工作台，确认顶部 `✅ 已绑定真实公众号` + 版本号 `v20261005d`。
+4. 试跑四步流：上传素材 → AI 生稿 → 排版 → 发布草稿箱，核对微信后台草稿箱出现该图文。
+5. （可选）后端服务化：`cloudflared service install` + nssm 把 server.js 做成 Windows 服务，连注销/重启都自动恢复。
+
+### 10. 关键文件变更（相对 10-02 版）
+| 文件 | 变化 |
+|---|---|
+| `wechat-publisher.html` | 3 步→4 步；加多格式/多选上传、AI 生稿面板、自动重连/重试、版本号 |
+| `wechat-dashboard.html` | 加自动重连/重试按钮、版本号 |
+| `server.js` | 新增 `/api/ai/status`、`/api/ai/generate`、`/api/wechat/ip` 多镜像兜底；启动日志带 `ai:` |
+| `start-robust.bat` | **新增**：崩溃自动重启的常驻启动器 |
+| `.env.example` | 新增 `AI_API_KEY`/`AI_BASE_URL`/`AI_MODEL` 段与注释 |
+| 最新提交 | `d0e4e6f`（四步流）→ `2f0261e`（模型修正）→ `5a35f5f`/`4dd09a3`（卡死修复/兼容）→ `8488fa8`（重试自愈 + start-robust.bat + v20261005d） |
