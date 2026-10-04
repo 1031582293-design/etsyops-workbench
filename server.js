@@ -185,6 +185,38 @@ async function getArticleSummary(days = 7) {
   return d;
 }
 
+/* ===================== AI 生稿（OpenAI 兼容接口，凭证留服务端） ===================== */
+const AI_API_KEY = process.env.AI_API_KEY || '';
+const AI_BASE_URL = (process.env.AI_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
+const AI_MODEL = process.env.AI_MODEL || 'deepseek-chat';
+const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 300000; // 长文生稿可能要 1~3 分钟
+
+function aiConfigured() {
+  return Boolean(AI_API_KEY);
+}
+
+async function aiGenerate(systemPrompt, userPrompt) {
+  const r = await fetch(`${AI_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AI_API_KEY}` },
+    body: JSON.stringify({
+      model: AI_MODEL,
+      temperature: 0.7,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+  });
+  const d = await r.json().catch(() => ({}));
+  const content = d.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error('AI 接口返回异常：' + JSON.stringify(d).slice(0, 400));
+  }
+  return content;
+}
+
 async function readJson(req) {
   let raw = '';
   for await (const chunk of req) raw += chunk;
@@ -195,8 +227,8 @@ async function handleApi(req, res) {
   const p = (req.url || '').split('?')[0];
   corsHeaders(res, req);
 
-  // 可选 API Key 防护：除状态/出口 IP 探测外，写操作接口必须携带正确 key
-  if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip') {
+  // 可选 API Key 防护：除状态/出口 IP/AI 状态探测外，写操作接口必须携带正确 key
+  if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status') {
     const url = new URL(req.url, 'http://localhost');
     const provided = req.headers['x-api-key'] || url.searchParams.get('key');
     if (provided !== API_KEY) {
@@ -247,6 +279,35 @@ async function handleApi(req, res) {
       } catch {}
     }
     return json(res, 200, { ip: 'unknown', note: '无法探测出口 IP（请改用浏览器打开 ip.cn 获取）' });
+  }
+
+  // AI 生稿状态（前端据此决定是否展示 AI 生稿入口）
+  if (p === '/api/ai/status' && req.method === 'GET') {
+    return json(res, 200, {
+      configured: aiConfigured(),
+      model: aiConfigured() ? AI_MODEL : '',
+      note: aiConfigured()
+        ? 'AI 生稿已就绪（' + AI_MODEL + '）。'
+        : '服务端未配置 AI_API_KEY / AI_BASE_URL / AI_MODEL（.env），AI 生稿不可用。',
+    });
+  }
+
+  // AI 生稿：按前端传来的生稿要求（prompt）把素材稿（manuscript）生成为公众号文案
+  if (p === '/api/ai/generate' && req.method === 'POST') {
+    if (!aiConfigured()) {
+      return json(res, 400, { error: 'ai_not_configured', note: '服务端未配置 AI_API_KEY（请在 .env 填写后重启后端）。' });
+    }
+    try {
+      const b = await readJson(req);
+      const manuscript = (b.manuscript || '').trim();
+      const prompt = (b.prompt || '').trim();
+      if (!manuscript) return json(res, 400, { error: 'bad_request', note: '缺少 manuscript（素材文稿）' });
+      if (!prompt) return json(res, 400, { error: 'bad_request', note: '缺少 prompt（生稿要求）' });
+      const content = await aiGenerate(prompt, '【原始素材】\n' + manuscript);
+      return json(res, 200, { content });
+    } catch (e) {
+      return json(res, 502, { error: 'ai_error', note: e.message });
+    }
   }
 
   if (!wechatConfigured()) {
@@ -362,5 +423,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`EtsyOps server running at http://${HOST}:${PORT} (wechat proxy: ${wechatConfigured() ? 'ON' : 'OFF'})`);
+  console.log(`EtsyOps server running at http://${HOST}:${PORT} (wechat proxy: ${wechatConfigured() ? 'ON' : 'OFF'}, ai: ${aiConfigured() ? AI_MODEL : 'OFF'})`);
 });
