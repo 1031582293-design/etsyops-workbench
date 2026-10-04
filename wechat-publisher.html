@@ -120,10 +120,11 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿(可选) → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build v20261005c</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿(可选) → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build v20261005d</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
+      <button id="retryBtn" class="btn ghost" style="display:none" onclick="checkBackend()">↻ 重试连接</button>
       <a class="btn ghost" id="goDash" href="wechat-dashboard.html">📊 数据看板</a>
       <a class="btn ghost" href="index.html">← 返回工作台</a>
     </div>
@@ -686,11 +687,13 @@ function fetchT(url, ms){
   const t = setTimeout(()=>c.abort(), ms);
   return fetch(url, { signal: c.signal }).finally(()=>clearTimeout(t));
 }
-async function checkBackend(){
+async function checkBackend(retry){
+  retry = retry || 0;
+  const MAX = 3;
   try{
-    const s = await fetchT(API_BASE+'/api/wechat/status', 8000); const d = await s.json();
+    const s = await fetchT(API_BASE+'/api/wechat/status', 6000); const d = await s.json();
     backend.configured = d.configured;
-    const el = $('#bindStatus');
+    const el = $('#bindStatus'); hideRetry();
     if(d.configured){
       el.textContent='✅ 已绑定真实公众号 '+d.appid;
       el.style.borderColor='rgba(52,211,153,.5)'; el.style.color='var(--good)'; el.style.background='rgba(52,211,153,.12)';
@@ -698,24 +701,29 @@ async function checkBackend(){
     } else {
       el.textContent='⚠ 未绑定 · 模拟模式';
     }
-  }catch{ $('#bindStatus').textContent='⚠ 无法连接后端（模拟模式）'; }
-  try{
-    const ip = await fetchT(API_BASE+'/api/wechat/ip', 8000); const d = await ip.json();
-    backend.ip = d.ip;
-    $('#ipHint').innerHTML = (d.ip && d.ip!=='unknown')
-      ? '真实发布需把云端出口 IP 加入公众号 IP 白名单：<code style="color:#7fd1ff">'+d.ip+'</code>（公众号后台 → 基本配置 → IP白名单）'
-      : '真实发布需把云端服务器出口 IP 加入公众号 IP 白名单（公众号后台 → 基本配置 → IP白名单）。';
-  }catch{}
-}
-checkBackend();
-/* 兜底：10 秒后若徽章仍是初始文案，强制给出明确结论（防止任何未知的挂起） */
-setTimeout(()=>{
-  const el = document.getElementById('bindStatus');
-  if(el && /检测绑定/.test(el.textContent)){
-    el.textContent='⚠ 检测超时：后端无响应（后端可能休眠/隧道断开），请刷新或联系排查';
-    el.style.color='var(--warn)';
+    try{
+      const ip = await fetchT(API_BASE+'/api/wechat/ip', 6000); const id = await ip.json();
+      backend.ip = id.ip;
+      $('#ipHint').innerHTML = (id.ip && id.ip!=='unknown')
+        ? '真实发布需把云端出口 IP 加入公众号 IP 白名单：<code style="color:#7fd1ff">'+id.ip+'</code>（公众号后台 → 基本配置 → IP白名单）'
+        : '真实发布需把云端服务器出口 IP 加入公众号 IP 白名单（公众号后台 → 基本配置 → IP白名单）。';
+    }catch{}
+    return;
+  }catch(e){
+    if(retry < MAX){
+      $('#bindStatus').textContent='↻ 重连后端中…('+(retry+1)+'/'+MAX+')';
+      await new Promise(r=>setTimeout(r, 1500));
+      return checkBackend(retry+1);
+    }
+    showRetry('⚠ 无法连接后端（隧道可能闪断）');
   }
-}, 10000);
+}
+function showRetry(msg){
+  const el = $('#bindStatus'); el.textContent = msg; el.style.color='var(--warn)';
+  const btn = document.getElementById('retryBtn'); if(btn) btn.style.display='inline-flex';
+}
+function hideRetry(){ const btn = document.getElementById('retryBtn'); if(btn) btn.style.display='none'; }
+checkBackend();
 
 /* AI 生稿状态检测 + 初始化生稿要求 */
 async function checkAI(){
