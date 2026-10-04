@@ -63,14 +63,21 @@
    VER=2026.9.3
    OK=""
    for M in \
+     "https://gh-proxy.com/https://github.com/cloudflare/cloudflared/releases/download/$VER/$BIN" \
      "https://ghproxy.net/https://github.com/cloudflare/cloudflared/releases/download/$VER/$BIN" \
      "https://mirror.ghproxy.com/https://github.com/cloudflare/cloudflared/releases/download/$VER/$BIN" \
-     "https://ghproxy.com/https://github.com/cloudflare/cloudflared/releases/download/$VER/$BIN" \
-     "https://gh.api.99988866.xyz/https://github.com/cloudflare/cloudflared/releases/download/$VER/$BIN" ; do
+     "https://ghfast.top/https://github.com/cloudflare/cloudflared/releases/download/$VER/$BIN" ; do
      echo ">> 尝试镜像: $M"
+     rm -f /tmp/cf.tgz
+     # 镜像限速约 35KB/s，60 秒下不完 -> 用 -C - 断点续传最多再补 4 轮
      curl -kL --max-time 60 -o /tmp/cf.tgz "$M" 2>/dev/null
+     for i in 1 2 3 4; do
+       SZ=$(stat -f%z /tmp/cf.tgz 2>/dev/null || echo 0)
+       [ "$SZ" -gt 21000000 ] && break
+       curl -kL --max-time 120 -C - -o /tmp/cf.tgz "$M" 2>/dev/null
+     done
      SZ=$(stat -f%z /tmp/cf.tgz 2>/dev/null || echo 0)
-     if [ "$SZ" -gt 1000000 ] && file /tmp/cf.tgz | grep -q gzip; then
+     if [ "$SZ" -gt 21000000 ] && file /tmp/cf.tgz | grep -q gzip; then
        echo ">> 成功, 文件大小: $SZ 字节"; OK=1; break
      else
        echo ">> 不是真二进制(大小 $SZ), 换下一个"; rm -f /tmp/cf.tgz
@@ -157,7 +164,7 @@ cloudflared tunnel --url http://localhost:3000
 
 ### 方案 B：稳定地址（团队长期使用，地址不变）✅ 推荐
 
-> 这条用「Cloudflare Zero Trust 后台令牌」方式——**不用你自己的域名、不用 `cloudflared login`**，一条命令就拿固定地址。Windows 操作人也是同一套（见 OPERATOR-GUIDE.md 第 6 步）。
+> 这条用「Cloudflare Zero Trust 后台令牌」方式——**不用 `cloudflared login`**，一条命令就拿固定地址（但稳定地址仍需自有域名配公共主机名，见第 7 步）。Windows 操作人也是同一套（见 OPERATOR-GUIDE.md 第 6 步）。
 
 1. 浏览器开 <https://one.dash.cloudflare.com> → 左侧 **Zero Trust**（免费，首次会让你注册一次）→ **Networks → Tunnels → Create a tunnel**。
 2. 选 **Cloudflared** → 隧道名填 `etsyops-backend` → 点下一步。
@@ -173,9 +180,10 @@ cloudflared tunnel --url http://localhost:3000
    > 这文件只存令牌、已被忽略不会进仓库，安全。
 5. 起隧道（把本地 3000 暴露成公网地址）：
    ```bash
-   cloudflared tunnel run --no-autupdate --token "$(cat tunnel-token.txt)" --url http://localhost:3000
+   cloudflared --no-autoupdate tunnel run --token "$(cat tunnel-token.txt)" --url http://localhost:3000
    ```
-   - 或图省事直接贴令牌：`cloudflared tunnel run --no-autoupdate --token eyJ...你的令牌... --url http://localhost:3000`
+   > ⚠️ **参数顺序坑**：`--no-autoupdate` 是全局参数，必须写在 `tunnel` **前面**；写在 `run` 后面会报 `flag provided but not defined: -no-autoupdate` 并打印一堆帮助信息。
+   - 或图省事直接贴令牌：`cloudflared --no-autoupdate tunnel run --token eyJ...你的令牌... --url http://localhost:3000`
 6. 约 10 秒后，回 Zero Trust → **Tunnels → etsyops-backend**，状态变 **Healthy**。
    > ⚠️ **注意：Healthy ≠ 有公网地址**。它只代表「你的电脑 ↔ Cloudflare」这条隧道通了。  
    > **要拿到稳定公网地址，还必须给隧道配一个「公共主机名」，而这需要你自己的域名**（操作见下）。
