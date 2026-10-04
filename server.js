@@ -219,13 +219,34 @@ async function handleApi(req, res) {
 
   // 出口 IP（用于公众号 IP 白名单）
   if (p === '/api/wechat/ip' && req.method === 'GET') {
-    try {
-      const r = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(5000) });
-      const d = await r.json();
-      return json(res, 200, { ip: d.ip });
-    } catch {
-      return json(res, 200, { ip: 'unknown', note: '无法探测出口 IP' });
+    // 依次尝试多个探测服务（国内机器常连不上 ipify），谁通用谁；都不通才 unknown
+    const IP_PROBES = [
+      'https://api.ipify.org?format=json',
+      'https://ip.sb/ip',
+      'https://ifconfig.me/all.json',
+      'https://myip.ipip.net',
+    ];
+    for (const url of IP_PROBES) {
+      try {
+        const r = await fetch(url, { signal: AbortSignal.timeout(6000) });
+        const text = await r.text();
+        let ip = '';
+        if (url.includes('ipify')) {
+          try { ip = JSON.parse(text).ip; } catch {}
+        } else if (url.includes('ip.sb')) {
+          ip = text.trim();
+        } else if (url.includes('ifconfig.me')) {
+          try { ip = (JSON.parse(text).ip_addr || '').trim(); } catch {}
+        } else if (url.includes('ipip.net')) {
+          const m = text.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
+          ip = m ? m[1] : '';
+        }
+        if (ip && /^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
+          return json(res, 200, { ip });
+        }
+      } catch {}
     }
+    return json(res, 200, { ip: 'unknown', note: '无法探测出口 IP（请改用浏览器打开 ip.cn 获取）' });
   }
 
   if (!wechatConfigured()) {
