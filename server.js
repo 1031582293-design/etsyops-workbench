@@ -242,13 +242,20 @@ async function handleApi(req, res) {
   const p = (req.url || '').split('?')[0];
   corsHeaders(res, req);
 
-  // 可选 API Key 防护：除状态/出口 IP/AI 状态探测外，写操作接口必须携带正确 key
+  // 可选 API Key 防护：除状态/出口 IP/AI 状态探测外，写操作接口必须携带正确 key。
+  // 注意：此 key 是「后端接口防护 key」（来自 .env 的 API_KEY），与智谱 AI_API_KEY 完全无关。
+  // 前端 key 来自 Cloudflare 构建变量 WECHAT_API_KEY 或网址 ?apikey=；若后端设了而前端没带/带错会被统一拦截——下方给出明确区分的报错，避免与智谱 key 混淆。
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status') {
     const url = new URL(req.url, 'http://localhost');
     const provided = req.headers['x-api-key'] || url.searchParams.get('key');
+    if (!provided) {
+      res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ ok: false, error: 'missing_api_key', note: '后端已开启 API Key 接口防护（.env 的 API_KEY 已设置），但本次请求未携带 x-api-key。前端需在 Cloudflare Pages 设置构建变量 WECHAT_API_KEY（值与 API_KEY 一致）后重新部署，或用 ?apikey=<你的KEY> 打开本页。' }));
+      return;
+    }
     if (provided !== API_KEY) {
       res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: false, error: 'invalid_api_key', note: '缺少或错误的 API Key' }));
+      res.end(JSON.stringify({ ok: false, error: 'invalid_api_key', note: '前端携带的 API Key 与后端 API_KEY 不一致（需完全相同）。请核对 Cloudflare 的 WECHAT_API_KEY 或网址 ?apikey= 的值。' }));
       return;
     }
   }
@@ -257,6 +264,7 @@ async function handleApi(req, res) {
   if (p === '/api/wechat/status' && req.method === 'GET') {
     return json(res, 200, {
       configured: wechatConfigured(),
+      apiKeyRequired: Boolean(API_KEY),
       appid: wechatConfigured() ? WX_APPID.slice(0, 4) + '****' + WX_APPID.slice(-4) : '',
       note: wechatConfigured()
         ? '已检测到公众号凭证，发布将写入真实草稿箱。'
@@ -300,6 +308,7 @@ async function handleApi(req, res) {
   if (p === '/api/ai/status' && req.method === 'GET') {
     return json(res, 200, {
       configured: aiConfigured(),
+      apiKeyRequired: Boolean(API_KEY),
       model: aiConfigured() ? AI_MODEL : '',
       imageModel: aiConfigured() ? AI_IMAGE_MODEL : '',
       imageConfigured: aiConfigured(),

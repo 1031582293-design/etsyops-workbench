@@ -804,6 +804,7 @@ async function checkBackend(retry){
   try{
     const s = await fetchT(API_BASE+'/api/wechat/status', 6000); const d = await s.json();
     backend.configured = d.configured;
+    if(d.apiKeyRequired && !window.ETSYOPS_API_KEY) showApiKeyWarn(); else hideApiKeyWarn();
     const el = $('#bindStatus'); hideRetry();
     if(d.configured){
       el.textContent='✅ 已绑定真实公众号 '+d.appid;
@@ -834,6 +835,17 @@ function showRetry(msg){
   const btn = document.getElementById('retryBtn'); if(btn) btn.style.display='inline-flex';
 }
 function hideRetry(){ const btn = document.getElementById('retryBtn'); if(btn) btn.style.display='none'; }
+// 后端开启 API Key 防护但本页未携带 key 时的醒目预警（避免静默全拦、误以为是智谱 key 问题）
+function showApiKeyWarn(){
+  let el = document.getElementById('apiKeyWarn');
+  if(!el){
+    el = document.createElement('div'); el.id = 'apiKeyWarn';
+    el.style.cssText = 'position:sticky;top:0;z-index:50;background:#7f1d1d;color:#fee2e2;padding:10px 14px;font-size:13px;line-height:1.6;text-align:center';
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  el.innerHTML = '⚠ 后端已开启 <b>API Key 接口防护</b>（.env 的 API_KEY 已设置），但当前页面未携带 key，<b>生稿 / 生图 / 发布会被拒绝</b>。请在网址末尾加 <code style="color:#fff">?apikey=&lt;你的KEY&gt;</code> 重新打开，或在 Cloudflare Pages 设置构建变量 <code style="color:#fff">WECHAT_API_KEY</code>（值与 API_KEY 一致）后重新部署。';
+}
+function hideApiKeyWarn(){ const el = document.getElementById('apiKeyWarn'); if(el) el.remove(); }
 checkBackend();
 
 /* AI 生稿状态检测 + 初始化生稿要求 */
@@ -841,6 +853,7 @@ async function checkAI(){
   try{
     const a = await fetch(API_BASE+'/api/ai/status'); const d = await a.json();
     aiState.ok = d.configured; aiState.model = d.model || '';
+    if(d.apiKeyRequired && !window.ETSYOPS_API_KEY) showApiKeyWarn(); else hideApiKeyWarn();
     const el = $('#aiStatus');
     if(d.configured){
       el.textContent = '✅ AI 已就绪 · 生稿（'+d.model+'）/ 生图（'+(d.imageModel||'')+'）· 第 3 步可用';
