@@ -338,7 +338,7 @@ const SAMPLE = `# 手作蜡烛，为什么成了 Z 世代的疗愈刚需？
 了解更多可访问 [Etsy 店铺](https://etsy.com)。`;
 
 /* ---------- 工具函数 ---------- */
-const $ = s => document.querySelector(s);
+const $ = s => document.querySelector(typeof s === 'string' && !/^[#.[]/.test(s) ? '#'+s : s);
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
 
 function ensureMammoth(cb){
@@ -420,7 +420,7 @@ function applyTplStyle(){
 /* ---------- 步骤切换 ---------- */
 function goStep(n){
   document.querySelectorAll('.step-chip').forEach(c=>c.classList.toggle('active', +c.dataset.step===n));
-  ['panel1','panelAI','panelCover','panel2','panel3'].forEach((p,idx)=>{ $(p).style.display = (idx+1)===n ? '' : 'none'; });
+  ['panel1','panelAI','panelCover','panel2','panel3'].forEach((p,idx)=>{ $('#'+p).style.display = (idx+1)===n ? '' : 'none'; });
   window.scrollTo({top:0,behavior:'smooth'});
   if(n===4) applyTplStyle();
 }
