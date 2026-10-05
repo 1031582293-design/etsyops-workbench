@@ -190,6 +190,7 @@ const AI_API_KEY = process.env.AI_API_KEY || '';
 const AI_BASE_URL = (process.env.AI_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
 const AI_MODEL = process.env.AI_MODEL || 'deepseek-v4-flash'; // 注意：deepseek-chat 老模型名已于 2026-07-24 停用
 const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 300000; // 长文生稿可能要 1~3 分钟
+const AI_IMAGE_MODEL = process.env.AI_IMAGE_MODEL || 'cogview-3-flash'; // 免费生图档；升级画质改 cogview-4（约0.06元/次）
 
 function aiConfigured() {
   return Boolean(AI_API_KEY);
@@ -215,6 +216,20 @@ async function aiGenerate(systemPrompt, userPrompt) {
     throw new Error('AI 接口返回异常：' + JSON.stringify(d).slice(0, 400));
   }
   return content;
+}
+
+// AI 生图（OpenAI 兼容 images/generations，智谱 CogView 系列；与文本共用 AI_API_KEY / AI_BASE_URL）
+async function aiImage(prompt, size = '1440x720') {
+  const r = await fetch(`${AI_BASE_URL}/images/generations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AI_API_KEY}` },
+    body: JSON.stringify({ model: AI_IMAGE_MODEL, prompt, size }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+  });
+  const d = await r.json().catch(() => ({}));
+  const item = d.data?.[0];
+  if (!item) throw new Error('AI 生图返回异常：' + JSON.stringify(d).slice(0, 400));
+  return { url: item.url || item.file_url || '', b64: item.b64_json || '' };
 }
 
 async function readJson(req) {
@@ -286,9 +301,11 @@ async function handleApi(req, res) {
     return json(res, 200, {
       configured: aiConfigured(),
       model: aiConfigured() ? AI_MODEL : '',
+      imageModel: aiConfigured() ? AI_IMAGE_MODEL : '',
+      imageConfigured: aiConfigured(),
       note: aiConfigured()
-        ? 'AI 生稿已就绪（' + AI_MODEL + '）。'
-        : '服务端未配置 AI_API_KEY / AI_BASE_URL / AI_MODEL（.env），AI 生稿不可用。',
+        ? 'AI 生稿已就绪（' + AI_MODEL + '）；AI 生图已就绪（' + AI_IMAGE_MODEL + '）。'
+        : '服务端未配置 AI_API_KEY / AI_BASE_URL / AI_MODEL（.env），AI 生稿与生图均不可用。',
     });
   }
 
@@ -310,6 +327,44 @@ async function handleApi(req, res) {
     }
   }
 
+  // AI 生成标题：基于成稿/素材生成若干候选公众号标题
+  if (p === '/api/ai/title' && req.method === 'POST') {
+    if (!aiConfigured()) {
+      return json(res, 400, { error: 'ai_not_configured', note: '服务端未配置 AI_API_KEY（请在 .env 填写后重启后端）。' });
+    }
+    try {
+      const b = await readJson(req);
+      const draft = (b.draft || '').trim();
+      const requirement = (b.requirement || '').trim();
+      if (!draft) return json(res, 400, { error: 'bad_request', note: '缺少 draft（文章正文/素材）' });
+      const systemPrompt = '你是资深公众号编辑，擅长写高点击率的标题。请基于文章给出候选标题：风格贴合公众号调性，简洁有吸引力，避免标题党与绝对化承诺。';
+      const userPrompt = `【文章正文/素材】\n${draft}\n\n【标题要求】\n${requirement || '吸引点击、符合公众号调性、10~24 字、给出 5 个候选'}\n\n请直接输出 5 个候选标题，每行一个，不要编号以外的解释文字。`;
+      const content = await aiGenerate(systemPrompt, userPrompt);
+      const titles = content.split('\n').map(s => s.replace(/^\s*\d+[.、)]\s*|\*\*/g, '').trim()).filter(Boolean).slice(0, 8);
+      if (!titles.length) throw new Error('AI 未返回有效标题：' + content.slice(0, 200));
+      return json(res, 200, { titles });
+    } catch (e) {
+      return json(res, 502, { error: 'ai_error', note: e.message });
+    }
+  }
+
+  // AI 生成封面图（智谱 CogView，OpenAI 兼容 images/generations）
+  if (p === '/api/ai/image' && req.method === 'POST') {
+    if (!aiConfigured()) {
+      return json(res, 400, { error: 'ai_not_configured', note: '服务端未配置 AI_API_KEY（请在 .env 填写后重启后端）。' });
+    }
+    try {
+      const b = await readJson(req);
+      const prompt = (b.prompt || '').trim();
+      const size = (b.size || '1440x720').trim();
+      if (!prompt) return json(res, 400, { error: 'bad_request', note: '缺少 prompt（封面图描述）' });
+      const r = await aiImage(prompt, size);
+      return json(res, 200, r);
+    } catch (e) {
+      return json(res, 502, { error: 'ai_error', note: e.message });
+    }
+  }
+
   if (!wechatConfigured()) {
     return json(res, 400, { error: 'not_configured', note: '服务端未配置公众号凭证（WECHAT_APPID / WECHAT_APPSECRET）。' });
   }
@@ -320,6 +375,24 @@ async function handleApi(req, res) {
       const b = await readJson(req);
       if (!b.data) return json(res, 400, { error: 'bad_request', note: '缺少 data(base64)' });
       const r = await uploadPermanentImage(b.filename || 'cover.png', b.data);
+      return json(res, 200, r);
+    } catch (e) {
+      return json(res, 502, { error: 'wechat_error', note: e.message, wx: e.wx || null });
+    }
+  }
+
+  // 上传封面图（远程 URL 版）：后端抓取图片字节后上传为永久素材，返回 media_id
+  if (p === '/api/wechat/upload-url' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      let base64 = b.data;
+      if (!base64 && b.url) {
+        const imgRes = await fetch(b.url, { signal: AbortSignal.timeout(30000) });
+        if (!imgRes.ok) throw new Error('抓取封面图失败：HTTP ' + imgRes.status);
+        base64 = Buffer.from(await imgRes.arrayBuffer()).toString('base64');
+      }
+      if (!base64) return json(res, 400, { error: 'bad_request', note: '缺少 data(base64) 或 url' });
+      const r = await uploadPermanentImage(b.filename || 'cover.png', base64);
       return json(res, 200, r);
     } catch (e) {
       return json(res, 502, { error: 'wechat_error', note: e.message, wx: e.wx || null });
@@ -423,5 +496,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`EtsyOps server running at http://${HOST}:${PORT} (wechat proxy: ${wechatConfigured() ? 'ON' : 'OFF'}, ai: ${aiConfigured() ? AI_MODEL : 'OFF'})`);
+  console.log(`EtsyOps server running at http://${HOST}:${PORT} (wechat proxy: ${wechatConfigured() ? 'ON' : 'OFF'}, ai: ${aiConfigured() ? AI_MODEL : 'OFF'}, image: ${aiConfigured() ? AI_IMAGE_MODEL : 'OFF'})`);
 });

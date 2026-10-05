@@ -120,7 +120,7 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿(可选) → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build v20261005d</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build v20261005e</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
@@ -133,8 +133,9 @@
   <div class="stepper" id="stepper">
     <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">文稿收集</div><div class="d">上传 / 粘贴素材</div></div></div>
     <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">AI 生稿</div><div class="d">可选 · 可自定义</div></div></div>
-    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">公众号排版</div><div class="d">模板 · 实时预览</div></div></div>
-    <div class="step-chip" data-step="4"><div class="num">4</div><div><div class="t">发布草稿箱</div><div class="d">写入公众号草稿</div></div></div>
+    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">AI 标题 / 封面</div><div class="d">可选 · 免费生图</div></div></div>
+    <div class="step-chip" data-step="4"><div class="num">4</div><div><div class="t">公众号排版</div><div class="d">模板 · 实时预览</div></div></div>
+    <div class="step-chip" data-step="5"><div class="num">5</div><div><div class="t">发布草稿箱</div><div class="d">写入公众号草稿</div></div></div>
   </div>
 
   <div class="layout">
@@ -175,9 +176,55 @@
         <div class="ok-box" id="aiResult" style="display:none"></div>
       </div>
 
-      <!-- STEP 3 -->
+      <!-- STEP 3 · AI 生成标题 + 封面图（可选） -->
+      <div class="panel" id="panelCover">
+        <h3>③ AI 生成标题 / 封面图 <span style="font-weight:400;font-size:12px;color:var(--text-faint)">（可选步骤 · 免费档）</span></h3>
+        <div class="ph-sub">标题用 <code>glm-4-flash</code>，封面图用 <code>cogview-3-flash</code>（均免费）。跳过则沿用第 1 步标题，封面在发布步手动上传。</div>
+
+        <div style="border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:14px">
+          <h3 style="margin:0 0 6px;font-size:14px">🅰 生成候选标题</h3>
+          <div class="ph-sub" style="margin-bottom:10px">基于第 2 步成稿（或第 1 步素材）生成 5 个候选标题，点选即填入。</div>
+          <label class="fld" style="margin-top:0">标题要求（选填）</label>
+          <textarea id="titleReq" style="min-height:70px" placeholder="例如：突出疗愈感、口语化、12 字以内…（留空用默认）"></textarea>
+          <div style="margin-top:12px;display:flex;gap:10px">
+            <button class="btn primary" id="genTitleBtn">✨ 生成候选标题</button>
+          </div>
+          <div id="titleList" style="margin-top:12px;display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:14px;padding:14px">
+          <h3 style="margin:0 0 6px;font-size:14px">🅱 生成封面图</h3>
+          <div class="ph-sub" style="margin-bottom:10px">描述封面主题与风格。免费档 <code>cogview-3-flash</code>，约数秒出图。</div>
+          <label class="fld" style="margin-top:0">封面描述（Prompt）</label>
+          <textarea id="coverPrompt" style="min-height:80px" placeholder="例如：温馨手作蜡烛特写，暖光氛围，浅木桌面，ins 风，留白构图…"></textarea>
+          <label class="fld">尺寸比例</label>
+          <select id="coverSize">
+            <option value="1440x720">1440×720 · 公众号首图 2:1（推荐）</option>
+            <option value="1024x1024">1024×1024 · 方形</option>
+            <option value="768x1344">768×1344 · 竖版</option>
+            <option value="1152x864">1152×864 · 横向</option>
+          </select>
+          <div style="margin-top:12px;display:flex;gap:10px">
+            <button class="btn primary" id="genCoverBtn">🎨 生成封面图</button>
+          </div>
+          <div id="coverResult" style="margin-top:12px;display:none">
+            <img id="coverImg" style="width:100%;border-radius:12px;display:block" alt="cover" />
+            <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn" id="useCoverBtn">✅ 用作封面（上传微信）</button>
+              <a class="btn ghost" id="dlCover" download="cover.png">⬇ 下载</a>
+            </div>
+            <div class="ok-box" id="coverUp" style="display:none"></div>
+          </div>
+        </div>
+
+        <div style="margin-top:14px;display:flex;gap:10px">
+          <button class="btn" id="coverSkip">跳过，去排版 →</button>
+        </div>
+      </div>
+
+      <!-- STEP 4 -->
       <div class="panel" id="panel2">
-        <h3>③ 公众号排版</h3>
+        <h3>④ 公众号排版</h3>
         <div class="ph-sub">选择版式模板与主题色，右侧实时预览手机效果。</div>
         <label class="fld" style="margin-top:0">版式模板</label>
         <div class="tpls" id="tpls">
@@ -208,7 +255,7 @@
 
       <!-- STEP 4 -->
       <div class="panel" id="panel3">
-        <h3>④ 发布草稿箱</h3>
+        <h3>⑤ 发布草稿箱</h3>
         <div class="ph-sub">将排版稿写入公众号草稿箱（不群发）。服务端配置凭证后即为真实写入，否则为模拟。</div>
         <label class="fld" style="margin-top:0">封面图（真实发布必填）</label>
         <input type="url" id="cover" placeholder="封面图预览 URL（可选，仅影响预览）" />
@@ -260,7 +307,7 @@
 <script src="config.js"></script>
 <script>
 /* ---------- 状态 ---------- */
-const state = { tpl:'default', color:'#07c160', size:16, cover:'' };
+const state = { tpl:'default', color:'#07c160', size:16, cover:'', thumbMediaId:'' };
 const API_BASE = window.getApiBase() || '';
 if(!API_BASE){
   const b=document.getElementById('bindStatus'); if(b){ b.textContent='⚠ 未配置后端地址'; b.style.color='var(--warn)'; b.style.borderColor='rgba(255,107,129,.4)'; }
@@ -368,9 +415,9 @@ function applyTplStyle(){
 /* ---------- 步骤切换 ---------- */
 function goStep(n){
   document.querySelectorAll('.step-chip').forEach(c=>c.classList.toggle('active', +c.dataset.step===n));
-  ['panel1','panelAI','panel2','panel3'].forEach((p,idx)=>{ $(p).style.display = (idx+1)===n ? '' : 'none'; });
+  ['panel1','panelAI','panelCover','panel2','panel3'].forEach((p,idx)=>{ $(p).style.display = (idx+1)===n ? '' : 'none'; });
   window.scrollTo({top:0,behavior:'smooth'});
-  if(n===3) applyTplStyle();
+  if(n===4) applyTplStyle();
 }
 document.querySelectorAll('.step-chip').forEach(c=>c.onclick=()=>goStep(+c.dataset.step));
 
@@ -437,7 +484,7 @@ function fillText(t, fname){
 }
 
 ['title','src','author','cover','digest'].forEach(id=> $(id).addEventListener('input', renderPreview));
-$('#toStep3').onclick=()=>goStep(4);
+$('#toStep3').onclick=()=>goStep(5);
 
 /* ---------- AI 生稿 ---------- */
 const DEFAULT_PROMPT = `# 角色
@@ -578,7 +625,71 @@ $('#genBtn').onclick = async ()=>{
     btn.disabled = false; btn.textContent = '✨ 开始 AI 生稿';
   }
 };
-$('#skipGen').onclick = ()=>goStep(3);
+$('#skipGen').onclick = ()=>goStep(4);
+
+/* ---------- STEP 3 · AI 生成标题 + 封面图 ---------- */
+$('#genTitleBtn').onclick = async ()=>{
+  const draft = ($('#src').value || '').trim();
+  if(!draft){ toast('请先在第 1 步放素材，或在第 2 步生成成稿'); return; }
+  if(!aiState.ok){ toast('后端未配置 AI，暂不能生成标题'); return; }
+  const btn = $('#genTitleBtn'); btn.disabled = true; btn.textContent = '⏳ 生成标题中…';
+  try{
+    const r = await fetch(API_BASE+'/api/ai/title', { method:'POST', headers:window.apiAuthHeaders(), body: JSON.stringify({ draft, requirement: ($('#titleReq').value||'').trim() }) });
+    const d = await r.json();
+    if(!r.ok || !d.titles || !d.titles.length) throw new Error(d.note || '生成标题失败');
+    const list = $('#titleList'); list.innerHTML = '';
+    d.titles.forEach(t=>{
+      const el = document.createElement('div');
+      el.className = 'tpl'; el.style.width = '100%'; el.textContent = t;
+      el.onclick = ()=>{ $('#title').value = t; renderPreview(); document.querySelectorAll('#titleList .tpl').forEach(x=>x.classList.remove('active')); el.classList.add('active'); toast('已选用：'+t); };
+      list.appendChild(el);
+    });
+    toast('已生成 '+d.titles.length+' 个候选标题，点选填入');
+  }catch(e){ toast('生成标题失败：'+e.message); }
+  finally{ btn.disabled = false; btn.textContent = '✨ 生成候选标题'; }
+};
+
+let __lastCoverUrl = '', __lastCoverB64 = '';
+$('#genCoverBtn').onclick = async ()=>{
+  const prompt = ($('#coverPrompt').value || '').trim();
+  if(!prompt){ toast('请描述封面主题/风格'); return; }
+  if(!aiState.ok){ toast('后端未配置 AI，暂不能生图'); return; }
+  const btn = $('#genCoverBtn'); btn.disabled = true; btn.textContent = '🎨 生成中（数秒）…';
+  try{
+    const r = await fetch(API_BASE+'/api/ai/image', { method:'POST', headers:window.apiAuthHeaders(), body: JSON.stringify({ prompt, size: $('#coverSize').value }) });
+    const d = await r.json();
+    if(!r.ok || (!d.url && !d.b64)) throw new Error(d.note || '生图失败');
+    __lastCoverUrl = d.url || ''; __lastCoverB64 = d.b64 || '';
+    const src = d.url || ('data:image/png;base64,'+d.b64);
+    $('#coverImg').src = src; $('#dlCover').href = src;
+    $('#coverResult').style.display = 'block';
+    state.cover = d.url || ''; renderPreview();
+    toast('封面图已生成');
+  }catch(e){ toast('生图失败：'+e.message); }
+  finally{ btn.disabled = false; btn.textContent = '🎨 生成封面图'; }
+};
+
+$('#useCoverBtn').onclick = async ()=>{
+  if(!__lastCoverUrl && !__lastCoverB64){ toast('请先生成封面图'); return; }
+  if(!backend.configured){ toast('后端未绑定公众号，无法上传；可先下载图片，发布步手动上传'); return; }
+  const btn = $('#useCoverBtn'); btn.disabled = true; btn.textContent = '⬆ 上传中…';
+  try{
+    const useB64 = !!__lastCoverB64;
+    const r = await fetch(API_BASE + (useB64 ? '/api/wechat/upload' : '/api/wechat/upload-url'), {
+      method:'POST', headers:window.apiAuthHeaders(),
+      body: JSON.stringify(useB64 ? { filename:'cover.png', data:__lastCoverB64 } : { url: __lastCoverUrl })
+    });
+    const d = await r.json();
+    if(!r.ok || !d.media_id) throw new Error((d.note||'封面上传失败')+(d.wx?(' · '+JSON.stringify(d.wx)):''));
+    state.thumbMediaId = d.media_id;
+    const box = $('#coverUp'); box.style.display = 'block';
+    box.innerHTML = '✅ 已上传为封面素材，media_id：<code style="color:#04121a">'+d.media_id+'</code><br>发布步将自动使用此封面。';
+    toast('封面已上传，可去发布');
+  }catch(e){ toast('上传失败：'+e.message); }
+  finally{ btn.disabled = false; btn.textContent = '✅ 用作封面（上传微信）'; }
+};
+
+$('#coverSkip').onclick = ()=>goStep(4);
 
 /* 模板 / 颜色 / 字号 */
 document.querySelectorAll('#tpls .tpl').forEach(t=>t.onclick=()=>{
@@ -613,7 +724,7 @@ function fileToBase64(f){
   return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(',')[1]);fr.onerror=rej;fr.readAsDataURL(f);});
 }
 async function publishReal(){
-  let thumb='';
+  let thumb = state.thumbMediaId || '';
   const f = $('#coverFile').files[0];
   if(f){
     const b64 = await fileToBase64(f);
@@ -622,7 +733,7 @@ async function publishReal(){
     if(!up.ok || !ur.media_id) throw new Error((ur.note||'封面上传失败')+(ur.wx?(' · '+JSON.stringify(ur.wx)):''));
     thumb = ur.media_id;
   }
-  if(!thumb) throw new Error('真实发布需要上传封面图（微信要求 thumb_media_id）');
+  if(!thumb) throw new Error('真实发布需要封面图：可在发布步上传封面文件，或在第 3 步用 AI 生成并「用作封面」上传');
   const payload = buildPayload(thumb);
   const r = await fetch(API_BASE+'/api/wechat/draft',{method:'POST',headers:window.apiAuthHeaders(),body:JSON.stringify(payload)});
   const dr = await r.json();
@@ -732,7 +843,7 @@ async function checkAI(){
     aiState.ok = d.configured; aiState.model = d.model || '';
     const el = $('#aiStatus');
     if(d.configured){
-      el.textContent = '✅ AI 生稿已就绪（'+d.model+'）· 建议在下方展开生稿要求确认风格后开始';
+      el.textContent = '✅ AI 已就绪 · 生稿（'+d.model+'）/ 生图（'+(d.imageModel||'')+'）· 第 3 步可用';
       el.style.color = 'var(--good)';
     } else {
       el.textContent = '⚠ '+d.note+' 可跳过本步直接排版。';
