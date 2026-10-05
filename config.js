@@ -13,7 +13,8 @@ window.ETSYOPS_API_KEY = window.ETSYOPS_API_KEY || new URLSearchParams(location.
 window.getApiBase = function () {
   const p = new URLSearchParams(location.search).get('api');
   if (p) return p;
-  return window.ETSYOPS_API_BASE || '';
+  // 兜底：Cloudflare 构建未注入 WECHAT_API_BASE 时，默认指向公网隧道后端
+  return window.ETSYOPS_API_BASE || 'https://api.mailili-agency.com';
 };
 
 // 调用后端时附加的认证头（若配置了 key）
