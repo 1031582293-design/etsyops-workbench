@@ -252,7 +252,8 @@ WorkBuddy 自带"沙箱发布"能力（如 CloudStudio 等，把静态站一键�
 > ⚠️ 此前写的"硅基流动送 2000~3000 万 Tokens 永久"已过时（2026 年中已缩水）。以下为 2026-10 实测政策。**两家免费额度/免费模型都需先「实名认证」，且百炼需「开通服务」，否则看不到额度——这是"好像没有"的最常见原因。**
 - **硅基流动 SiliconFlow** `https://cloud.siliconflow.cn`：新用户一次性赠送 **¥16（国内站）/ $1（全球站）** 试用额度（非永久大额）；**实名认证后**可用一批「永久免费模型」（如 `Qwen/Qwen3-8B-Instruct`、`THUDM/GLM-Z1-9B` 等），但有固定限速（DeepSeek-R1/V3 限 30 次/小时，未实名仅 100 次/天）。填 `AI_BASE_URL=https://api.siliconflow.cn/v1`、`AI_MODEL=Qwen/Qwen3-8B-Instruct`（免费档）或花 ¥16 试 `deepseek-ai/DeepSeek-V3`。
 - **阿里云百炼** `https://bailian.aliyun.com`：注册 → **开通服务（同意协议）+ 实名** → 系统自动发放**每模型 100 万 Tokens（90 天）**，累计超 7000 万，限「中国内地/华北2北京」地域模型；`qwen-plus` 在免费之列。填 `AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`、`AI_MODEL=qwen-plus`。
-- **火山引擎（豆包）** `https://console.volcengine.com/ark`：每日 **200 万 Tokens 免费额度（每日 0 点刷新，不累积）**，适合日常生稿；填 `AI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3`、`AI_MODEL=doubao-seed-2.0-pro`（或 doubao-lite）。
+- **火山引擎（豆包）** `https://console.volcengine.com/ark`：⚠️ 免费额度已缩水。现在**每开通一款模型仅赠 50 万 Tokens（一次性）**；所谓「每日 200 万」是**协作奖励计划**，需进方舟控制台 → 开通管理 → 右侧活动里**主动加入**才生效（注册不会自动给）。完整路径：注册 → 实名 → 在「模型管理」开通具体模型（如 `Doubao-Seed-2.1-turbo`）→ 加入协作奖励计划。「看不到额度」多半卡在最后两步。填 `AI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3`、`AI_MODEL=doubao-seed-2.1-turbo`。
+- **智谱 BigModel（最稳的真免费档，强烈推荐）** `https://open.bigmodel.cn`：注册即送 **2000 万 Tokens**（1 年有效）；`GLM-4-Flash`、`GLM-4.6-Flash` 等 **永久免费不限量**（OpenAI 兼容，中文质量在免费档里最好）。填 `AI_BASE_URL=https://open.bigmodel.cn/api/paas/v4`、`AI_MODEL=glm-4-flash`。
 - **百度千帆** `https://qianfan.baidu.com`：每模型 100 万 Tokens（3 个月）；ERNIE-Speed/Lite 永久免费。
 - 备选（免信用卡、需境外网络）：Groq、OpenRouter（模型名加 `:free`）。**OpenAI 官方已无免费 key，Gemini 不兼容 OpenAI 格式，先别碰。**
 
