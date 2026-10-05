@@ -647,37 +647,28 @@ $('#genBtn').onclick = async ()=>{
     btn.textContent = '⏳ 生稿中…已等待 '+s+' 秒（长文约需 1~3 分钟，请勿关闭页面）';
   }, 1000);
   try{
-    // 必须带超时：裸 fetch 遇隧道半通不通会永久挂起，页面就成了「未响应」。
-    // 分两步 await（先等响应头，再读文本），这样「等不到响应头」和「响应体传不完」
-    // 两种不同的失败能被区分开，而不是一起卡死看不出原因。
-    btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（正在等待后端响应）';
-    const bodyJson = JSON.stringify({ manuscript, prompt: $('#aiPrompt').value });
-    // 'Accept-Encoding': 'identity' —— 不要压缩。
-    // Cloudflare 边缘会给隧道返回的 JSON 加 content-encoding: br，
-    // Edge 在「已收到响应头、正文读取中」这一步解压 brotli 时会挂住 → 页面报未响应。
-    // 加上 identity 让边缘跳过动态压缩；服务端也已加 no-transform 双保险。
-    const r = await fetchT(API_BASE+'/api/ai/generate', 300000, {
-      method:'POST',
-      headers: Object.assign(window.apiAuthHeaders(), { 'Accept-Encoding': 'identity' }),
-      body: bodyJson,
-    });
-    btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（已收到响应，正在读取正文）';
-    const ct = (r.headers.get('content-type') || '');
-    const enc = (r.headers.get('content-encoding') || '');
-    let txt = '';
-    try{ txt = await r.text(); }
-    catch(te){
-      throw new Error('响应体传输中断（HTTP ' + r.status + '，content-encoding=' + (enc||'无') +
-        '，已收到响应头但正文没读完）。\n若是 content-encoding: br，几乎可以确定是边缘 Brotli 解压挂住。\n原始错误：' + (te && te.message));
+    // ★ 改为「提交任务 + 轮询结果」模式。
+    // 之前是把 25~55 秒的长响应挂在同一个连接上读，经Cloudflare Tunnel 时该连接
+    // 会在正文传完前被掐断（已多次实测：后端日志显示「出稿成功」，curl 能完整收到，
+    // 只有浏览器收不到 → 页面卡在「已收到响应，正在读取」直到未响应）。
+    // 现在提交只回一个 jobId（毫秒级），随后每 3 秒问一次进度，每次都是短连接，
+    // 天然规避长连接被掐断。
+    const sub = await apiCall('/api/ai/generate', { timeout: 30000, label: '提交生稿任务',
+      body: { manuscript, prompt: $('#aiPrompt').value, async: true } });
+    if(!sub.jobId) throw new Error('后端未返回任务号（jobId 缺失）');
+
+    btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（任务已提交，AI 正在写作）';
+    let res = null;
+    for(let i=0; i<100; i++){   // 最多等100 次 × 3s ≈ 5 分钟
+      await new Promise(r=>setTimeout(r, 3000));
+      const st = await apiCall('/api/ai/job?id=' + encodeURIComponent(sub.jobId), { timeout: 15000, label: '查询生稿进度' });
+      if(st.status === 'done'){ res = st; break; }
+      if(st.status === 'error') throw new Error(st.note || 'AI 生稿失败');
+      btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（AI 写作中，服务器已用时 ' + (st.waited||0) +' 秒）';
     }
-    // 不要把 JSON 解析失败吞成 {} → 会报成「AI 生稿失败（HTTP 200）」，完全误导。
-    if(ct.indexOf('application/json') < 0){
-      throw new Error('后端返回的不是 JSON（content-type: ' + (ct||'空') + '）。\n实际请求：' + API_BASE + '/api/ai/generate\n收到内容开头：' + txt.slice(0,120).replace(/\s+/g,' '));
-    }
-    let d = {};
-    try{ d = JSON.parse(txt || '{}'); }
-    catch(pe){ throw new Error('响应不是合法 JSON（HTTP ' + r.status + '，共 ' + txt.length + ' 字节，可能是传输被截断）：开头 ' + txt.slice(0,120).replace(/\s+/g,' ')); }
-    if(!r.ok || !d.content) throw new Error(((d && d.note) ? d.note : 'AI 生稿失败（后端已响应但无内容）') + '（HTTP ' + r.status + '）');
+    if(!res) throw new Error('等待超过 5 分钟仍未出稿，请重试');
+    const d = res;
+    if(!d.content) throw new Error('AI 生稿失败：后端已响应但无内容');
     const out = parseAiOutput(d.content);
     if(out.title) $('#title').value = out.title;
     $('#src').value = out.body;

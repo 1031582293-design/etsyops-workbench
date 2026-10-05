@@ -393,22 +393,49 @@ async function handleApi(req, res) {
     }
   }
 
-  // AI 生稿：按前端传来的生稿要求（prompt）把素材稿（manuscript）生成为公众号文案
+  // ★ 生稿任务缓存：把「长时间单连接」改成「短连接提交 + 短连接轮询」。
+// 起因：AI 生稿需 25~55 秒，浏览器一直挂在同一个连接上读响应体，
+// 经过 Cloudflare Tunnel 时该连接会在正文传完前被掐断 → 页��永远转圈/未响应
+// （已实测：后端每次都「出稿成功」，curl 能完整收到，只有浏览器收不到）。
+// 现在：POST /api/ai/generate 立刻返回 jobId；前端每 3 秒 GET /api/ai/job?id=xxx 查结果。
+// 每次都是短连接，天然规避长连接被掐断的问题。
+const _genJobs = new Map(); // id -> { status:'running'|'done'|'error', content, note, at }
+let _genJobSeq = 0;
+
+// AI 生稿：按前端传来的生稿要求（prompt）把素材稿（manuscript）生成为公众号文案
   if (p === '/api/ai/generate' && req.method === 'POST') {
     if (!aiConfigured()) {
       console.error('[ai/generate] 拒绝：服务端未配置 AI');
       return json(res, 400, { error: 'ai_not_configured', note: '服务端未配置 AI_API_KEY（请在 .env 填写后重启后端）。' });
     }
-    const _t0 = Date.now();
-    // 记录每次请求（含 Origin）：用于判断「浏览器到底有没有把请求发到后端」。
-    // 之前只打错误，导致「前端没发请求」和「后端出错」在日志上完全一样，看不出来。
-    console.log('[ai/generate] 收到请求 origin=' + (req.headers.origin || '(无)') + ' ua=' + String(req.headers['user-agent'] || '').slice(0, 60));
     try {
       const b = await readJson(req);
       const manuscript = (b.manuscript || '').trim().slice(0, 15000);
       const prompt = (b.prompt || '').trim();
       if (!manuscript) return json(res, 400, { error: 'bad_request', note: '缺少 manuscript（素材文稿）' });
       if (!prompt) return json(res, 400, { error: 'bad_request', note: '缺少 prompt（生稿要求）' });
+
+      // async 模式：只提交任务，立刻返回 jobId（前端改走轮询）
+      if (b.async) {
+        const id = 'g' + Date.now().toString(36) + (_genJobSeq++);
+        _genJobs.set(id, { status: 'running', at: Date.now() });
+        console.log('[ai/generate] 已受理任务 ' + id + '（异步轮询模式）');
+        (async () => {
+          const t0 = Date.now();
+          try {
+            const content = await aiGenerate(prompt, '【原始素材】\n' + manuscript);
+            _genJobs.set(id, { status: 'done', content, at: Date.now() });
+            console.log('[ai/generate] 任务 ' + id + ' 出稿成功 ' + content.length + ' 字，耗时 ' + ((Date.now() - t0) / 1000).toFixed(1) + 's');
+          } catch (e) {
+            _genJobs.set(id, { status: 'error', note: (e && e.message) || '未知错误', at: Date.now() });
+            console.error('[ai/generate] 任务 ' + id + ' 失败：', e && e.message);
+          }
+        })();
+        return json(res, 200, { jobId: id, poll: '/api/ai/job?id=' + id });
+      }
+
+      const _t0 = Date.now();
+      console.log('[ai/generate] 收到同步请求 origin=' + (req.headers.origin || '(无)') + ' ua=' + String(req.headers['user-agent'] || '').slice(0, 60));
       const content = await aiGenerate(prompt, '【原始素材】\n' + manuscript);
       console.log('[ai/generate] 出稿成功 ' + content.length + ' 字，耗时 ' + ((Date.now() - _t0) / 1000).toFixed(1) + 's');
       return json(res, 200, { content });
@@ -416,6 +443,20 @@ async function handleApi(req, res) {
       console.error('[ai/generate] 生稿失败：', e && e.message);
       return json(res, 502, { error: 'ai_error', note: e.message });
     }
+  }
+
+  // 轮询生稿任务结果（每次都是短连接）
+  if (p === '/api/ai/job' && req.method === 'GET') {
+    const _u = new URL(req.url, 'http://localhost');
+    const id = _u.searchParams.get('id') || '';
+    const job = _genJobs.get(id);
+    if (!job) return json(res, 404, { error: 'job_not_found', note: '任务不存在或已过期（请重新生稿）' });
+    if (job.status === 'done' || job.status === 'error') {
+      _genJobs.delete(id); // 取过一次就清掉，避免内存堆积
+      if (job.status === 'error') return json(res, 200, { status: 'error', error: 'ai_error', note: job.note });
+      return json(res, 200, { status: 'done', content: job.content });
+    }
+    return json(res, 200, { status: 'running', waited: Math.round((Date.now() - job.at) / 1000) });
   }
 
   // AI 生成标题：基于成稿/素材生成若干候选公众号标题
@@ -620,3 +661,11 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`EtsyOps server running at http://${HOST}:${PORT} (wechat proxy: ${wechatConfigured() ? 'ON' : 'OFF'}, ai: ${aiConfigured() ? AI_MODEL : 'OFF'}, image: ${aiConfigured() ? AI_IMAGE_MODEL : 'OFF'})`);
 });
+
+// 定期清理 10 分钟前受理但从未被查询的生稿任务，防止 Map 无限增长
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, job] of _genJobs) {
+    if (now - job.at > 10 * 60 * 1000) _genJobs.delete(id);
+  }
+}, 60 * 1000).unref?.();
