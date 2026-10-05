@@ -126,7 +126,7 @@ export const EMPLOYEES = [
     nodes: [
       { t: '① 文稿收集', skill: 'Doc Intake', sop: '上传本地文稿（md/txt/html/docx），归一为可编辑正文', d: '多格式入稿，自动转纯文本/HTML。', out: '归一化文稿' },
       { t: '② 公众号排版', skill: 'Typeset Pro', sop: '套用公众号版式模板（标题/正文/引用/分隔），实时预览手机效果', d: '多模板一键切换，配色与封面可调。', out: '排版稿（HTML）' },
-      { t: '③ 发布草稿箱', skill: 'Draft Push', sop: '调用微信草稿箱接口，将排版稿写入公众号草稿（不群发）', d: '演示模式模拟 cgi-bin/draft/add；接入真实 AppID 后直发。', out: '草稿箱草稿' },
+      { t: '③ 发布草稿箱', skill: 'Draft Push', sop: '调用微信草稿箱接口，将排版稿写入公众号草稿（不群发）', d: '调用微信草稿箱接口，将排版稿写入公众号草稿（不群发），由后端凭证真实写入。', out: '草稿箱草稿' },
       { t: '数据复盘', skill: 'Wx Metrics', sop: '草稿转群发后追踪打开/分享/转化', d: '优化选题与排版。', out: '数据周报' }
     ],
     deliverables: [{ t: '排版发布工具', d: 'wechat-publisher.html · 三步闭环已打通（演示模式）' }]
@@ -178,7 +178,7 @@ export const FEED = [
 export const SOCIAL = [
   { name: '抖音', handle: '@etsy手作日记', icon: '🎵', c: 'linear-gradient(135deg,#ff4d6d,#ffb86b)', fans: '42.6k', views: '1.2M', eng: '8.4%', post: '今日 2 条', prog: 80, st: '活跃' },
   { name: '小红书', handle: '@Handmade礼物铺', icon: '📕', c: 'linear-gradient(135deg,#ff2e4d,#ff7ac3)', fans: '28.3k', views: '640k', eng: '11.2%', post: '今日 3 条', prog: 92, st: '活跃' },
-  { name: '微信公众号', handle: 'Etsy好物研究所', id: 'wechat', icon: '💚', c: 'linear-gradient(135deg,#07c160,#22d3ee)', fans: '9.1k', views: '86k', eng: '6.7%', post: '本周 2 篇', prog: 50, st: '待群发' },
+  { name: '微信公众号', handle: '梦琦Mengqi', id: 'wechat', icon: '💚', c: 'linear-gradient(135deg,#07c160,#22d3ee)', fans: '9.1k', views: '86k', eng: '6.7%', post: '本周 2 篇', prog: 50, st: '待群发' },
   { name: 'TikTok', handle: '@craftystudio', icon: '🎶', c: 'linear-gradient(135deg,#22d3ee,#7c5cff)', fans: '53.8k', views: '2.1M', eng: '9.8%', post: '今日 1 条', prog: 66, st: '活跃' },
   { name: 'Instagram', handle: '@crafty.studio', icon: '🌅', c: 'linear-gradient(135deg,#ff7ac3,#ffb86b)', fans: '21.4k', views: '380k', eng: '7.5%', post: '今日 1 条', prog: 40, st: '学习中' }
 ];

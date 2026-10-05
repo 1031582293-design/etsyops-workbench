@@ -60,9 +60,10 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号数据看板</h1>
-      <div class="sub">真实数据 · 来自你的微信公众号后台（粉丝 / 草稿箱 / 已发布 / 图文分析）</div>
+      <div class="sub">真实数据 · 来自你的微信公众号后台（粉丝 / 草稿箱 / 已发布 / 图文分析）<span style="opacity:.45;font-size:11px"> · build v20261005d</span></div>
     </div>
     <span id="statusBadge" class="badge off" style="margin-left:auto">检测中…</span>
+    <button id="dashRetry" class="btn" style="display:none" onclick="load()">↻ 重试</button>
     <a class="btn primary" id="goPublish" href="wechat-publisher.html">→ 去发布草稿</a>
   </div>
 
@@ -99,23 +100,32 @@
   document.getElementById('goPublish').href = window.withApi ? window.withApi('wechat-publisher.html') : 'wechat-publisher.html';
 
   function fmtNum(n){ if(n==null) return '—'; if(n>=10000) return (n/10000).toFixed(1)+'w'; if(n>=1000) return (n/1000).toFixed(1)+'k'; return String(n); }
-  async function api(path){
-    const r = await fetch(API_BASE + path, { headers: (window.apiAuthHeaders ? window.apiAuthHeaders() : {}) });
-    return r;
+  async function api(path, ms){
+    const c = new AbortController();
+    const t = setTimeout(()=>c.abort(), ms||6000);
+    try{ const r = await fetch(API_BASE + path, { headers: (window.apiAuthHeaders ? window.apiAuthHeaders() : {}), signal: c.signal }); return r; }
+    finally{ clearTimeout(t); }
   }
+  function showDashRetry(){ const b=document.getElementById('dashRetry'); if(b) b.style.display='inline-block'; }
 
-  async function load(){
-    // 绑定状态
+  async function load(retry){
+    retry = retry || 0; const MAX = 3;
+    // 绑定状态（带自动重连）
     try{
       const s = await (await api('/api/wechat/status')).json();
+      document.getElementById('dashRetry').style.display='none';
       if(s.configured){ STATUS_EL.textContent = '✅ 已绑定真实公众号 ' + (s.appid||''); STATUS_EL.className='badge'; }
-      else { STATUS_EL.textContent = '⚠️ 未配置凭证（模拟）'; STATUS_EL.className='badge off'; }
-    }catch(e){ STATUS_EL.textContent='⚠️ 后端不可达'; STATUS_EL.className='badge off'; }
+      else { STATUS_EL.textContent = '⚠️ 未配置凭证'; STATUS_EL.className='badge off'; }
+    }catch(e){
+      if(retry < MAX){ STATUS_EL.textContent='↻ 重连中…('+(retry+1)+'/'+MAX+')'; await new Promise(r=>setTimeout(r,1500)); return load(retry+1); }
+      STATUS_EL.textContent='⚠️ 后端不可达（隧道可能闪断）'; STATUS_EL.className='badge off'; showDashRetry();
+      document.getElementById('draftList').innerHTML='<div class="empty">无法连接后端，请确认 server.js 已运行 / 隧道已连。点「重试」可再次尝试。</div>'; return;
+    }
 
     // 总览
     let ov;
     try{ ov = await (await api('/api/wechat/overview')).json(); }
-    catch(e){ document.getElementById('draftList').innerHTML='<div class="empty">无法连接后端，请确认 server.js 已运行 / WECHAT_API_BASE 已配置。</div>'; return; }
+    catch(e){ document.getElementById('draftList').innerHTML='<div class="empty">无法连接后端，请确认 server.js 已运行 / WECHAT_API_BASE 已配置。</div>'; showDashRetry(); return; }
 
     // KPI
     document.getElementById('kFans').textContent = fmtNum(ov.fans);

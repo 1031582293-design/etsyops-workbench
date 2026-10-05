@@ -256,20 +256,20 @@
       <!-- STEP 4 -->
       <div class="panel" id="panel3">
         <h3>⑤ 发布草稿箱</h3>
-        <div class="ph-sub">将排版稿写入公众号草稿箱（不群发）。服务端配置凭证后即为真实写入，否则为模拟。</div>
+        <div class="ph-sub">将排版稿写入公众号草稿箱（不群发）。需后端配置公众号凭证（WECHAT_APPID / WECHAT_APPSECRET）后方可真实写入。</div>
         <label class="fld" style="margin-top:0">封面图（真实发布必填）</label>
         <input type="url" id="cover" placeholder="封面图预览 URL（可选，仅影响预览）" />
         <input type="file" id="coverFile" accept="image/*" style="margin-top:8px" />
         <div class="hint" id="ipHint">真实发布需把云端服务器出口 IP 加入公众号 IP 白名单，正在探测…</div>
         <div class="row2" style="margin-top:14px">
-          <div><label class="fld" style="margin-top:0">作者</label><input type="text" id="author" value="Etsy好物研究所" /></div>
+          <div><label class="fld" style="margin-top:0">作者</label><input type="text" id="author" value="" placeholder="后端未配置 WECHAT_AUTHOR 时留空" /></div>
           <div><label class="fld" style="margin-top:0">摘要</label><input type="text" id="digest" placeholder="一句话摘要（选填，≤120字）" /></div>
         </div>
         <div style="margin-top:16px;display:flex;gap:10px">
           <button class="btn primary" id="publish">📥 发布到草稿箱</button>
           <button class="btn ghost" id="copyHtml">复制排版 HTML</button>
         </div>
-        <div class="hint">真实接口：封面图 → <code>material/add_material</code> 取 thumb_media_id；正文 → <code>draft/add</code> 写入草稿箱。<b id="modeHint">当前：模拟模式</b></div>
+        <div class="hint">真实接口：封面图 → <code>material/add_material</code> 取 thumb_media_id；正文 → <code>draft/add</code> 写入草稿箱。<b id="modeHint">当前：检测中…</b></div>
       </div>
     </div>
 
@@ -281,7 +281,7 @@
         <div class="article" id="article">
           <img class="cover" id="prevCover" src="https://picsum.photos/seed/etsyops/760/420" alt="cover" />
           <h1 id="prevTitle">给文章起个标题…</h1>
-          <div class="byline"><span class="avatar">💚</span><span id="prevAuthor">Etsy好物研究所</span><span id="prevDate"></span></div>
+          <div class="byline"><span class="avatar">💚</span><span id="prevAuthor"></span><span id="prevDate"></span></div>
           <div id="prevBody"><p style="color:#bbb">正文预览会随左侧编辑实时更新。支持标题、加粗、引用、列表、分割线等公众号常见版式。</p></div>
         </div>
         <div class="wx-foot">EtsyOps · 公众号运营数字员工</div>
@@ -767,7 +767,7 @@ $('#publish').onclick=async()=>{
   }]
 }`;
   $('#reqPreview').textContent = req;
-  $('#modalTitle').textContent = backend.configured ? '📤 发布到草稿箱（真实）' : '📤 发布到草稿箱（模拟）';
+  $('#modalTitle').textContent = backend.configured ? '📤 发布到草稿箱（真实）' : '📤 发布到草稿箱（未配置凭证）';
   $('#mask').classList.add('show');
   $('#respBox').style.display='none';
   try{
@@ -776,8 +776,8 @@ $('#publish').onclick=async()=>{
     else { await new Promise(r=>setTimeout(r,600)); draftId = 'DR' + Date.now().toString(36).toUpperCase(); }
     showResp(real
       ? '✅ <b>已写入真实草稿箱</b><br>草稿 media_id：<code style="color:#04121a">'+draftId+'</code><br>标题：'+payload.title+'<br><a href="https://mp.weixin.qq.com" target="_blank" rel="noopener">前往公众号后台「草稿箱」查看并群发 →</a>'
-      : '✅ <b>已写入草稿箱（模拟）</b><br>草稿 media_id：<code style="color:#04121a">'+draftId+'</code><br>标题：'+payload.title+'<br><span style="opacity:.8">服务端配置 WECHAT_APPID/SECRET 后即为真实写入。</span>', true);
-    toast(real?'已真实发布到草稿箱':'已发布到草稿箱（模拟）');
+      : '⚠ <b>未配置凭证，未写入</b><br>请在后端 .env 配置 WECHAT_APPID / WECHAT_APPSECRET 后重试真实写入。', true);
+    toast(real?'已真实发布到草稿箱':'未配置凭证，发布被阻止');
   }catch(e){
     showResp('❌ <b>发布失败</b><br>'+e.message+'<br><span style="opacity:.8">常见原因：IP 未加白名单(40164)、账号未认证(48001)、封面素材无效(40007)。</span>', false);
     toast('发布失败，查看详情');
@@ -816,7 +816,7 @@ async function checkBackend(retry){
       el.style.borderColor='rgba(52,211,153,.5)'; el.style.color='var(--good)'; el.style.background='rgba(52,211,153,.12)';
       $('#modeHint').textContent='当前：真实模式';
     } else {
-      el.textContent='⚠ 未绑定 · 模拟模式';
+      el.textContent='⚠ 未绑定 · 请配置公众号凭证';
     }
     // 后端 .env 配了 WECHAT_AUTHOR 时自动填入作者名（覆盖占位默认值）
     if(d.author){
@@ -856,7 +856,7 @@ async function pingBackend(){
       el.style.borderColor='rgba(52,211,153,.5)'; el.style.color='var(--good)'; el.style.background='rgba(52,211,153,.12)';
       $('#modeHint').textContent='当前：真实模式';
     } else {
-      el.textContent='⚠ 未绑定 · 模拟模式';
+      el.textContent='⚠ 未绑定 · 请配置公众号凭证';
     }
   }catch(e){ showRetry('⚠ 无法连接后端（隧道可能闪断）'); }
 }

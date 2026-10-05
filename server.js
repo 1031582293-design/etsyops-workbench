@@ -22,7 +22,7 @@ function loadDotEnv() {
       if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
       if (!(k in process.env)) process.env[k] = v;
     }
-  } catch { /* 没有 .env 则忽略，回退到系统环境变量 / 模拟模式 */ }
+  } catch { /* 没有 .env 则忽略，回退到系统环境变量 */ }
 }
 loadDotEnv();
 
@@ -273,7 +273,7 @@ async function handleApi(req, res) {
       author: WX_AUTHOR,
       note: wechatConfigured()
         ? '已检测到公众号凭证，发布将写入真实草稿箱。'
-        : '未配置 WECHAT_APPID / WECHAT_APPSECRET（请在 .env 或系统环境变量中设置），当前前端为模拟发布。',
+        : '未配置 WECHAT_APPID / WECHAT_APPSECRET（请在 .env 或系统环境变量中设置），当前前端将无法真实写入草稿箱。',
     });
   }
 

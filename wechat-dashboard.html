@@ -115,7 +115,7 @@
       const s = await (await api('/api/wechat/status')).json();
       document.getElementById('dashRetry').style.display='none';
       if(s.configured){ STATUS_EL.textContent = '✅ 已绑定真实公众号 ' + (s.appid||''); STATUS_EL.className='badge'; }
-      else { STATUS_EL.textContent = '⚠️ 未配置凭证（模拟）'; STATUS_EL.className='badge off'; }
+      else { STATUS_EL.textContent = '⚠️ 未配置凭证'; STATUS_EL.className='badge off'; }
     }catch(e){
       if(retry < MAX){ STATUS_EL.textContent='↻ 重连中…('+(retry+1)+'/'+MAX+')'; await new Promise(r=>setTimeout(r,1500)); return load(retry+1); }
       STATUS_EL.textContent='⚠️ 后端不可达（隧道可能闪断）'; STATUS_EL.className='badge off'; showDashRetry();

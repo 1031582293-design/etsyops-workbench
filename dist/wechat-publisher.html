@@ -120,19 +120,22 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → 公众号排版 → 发布草稿箱</div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build v20261005e</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
+      <button id="retryBtn" class="btn ghost" style="display:none" onclick="checkBackend()">↻ 重试连接</button>
       <a class="btn ghost" id="goDash" href="wechat-dashboard.html">📊 数据看板</a>
       <a class="btn ghost" href="index.html">← 返回工作台</a>
     </div>
   </div>
 
   <div class="stepper" id="stepper">
-    <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">文稿收集</div><div class="d">本地文件</div></div></div>
-    <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">公众号排版</div><div class="d">模板 · 实时预览</div></div></div>
-    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">发布草稿箱</div><div class="d">写入公众号草稿</div></div></div>
+    <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">文稿收集</div><div class="d">上传 / 粘贴素材</div></div></div>
+    <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">AI 生稿</div><div class="d">可选 · 可自定义</div></div></div>
+    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">AI 标题 / 封面</div><div class="d">可选 · 免费生图</div></div></div>
+    <div class="step-chip" data-step="4"><div class="num">4</div><div><div class="t">公众号排版</div><div class="d">模板 · 实时预览</div></div></div>
+    <div class="step-chip" data-step="5"><div class="num">5</div><div><div class="t">发布草稿箱</div><div class="d">写入公众号草稿</div></div></div>
   </div>
 
   <div class="layout">
@@ -141,19 +144,87 @@
       <!-- STEP 1 -->
       <div class="panel" id="panel1">
         <h3>① 文稿收集</h3>
-        <div class="ph-sub">支持本地文件（.md / .txt / .html / .docx），上传后归一为可编辑正文。</div>
-        <div class="drop" id="drop"><b>点击或拖拽上传文稿</b><br><span style="font-size:12px">md / txt / html / docx</span></div>
-        <input type="file" id="file" accept=".md,.txt,.html,.htm,.docx" hidden />
+        <div class="ph-sub">支持本地文件（.md / .txt / .html / .docx / .pdf，可多选依次载入），上传后归一为可编辑正文。</div>
+        <div class="drop" id="drop"><b>点击或拖拽上传文稿（可多选）</b><br><span style="font-size:12px">md / txt / html / docx / pdf</span></div>
+        <input type="file" id="file" accept=".md,.txt,.html,.htm,.docx,.pdf" multiple hidden />
         <div id="fileTag"></div>
         <label class="fld">文章标题</label>
-        <input type="text" id="title" placeholder="给文章起个标题…" />
-        <label class="fld">正文（可编辑，支持 Markdown）</label>
+        <input type="text" id="title" placeholder="给文章起个标题…（AI 生稿后自动填写）" />
+        <label class="fld">素材正文（可编辑，AI 生稿的输入；排版时支持 Markdown）</label>
         <textarea id="src" placeholder="在这里粘贴或上传你的文稿…"></textarea>
       </div>
 
-      <!-- STEP 2 -->
+      <!-- STEP 2 · AI 生稿（可选） -->
+      <div class="panel" id="panelAI">
+        <h3>② AI 生稿 <span style="font-weight:400;font-size:12px;color:var(--text-faint)">（可选步骤）</span></h3>
+        <div class="ph-sub">把第 1 步的素材稿按「生稿要求」生成公众号文案，结果自动填入标题与正文，再进入排版。跳过则直接用素材原文。</div>
+        <div class="hint" id="aiStatus">AI 状态检测中…</div>
+        <details style="margin-top:12px" id="promptBox">
+          <summary style="cursor:pointer;font-size:13px;font-weight:700;color:var(--text-dim);user-select:none">▸ 生稿要求 / Prompt（默认折叠 · 可编辑 · 对生稿实际生效）</summary>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap">
+            <select id="styleSel" style="flex:1;min-width:180px"><option value="">默认要求（内置）</option></select>
+            <button class="btn ghost" id="saveStyle">💾 存为风格</button>
+            <button class="btn ghost" id="delStyle">🗑 删除</button>
+          </div>
+          <textarea id="aiPrompt" style="min-height:340px;margin-top:10px;font-size:12.5px;line-height:1.55"></textarea>
+          <div class="hint">修改后立即对本次生稿生效；「存为风格」可保存多套（风格1 / 风格2 …），随时切换执行。</div>
+        </details>
+        <div style="margin-top:14px;display:flex;gap:10px">
+          <button class="btn primary" id="genBtn">✨ 开始 AI 生稿</button>
+          <button class="btn ghost" id="skipGen">跳过，直接去排版 →</button>
+        </div>
+        <div class="ok-box" id="aiResult" style="display:none"></div>
+      </div>
+
+      <!-- STEP 3 · AI 生成标题 + 封面图（可选） -->
+      <div class="panel" id="panelCover">
+        <h3>③ AI 生成标题 / 封面图 <span style="font-weight:400;font-size:12px;color:var(--text-faint)">（可选步骤 · 免费档）</span></h3>
+        <div class="ph-sub">标题用 <code>glm-4-flash</code>，封面图用 <code>cogview-3-flash</code>（均免费）。跳过则沿用第 1 步标题，封面在发布步手动上传。</div>
+
+        <div style="border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:14px">
+          <h3 style="margin:0 0 6px;font-size:14px">🅰 生成候选标题</h3>
+          <div class="ph-sub" style="margin-bottom:10px">基于第 2 步成稿（或第 1 步素材）生成 5 个候选标题，点选即填入。</div>
+          <label class="fld" style="margin-top:0">标题要求（选填）</label>
+          <textarea id="titleReq" style="min-height:70px" placeholder="例如：突出疗愈感、口语化、12 字以内…（留空用默认）"></textarea>
+          <div style="margin-top:12px;display:flex;gap:10px">
+            <button class="btn primary" id="genTitleBtn">✨ 生成候选标题</button>
+          </div>
+          <div id="titleList" style="margin-top:12px;display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:14px;padding:14px">
+          <h3 style="margin:0 0 6px;font-size:14px">🅱 生成封面图</h3>
+          <div class="ph-sub" style="margin-bottom:10px">描述封面主题与风格。免费档 <code>cogview-3-flash</code>，约数秒出图。</div>
+          <label class="fld" style="margin-top:0">封面描述（Prompt）</label>
+          <textarea id="coverPrompt" style="min-height:80px" placeholder="例如：温馨手作蜡烛特写，暖光氛围，浅木桌面，ins 风，留白构图…"></textarea>
+          <label class="fld">尺寸比例</label>
+          <select id="coverSize">
+            <option value="1440x720">1440×720 · 公众号首图 2:1（推荐）</option>
+            <option value="1024x1024">1024×1024 · 方形</option>
+            <option value="768x1344">768×1344 · 竖版</option>
+            <option value="1152x864">1152×864 · 横向</option>
+          </select>
+          <div style="margin-top:12px;display:flex;gap:10px">
+            <button class="btn primary" id="genCoverBtn">🎨 生成封面图</button>
+          </div>
+          <div id="coverResult" style="margin-top:12px;display:none">
+            <img id="coverImg" style="width:100%;border-radius:12px;display:block" alt="cover" />
+            <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn" id="useCoverBtn">✅ 用作封面（上传微信）</button>
+              <a class="btn ghost" id="dlCover" download="cover.png">⬇ 下载</a>
+            </div>
+            <div class="ok-box" id="coverUp" style="display:none"></div>
+          </div>
+        </div>
+
+        <div style="margin-top:14px;display:flex;gap:10px">
+          <button class="btn" id="coverSkip">跳过，去排版 →</button>
+        </div>
+      </div>
+
+      <!-- STEP 4 -->
       <div class="panel" id="panel2">
-        <h3>② 公众号排版</h3>
+        <h3>④ 公众号排版</h3>
         <div class="ph-sub">选择版式模板与主题色，右侧实时预览手机效果。</div>
         <label class="fld" style="margin-top:0">版式模板</label>
         <div class="tpls" id="tpls">
@@ -182,23 +253,23 @@
         </div>
       </div>
 
-      <!-- STEP 3 -->
+      <!-- STEP 4 -->
       <div class="panel" id="panel3">
-        <h3>③ 发布草稿箱</h3>
-        <div class="ph-sub">将排版稿写入公众号草稿箱（不群发）。服务端配置凭证后即为真实写入，否则为模拟。</div>
+        <h3>⑤ 发布草稿箱</h3>
+        <div class="ph-sub">将排版稿写入公众号草稿箱（不群发）。需后端配置公众号凭证（WECHAT_APPID / WECHAT_APPSECRET）后方可真实写入。</div>
         <label class="fld" style="margin-top:0">封面图（真实发布必填）</label>
         <input type="url" id="cover" placeholder="封面图预览 URL（可选，仅影响预览）" />
         <input type="file" id="coverFile" accept="image/*" style="margin-top:8px" />
         <div class="hint" id="ipHint">真实发布需把云端服务器出口 IP 加入公众号 IP 白名单，正在探测…</div>
         <div class="row2" style="margin-top:14px">
-          <div><label class="fld" style="margin-top:0">作者</label><input type="text" id="author" value="Etsy好物研究所" /></div>
+          <div><label class="fld" style="margin-top:0">作者</label><input type="text" id="author" value="" placeholder="后端未配置 WECHAT_AUTHOR 时留空" /></div>
           <div><label class="fld" style="margin-top:0">摘要</label><input type="text" id="digest" placeholder="一句话摘要（选填，≤120字）" /></div>
         </div>
         <div style="margin-top:16px;display:flex;gap:10px">
           <button class="btn primary" id="publish">📥 发布到草稿箱</button>
           <button class="btn ghost" id="copyHtml">复制排版 HTML</button>
         </div>
-        <div class="hint">真实接口：封面图 → <code>material/add_material</code> 取 thumb_media_id；正文 → <code>draft/add</code> 写入草稿箱。<b id="modeHint">当前：模拟模式</b></div>
+        <div class="hint">真实接口：封面图 → <code>material/add_material</code> 取 thumb_media_id；正文 → <code>draft/add</code> 写入草稿箱。<b id="modeHint">当前：检测中…</b></div>
       </div>
     </div>
 
@@ -210,7 +281,7 @@
         <div class="article" id="article">
           <img class="cover" id="prevCover" src="https://picsum.photos/seed/etsyops/760/420" alt="cover" />
           <h1 id="prevTitle">给文章起个标题…</h1>
-          <div class="byline"><span class="avatar">💚</span><span id="prevAuthor">Etsy好物研究所</span><span id="prevDate"></span></div>
+          <div class="byline"><span class="avatar">💚</span><span id="prevAuthor"></span><span id="prevDate"></span></div>
           <div id="prevBody"><p style="color:#bbb">正文预览会随左侧编辑实时更新。支持标题、加粗、引用、列表、分割线等公众号常见版式。</p></div>
         </div>
         <div class="wx-foot">EtsyOps · 公众号运营数字员工</div>
@@ -236,8 +307,17 @@
 <script src="config.js"></script>
 <script>
 /* ---------- 状态 ---------- */
-const state = { tpl:'default', color:'#07c160', size:16, cover:'' };
+const state = { tpl:'default', color:'#07c160', size:16, cover:'', thumbMediaId:'' };
 const API_BASE = window.getApiBase() || '';
+if(!API_BASE){
+  const b=document.getElementById('bindStatus'); if(b){ b.textContent='⚠ 未配置后端地址'; b.style.color='var(--warn)'; b.style.borderColor='rgba(255,107,129,.4)'; }
+  const h=document.getElementById('modeHint'); if(h) h.textContent='当前：未知 · 请在网址后加 ?api=https://api.mailili-agency.com 再打开';
+}
+// 全局兜底：脚本一旦报错，把错误显示到绑定状态处，避免“一直卡在检测绑定状态”却看不到原因
+window.addEventListener('error', function(ev){
+  const b=document.getElementById('bindStatus');
+  if(b && /检测/.test(b.textContent)) b.textContent='⚠ 页面脚本错误：'+(ev.message||(ev.error&&ev.error.message)||'未知')+'（F12 Console 看详情）';
+});
 document.getElementById('goDash').href = window.withApi ? window.withApi('wechat-dashboard.html') : 'wechat-dashboard.html';
 const SAMPLE = `# 手作蜡烛，为什么成了 Z 世代的疗愈刚需？
 
@@ -258,7 +338,7 @@ const SAMPLE = `# 手作蜡烛，为什么成了 Z 世代的疗愈刚需？
 了解更多可访问 [Etsy 店铺](https://etsy.com)。`;
 
 /* ---------- 工具函数 ---------- */
-const $ = s => document.querySelector(s);
+const $ = s => document.querySelector(typeof s === 'string' && !/^[#.[]/.test(s) ? '#'+s : s);
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2200);}
 
 function ensureMammoth(cb){
@@ -340,18 +420,38 @@ function applyTplStyle(){
 /* ---------- 步骤切换 ---------- */
 function goStep(n){
   document.querySelectorAll('.step-chip').forEach(c=>c.classList.toggle('active', +c.dataset.step===n));
-  ['panel1','panel2','panel3'].forEach((p,idx)=>{ $(p).style.display = (idx+1)===n ? '' : 'none'; });
+  ['panel1','panelAI','panelCover','panel2','panel3'].forEach((p,idx)=>{ $('#'+p).style.display = (idx+1)===n ? '' : 'none'; });
   window.scrollTo({top:0,behavior:'smooth'});
-  if(n===2) applyTplStyle();
+  if(n===4) applyTplStyle();
 }
 document.querySelectorAll('.step-chip').forEach(c=>c.onclick=()=>goStep(+c.dataset.step));
 
 /* ---------- 事件绑定 ---------- */
 $('#drop').onclick=()=>$('#file').click();
-$('#file').onchange=e=>handleFile(e.target.files[0]);
+$('#file').onchange=e=>{ [...e.target.files].forEach(handleFile); e.target.value=''; };
 ['dragover','dragenter'].forEach(ev=>$('#drop').addEventListener(ev,e=>{e.preventDefault();$('#drop').style.borderColor='var(--accent)';}));
 ['dragleave','drop'].forEach(ev=>$('#drop').addEventListener(ev,e=>{e.preventDefault();$('#drop').style.borderColor='';}));
-$('#drop').addEventListener('drop',e=>{const f=e.dataTransfer.files[0]; if(f) handleFile(f);});
+$('#drop').addEventListener('drop',e=>{e.preventDefault();[...e.dataTransfer.files].forEach(handleFile);});
+
+/* PDF 文本抽取（pdf.js CDN，按需加载） */
+function ensurePdfJS(cb){
+  if(window.pdfjsLib) return cb();
+  const s=document.createElement('script');
+  s.src='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
+  s.onload=()=>{ window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js'; cb(); };
+  s.onerror=()=>cb(new Error('pdf 解析库加载失败（需联网）'));
+  document.head.appendChild(s);
+}
+async function pdfToText(buf){
+  const doc = await window.pdfjsLib.getDocument({data:buf}).promise;
+  let out='';
+  for(let i=1;i<=doc.numPages;i++){
+    const page = await doc.getPage(i);
+    const tc = await page.getTextContent();
+    out += tc.items.map(it=>it.str).join(' ') + '\n\n';
+  }
+  return out.trim();
+}
 
 function handleFile(f){
   if(!f) return;
@@ -361,21 +461,240 @@ function handleFile(f){
   if(name.endsWith('.docx')){
     ensureMammoth(err=>{
       if(err){ toast('docx 解析库加载失败，请联网后重试'); return; }
-      reader.onload=()=>window.mammoth.convertToHtml({arrayBuffer:reader.result}).then(r=>{ fillText(r.value); toast('docx 已解析'); }).catch(()=>toast('docx 解析失败'));
+      reader.onload=()=>window.mammoth.convertToHtml({arrayBuffer:reader.result}).then(r=>{ fillText(r.value, f.name); toast('docx 已解析'); }).catch(()=>toast('docx 解析失败'));
+      reader.readAsArrayBuffer(f);
+    });
+  } else if(name.endsWith('.pdf')){
+    ensurePdfJS(err=>{
+      if(err){ toast('pdf 解析库加载失败，请联网后重试'); return; }
+      reader.onload=async()=>{ try{ fillText(await pdfToText(reader.result), f.name); toast('pdf 已抽取文本'); }catch{ toast('pdf 解析失败'); } };
       reader.readAsArrayBuffer(f);
     });
   } else if(name.endsWith('.html')||name.endsWith('.htm')){
-    reader.onload=()=>{ const doc=new DOMParser().parseFromString(reader.result,'text/html'); fillText(doc.body.innerText); toast('HTML 已抽取正文'); };
+    reader.onload=()=>{ const doc=new DOMParser().parseFromString(reader.result,'text/html'); fillText(doc.body.innerText, f.name); toast('HTML 已抽取正文'); };
     reader.readAsText(f);
   } else {
-    reader.onload=()=>{ fillText(reader.result); toast('文稿已载入'); };
+    reader.onload=()=>{ fillText(reader.result, f.name); toast('文稿已载入'); };
     reader.readAsText(f);
   }
 }
-function fillText(t){ $('#src').value=t; if(!$('#title').value) $('#title').value='未命名文章'; renderPreview(); }
+function fillText(t, fname){
+  t = (t||'').trim(); if(!t){ toast('文件内容为空'); return; }
+  // 多文件依次载入：追加并加分隔线，不覆盖已有内容
+  const cur = $('#src').value.trim();
+  const head = fname ? '【素材文件：'+fname+'】\n\n' : '';
+  $('#src').value = cur ? (cur+'\n\n---\n\n'+head+t) : (head+t);
+  if(!$('#title').value) $('#title').value='未命名文章';
+  renderPreview();
+}
 
-['title','src','author','cover','digest'].forEach(id=> $(id).addEventListener('input', renderPreview));
-$('#toStep3').onclick=()=>goStep(3);
+['title','src','author','cover','digest'].forEach(id=> $('#'+id).addEventListener('input', renderPreview));
+$('#toStep3').onclick=()=>goStep(5);
+
+/* ---------- AI 生稿 ---------- */
+const DEFAULT_PROMPT = `# 角色
+你是一位擅长把零散素材整理成可读文章的公众号内容写手，尤其在跨境电商 / 出海运营领域有积累（选品、平台运营、广告投放、供应链、合规、数据复盘等）。你能适配不同来源的内容，输出符合公众号阅读习惯的成稿。
+
+# 输入
+原始素材可能是：视频口播稿、语音转写稿、大纲要点、会议/直播笔记，甚至只是几条零散想法。素材可能口语化、不完整、逻辑跳跃。
+
+# 任务
+基于素材生成一篇公众号文章。灵活处理，不要机械套模板：
+
+## 1. 内容处理
+- 抓住素材里的核心价值、观点、案例、数据，不臆造信息；缺失的逻辑链可适当补全，但要标注"（此处建议补充…）"避免乱编。
+- 口语、重复、口头禅、废话自行清理，保留作者原意和语气特色。
+- 素材提到"看这个图 / 刚才说的案例"等依赖外部画面的内容，改写成文字能独立理解的表达。
+- 领域术语保持准确（如 ACOS、ROAS、BSR、客单价、复购率、独立站、Meta/TikTok 广告等），不要为了"通俗"牺牲专业度。
+
+## 2. 文章组织（灵活，不强制小节数）
+- 先判断素材适合什么结构：干货方法论、案例拆解、观点随笔、复盘总结、清单体……选最贴合的一种。
+- 包含：吸引人的标题（1 主 + 2 备选）、有钩子的开头、清晰的正文（自然分段，可用小标题）、收尾（总结 + 轻量 CTA）。
+- 长度 800~1800 字；素材薄就写精炼，素材厚就展开。
+- 重要数据、步骤、金句用加粗或列表突出，方便读者扫读和收藏。
+
+## 3. 风格
+- 像"懂行的人在认真分享"，口语感但不过度，术语准、不端着。
+- 短句为主，手机阅读友好，多分段（但断句分行不要过多，不要一句一行）。
+
+## 4. 适配说明
+- 若素材是非跨境主题，自动切换到对应领域语境，保持同样质量标准。
+- 若素材信息很少，先在 EXTRA 区给出内容大纲，正文按大纲写精炼版，避免注水。
+
+## 5. 硬性要求
+- 不要冗杂，减少不必要的内容重复。
+- 语言要像人写的：避免"不是……而是……"句式，减少排比堆砌和空洞的总结腔。
+- 结尾需引流到我的付费课程《Etsy 0-1运营笔记》：正文最后放 1 段轻量 CTA（1~2 句，说清课程覆盖什么、适合谁；不夸大、不承诺流量/销量/收益）。
+- 规避与付费课程重复的内容。课程包含：Etsy 平台规则与合规参考、选品调研与类目判断、新店冷启与页面搭建、Listing 表达与关键词布局、站内广告与数据观察、AI 工具/表格模板/节日日历、常见问题 Q&A（共 4 大模块 29 份文档）。这些主题在文中只点思路、给结论，具体 SOP / 清单 / 模板不展开，用"完整整理在《Etsy 0-1运营笔记》专栏"引导。
+- 生成后自行做风险与侵权审核：剔除绝对化承诺（如保证出单/爆单）、平台敏感表述、可能侵权的品牌词与图片描述，结论写进 RISK 区。
+
+# 输出格式（严格遵守分区标记，正文用 Markdown）
+===TITLE_MAIN===
+主标题（一行）
+===TITLE_ALTS===
+备选标题 1
+备选标题 2
+===BODY===
+正文 Markdown（不含配图建议和转发文案）
+===RISK===
+风险/侵权自查结论（1~3 条）
+===EXTRA===
+【配图建议】…
+【转发文案】…`;
+
+const aiState = { ok:false, model:'' };
+const STYLE_KEY = 'wx_ai_styles_v1';
+
+function loadStyles(){
+  try{ return JSON.parse(localStorage.getItem(STYLE_KEY)||'{}'); }catch{ return {}; }
+}
+function refreshStyleSel(sel){
+  const styles = loadStyles();
+  $('#styleSel').innerHTML = '<option value="">默认要求（内置）</option>' +
+    Object.keys(styles).map(n=>'<option value="'+n+'">'+n+'</option>').join('');
+  if(sel!==undefined) $('#styleSel').value = sel;
+}
+$('#styleSel').onchange = ()=>{
+  const s = loadStyles()[$('#styleSel').value];
+  $('#aiPrompt').value = s || DEFAULT_PROMPT;
+};
+$('#saveStyle').onclick = ()=>{
+  const name = (window.prompt('风格名称（如：风格1 · 干货教程）')||'').trim();
+  if(!name) return;
+  const styles = loadStyles();
+  styles[name] = $('#aiPrompt').value;
+  localStorage.setItem(STYLE_KEY, JSON.stringify(styles));
+  refreshStyleSel(name);
+  toast('已保存风格「'+name+'」');
+};
+$('#delStyle').onclick = ()=>{
+  const name = $('#styleSel').value;
+  if(!name){ toast('当前是内置默认要求，无需删除'); return; }
+  if(!window.confirm('删除风格「'+name+'」？')) return;
+  const styles = loadStyles(); delete styles[name];
+  localStorage.setItem(STYLE_KEY, JSON.stringify(styles));
+  refreshStyleSel('');
+  $('#aiPrompt').value = DEFAULT_PROMPT;
+  toast('已删除');
+};
+
+// 按分区标记拆解 AI 输出；模型没守格式时整篇当正文
+function parseAiOutput(text){
+  const buf = { TITLE_MAIN:[], TITLE_ALTS:[], BODY:[], RISK:[], EXTRA:[] };
+  let cur = 'BODY', hasMarker = false;
+  for(const ln of text.replace(/\r\n/g,'\n').split('\n')){
+    const m = ln.match(/^\s*=+\s*(TITLE_MAIN|TITLE_ALTS|BODY|RISK|EXTRA)\s*=+\s*$/);
+    if(m){ cur = m[1]; hasMarker = true; continue; }
+    buf[cur].push(ln);
+  }
+  const clean = a => a.join('\n').trim();
+  return {
+    title: clean(buf.TITLE_MAIN),
+    alts: clean(buf.TITLE_ALTS),
+    body: hasMarker ? clean(buf.BODY) : text.trim(),
+    risk: clean(buf.RISK),
+    extra: clean(buf.EXTRA),
+  };
+}
+
+$('#genBtn').onclick = async ()=>{
+  const manuscript = $('#src').value.trim();
+  if(!manuscript){ toast('请先在第 1 步上传或粘贴素材文稿'); return; }
+  if(!aiState.ok){ toast('后端未配置 AI（.env 填 AI_API_KEY 等后重启），暂不可生稿'); return; }
+  const btn = $('#genBtn');
+  btn.disabled = true; btn.textContent = '⏳ 生稿中（长文约需 1~3 分钟）…';
+  $('#aiResult').style.display = 'none';
+  try{
+    const r = await fetch(API_BASE+'/api/ai/generate', {
+      method:'POST', headers:window.apiAuthHeaders(),
+      body: JSON.stringify({ manuscript, prompt: $('#aiPrompt').value }),
+    });
+    const d = await r.json();
+    if(!r.ok || !d.content) throw new Error(d.note || 'AI 生稿失败');
+    const out = parseAiOutput(d.content);
+    if(out.title) $('#title').value = out.title;
+    $('#src').value = out.body;
+    renderPreview();
+    let html = '✅ <b>生稿完成</b>，标题与正文已填入，可回到第 3 步排版微调。';
+    if(out.alts) html += '<br><b>备选标题</b>：<br>'+out.alts.replace(/\n/g,'<br>');
+    if(out.risk) html += '<br><b>风险/侵权自查</b>：'+out.risk.replace(/\n/g,'<br>');
+    if(out.extra) html += '<br><b>附加（未进正文）</b>：<br>'+out.extra.replace(/\n/g,'<br>');
+    const box = $('#aiResult'); box.style.display='block'; box.innerHTML = html;
+    toast('AI 生稿完成');
+  }catch(e){
+    const box = $('#aiResult'); box.style.display='block';
+    box.style.background='rgba(255,107,129,.12)'; box.style.borderColor='rgba(255,107,129,.4)';
+    box.innerHTML = '❌ <b>生稿失败</b>：'+e.message;
+    toast('AI 生稿失败');
+  }finally{
+    btn.disabled = false; btn.textContent = '✨ 开始 AI 生稿';
+  }
+};
+$('#skipGen').onclick = ()=>goStep(4);
+
+/* ---------- STEP 3 · AI 生成标题 + 封面图 ---------- */
+$('#genTitleBtn').onclick = async ()=>{
+  const draft = ($('#src').value || '').trim();
+  if(!draft){ toast('请先在第 1 步放素材，或在第 2 步生成成稿'); return; }
+  if(!aiState.ok){ toast('后端未配置 AI，暂不能生成标题'); return; }
+  const btn = $('#genTitleBtn'); btn.disabled = true; btn.textContent = '⏳ 生成标题中…';
+  try{
+    const r = await fetch(API_BASE+'/api/ai/title', { method:'POST', headers:window.apiAuthHeaders(), body: JSON.stringify({ draft, requirement: ($('#titleReq').value||'').trim() }) });
+    const d = await r.json();
+    if(!r.ok || !d.titles || !d.titles.length) throw new Error(d.note || '生成标题失败');
+    const list = $('#titleList'); list.innerHTML = '';
+    d.titles.forEach(t=>{
+      const el = document.createElement('div');
+      el.className = 'tpl'; el.style.width = '100%'; el.textContent = t;
+      el.onclick = ()=>{ $('#title').value = t; renderPreview(); document.querySelectorAll('#titleList .tpl').forEach(x=>x.classList.remove('active')); el.classList.add('active'); toast('已选用：'+t); };
+      list.appendChild(el);
+    });
+    toast('已生成 '+d.titles.length+' 个候选标题，点选填入');
+  }catch(e){ toast('生成标题失败：'+e.message); }
+  finally{ btn.disabled = false; btn.textContent = '✨ 生成候选标题'; }
+};
+
+let __lastCoverUrl = '', __lastCoverB64 = '';
+$('#genCoverBtn').onclick = async ()=>{
+  const prompt = ($('#coverPrompt').value || '').trim();
+  if(!prompt){ toast('请描述封面主题/风格'); return; }
+  if(!aiState.ok){ toast('后端未配置 AI，暂不能生图'); return; }
+  const btn = $('#genCoverBtn'); btn.disabled = true; btn.textContent = '🎨 生成中（数秒）…';
+  try{
+    const r = await fetch(API_BASE+'/api/ai/image', { method:'POST', headers:window.apiAuthHeaders(), body: JSON.stringify({ prompt, size: $('#coverSize').value }) });
+    const d = await r.json();
+    if(!r.ok || (!d.url && !d.b64)) throw new Error(d.note || '生图失败');
+    __lastCoverUrl = d.url || ''; __lastCoverB64 = d.b64 || '';
+    const src = d.url || ('data:image/png;base64,'+d.b64);
+    $('#coverImg').src = src; $('#dlCover').href = src;
+    $('#coverResult').style.display = 'block';
+    state.cover = d.url || ''; renderPreview();
+    toast('封面图已生成');
+  }catch(e){ toast('生图失败：'+e.message); }
+  finally{ btn.disabled = false; btn.textContent = '🎨 生成封面图'; }
+};
+
+$('#useCoverBtn').onclick = async ()=>{
+  if(!__lastCoverUrl && !__lastCoverB64){ toast('请先生成封面图'); return; }
+  if(!backend.configured){ toast('后端未绑定公众号，无法上传；可先下载图片，发布步手动上传'); return; }
+  const btn = $('#useCoverBtn'); btn.disabled = true; btn.textContent = '⬆ 上传中…';
+  try{
+    const useB64 = !!__lastCoverB64;
+    const r = await fetch(API_BASE + (useB64 ? '/api/wechat/upload' : '/api/wechat/upload-url'), {
+      method:'POST', headers:window.apiAuthHeaders(),
+      body: JSON.stringify(useB64 ? { filename:'cover.png', data:__lastCoverB64 } : { url: __lastCoverUrl })
+    });
+    const d = await r.json();
+    if(!r.ok || !d.media_id) throw new Error((d.note||'封面上传失败')+(d.wx?(' · '+JSON.stringify(d.wx)):''));
+    state.thumbMediaId = d.media_id;
+    const box = $('#coverUp'); box.style.display = 'block';
+    box.innerHTML = '✅ 已上传为封面素材，media_id：<code style="color:#04121a">'+d.media_id+'</code><br>发布步将自动使用此封面。';
+    toast('封面已上传，可去发布');
+  }catch(e){ toast('上传失败：'+e.message); }
+  finally{ btn.disabled = false; btn.textContent = '✅ 用作封面（上传微信）'; }
+};
+
+$('#coverSkip').onclick = ()=>goStep(4);
 
 /* 模板 / 颜色 / 字号 */
 document.querySelectorAll('#tpls .tpl').forEach(t=>t.onclick=()=>{
@@ -410,7 +729,7 @@ function fileToBase64(f){
   return new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(String(fr.result).split(',')[1]);fr.onerror=rej;fr.readAsDataURL(f);});
 }
 async function publishReal(){
-  let thumb='';
+  let thumb = state.thumbMediaId || '';
   const f = $('#coverFile').files[0];
   if(f){
     const b64 = await fileToBase64(f);
@@ -419,7 +738,7 @@ async function publishReal(){
     if(!up.ok || !ur.media_id) throw new Error((ur.note||'封面上传失败')+(ur.wx?(' · '+JSON.stringify(ur.wx)):''));
     thumb = ur.media_id;
   }
-  if(!thumb) throw new Error('真实发布需要上传封面图（微信要求 thumb_media_id）');
+  if(!thumb) throw new Error('真实发布需要封面图：可在发布步上传封面文件，或在第 3 步用 AI 生成并「用作封面」上传');
   const payload = buildPayload(thumb);
   const r = await fetch(API_BASE+'/api/wechat/draft',{method:'POST',headers:window.apiAuthHeaders(),body:JSON.stringify(payload)});
   const dr = await r.json();
@@ -448,7 +767,7 @@ $('#publish').onclick=async()=>{
   }]
 }`;
   $('#reqPreview').textContent = req;
-  $('#modalTitle').textContent = backend.configured ? '📤 发布到草稿箱（真实）' : '📤 发布到草稿箱（模拟）';
+  $('#modalTitle').textContent = backend.configured ? '📤 发布到草稿箱（真实）' : '📤 发布到草稿箱（未配置凭证）';
   $('#mask').classList.add('show');
   $('#respBox').style.display='none';
   try{
@@ -457,8 +776,8 @@ $('#publish').onclick=async()=>{
     else { await new Promise(r=>setTimeout(r,600)); draftId = 'DR' + Date.now().toString(36).toUpperCase(); }
     showResp(real
       ? '✅ <b>已写入真实草稿箱</b><br>草稿 media_id：<code style="color:#04121a">'+draftId+'</code><br>标题：'+payload.title+'<br><a href="https://mp.weixin.qq.com" target="_blank" rel="noopener">前往公众号后台「草稿箱」查看并群发 →</a>'
-      : '✅ <b>已写入草稿箱（模拟）</b><br>草稿 media_id：<code style="color:#04121a">'+draftId+'</code><br>标题：'+payload.title+'<br><span style="opacity:.8">服务端配置 WECHAT_APPID/SECRET 后即为真实写入。</span>', true);
-    toast(real?'已真实发布到草稿箱':'已发布到草稿箱（模拟）');
+      : '⚠ <b>未配置凭证，未写入</b><br>请在后端 .env 配置 WECHAT_APPID / WECHAT_APPSECRET 后重试真实写入。', true);
+    toast(real?'已真实发布到草稿箱':'未配置凭证，发布被阻止');
   }catch(e){
     showResp('❌ <b>发布失败</b><br>'+e.message+'<br><span style="opacity:.8">常见原因：IP 未加白名单(40164)、账号未认证(48001)、封面素材无效(40007)。</span>', false);
     toast('发布失败，查看详情');
@@ -478,28 +797,105 @@ renderPreview();
 goStep(1);
 
 /* 后端绑定状态 + 出口 IP 探测 */
-async function checkBackend(){
+/* 兼容所有 Safari 的超时 fetch（AbortSignal.timeout 老版本 Safari 不支持） */
+function fetchT(url, ms){
+  const c = new AbortController();
+  const t = setTimeout(()=>c.abort(), ms);
+  return fetch(url, { signal: c.signal }).finally(()=>clearTimeout(t));
+}
+async function checkBackend(retry){
+  retry = retry || 0;
+  const MAX = 3;
   try{
-    const s = await fetch(API_BASE+'/api/wechat/status'); const d = await s.json();
+    const s = await fetchT(API_BASE+'/api/wechat/status', 6000); const d = await s.json();
     backend.configured = d.configured;
-    const el = $('#bindStatus');
+    if(d.apiKeyRequired && !window.ETSYOPS_API_KEY) showApiKeyWarn(); else hideApiKeyWarn();
+    const el = $('#bindStatus'); hideRetry();
     if(d.configured){
       el.textContent='✅ 已绑定真实公众号 '+d.appid;
       el.style.borderColor='rgba(52,211,153,.5)'; el.style.color='var(--good)'; el.style.background='rgba(52,211,153,.12)';
       $('#modeHint').textContent='当前：真实模式';
     } else {
-      el.textContent='⚠ 未绑定 · 模拟模式';
+      el.textContent='⚠ 未绑定 · 请配置公众号凭证';
     }
-  }catch{ $('#bindStatus').textContent='⚠ 无法连接后端（模拟模式）'; }
-  try{
-    const ip = await fetch(API_BASE+'/api/wechat/ip'); const d = await ip.json();
-    backend.ip = d.ip;
-    $('#ipHint').innerHTML = (d.ip && d.ip!=='unknown')
-      ? '真实发布需把云端出口 IP 加入公众号 IP 白名单：<code style="color:#7fd1ff">'+d.ip+'</code>（公众号后台 → 基本配置 → IP白名单）'
-      : '真实发布需把云端服务器出口 IP 加入公众号 IP 白名单（公众号后台 → 基本配置 → IP白名单）。';
-  }catch{}
+    // 后端 .env 配了 WECHAT_AUTHOR 时自动填入作者名（覆盖占位默认值）
+    if(d.author){
+      const a=document.getElementById('author');
+      if(a && (!a.value || a.value==='Etsy好物研究所')){ a.value=d.author; if(typeof renderPreview==='function') renderPreview(); }
+    }
+    try{
+      const ip = await fetchT(API_BASE+'/api/wechat/ip', 6000); const id = await ip.json();
+      backend.ip = id.ip;
+      $('#ipHint').innerHTML = (id.ip && id.ip!=='unknown')
+        ? '真实发布需把云端出口 IP 加入公众号 IP 白名单：<code style="color:#7fd1ff">'+id.ip+'</code>（公众号后台 → 基本配置 → IP白名单）'
+        : '真实发布需把云端服务器出口 IP 加入公众号 IP 白名单（公众号后台 → 基本配置 → IP白名单）。';
+    }catch{}
+    return;
+  }catch(e){
+    if(retry < MAX){
+      $('#bindStatus').textContent='↻ 重连后端中…('+(retry+1)+'/'+MAX+')';
+      await new Promise(r=>setTimeout(r, 1500));
+      return checkBackend(retry+1);
+    }
+    showRetry('⚠ 无法连接后端（隧道可能闪断）');
+  }
 }
+function showRetry(msg){
+  const el = $('#bindStatus'); el.textContent = msg; el.style.color='var(--warn)';
+  const btn = document.getElementById('retryBtn'); if(btn) btn.style.display='inline-flex';
+}
+function hideRetry(){ const btn = document.getElementById('retryBtn'); if(btn) btn.style.display='none'; }
+// 轻量保活：每 45s 探一次后端，隧道恢复时 banner 自动变绿，无需手动刷新
+async function pingBackend(){
+  try{
+    const s = await fetchT(API_BASE+'/api/wechat/status', 5000); const d = await s.json();
+    backend.configured = d.configured;
+    const el = $('#bindStatus'); hideRetry();
+    if(d.configured){
+      el.textContent='✅ 已绑定真实公众号 '+d.appid;
+      el.style.borderColor='rgba(52,211,153,.5)'; el.style.color='var(--good)'; el.style.background='rgba(52,211,153,.12)';
+      $('#modeHint').textContent='当前：真实模式';
+    } else {
+      el.textContent='⚠ 未绑定 · 请配置公众号凭证';
+    }
+  }catch(e){ showRetry('⚠ 无法连接后端（隧道可能闪断）'); }
+}
+setInterval(pingBackend, 45000);
+// 后端开启 API Key 防护但本页未携带 key 时的醒目预警（避免静默全拦、误以为是智谱 key 问题）
+function showApiKeyWarn(){
+  let el = document.getElementById('apiKeyWarn');
+  if(!el){
+    el = document.createElement('div'); el.id = 'apiKeyWarn';
+    el.style.cssText = 'position:sticky;top:0;z-index:50;background:#7f1d1d;color:#fee2e2;padding:10px 14px;font-size:13px;line-height:1.6;text-align:center';
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  el.innerHTML = '⚠ 后端已开启 <b>API Key 接口防护</b>（.env 的 API_KEY 已设置），但当前页面未携带 key，<b>生稿 / 生图 / 发布会被拒绝</b>。请在网址末尾加 <code style="color:#fff">?apikey=&lt;你的KEY&gt;</code> 重新打开，或在 Cloudflare Pages 设置构建变量 <code style="color:#fff">WECHAT_API_KEY</code>（值与 API_KEY 一致）后重新部署。';
+}
+function hideApiKeyWarn(){ const el = document.getElementById('apiKeyWarn'); if(el) el.remove(); }
 checkBackend();
+
+/* AI 生稿状态检测 + 初始化生稿要求 */
+async function checkAI(){
+  try{
+    const a = await fetch(API_BASE+'/api/ai/status'); const d = await a.json();
+    aiState.ok = d.configured; aiState.model = d.model || '';
+    if(d.apiKeyRequired && !window.ETSYOPS_API_KEY) showApiKeyWarn(); else hideApiKeyWarn();
+    const el = $('#aiStatus');
+    if(d.configured){
+      el.textContent = '✅ AI 已就绪 · 生稿（'+d.model+'）/ 生图（'+(d.imageModel||'')+'）· 第 3 步可用';
+      el.style.color = 'var(--good)';
+    } else {
+      el.textContent = '⚠ '+d.note+' 可跳过本步直接排版。';
+      el.style.color = 'var(--warn)';
+    }
+  }catch{
+    $('#aiStatus').textContent = '⚠ 无法连接后端，AI 生稿不可用（可跳过本步直接排版）。';
+    $('#aiStatus').style.color = 'var(--warn)';
+  }
+}
+refreshStyleSel('');
+$('#aiPrompt').value = DEFAULT_PROMPT;
+checkAI();
 </script>
 </body>
 </html>
