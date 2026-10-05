@@ -120,7 +120,7 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build acab1bc</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build 7a90c18</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
@@ -626,14 +626,24 @@ function parseAiOutput(text){
 
 $('#genBtn').onclick = async ()=>{
   const manuscript = $('#src').value.trim();
-  if(!manuscript){ toast('请先在第 1 步上传或粘贴素材文稿'); return; }
-  if(!aiState.ok){ toast('后端未配置 AI（.env 填 AI_API_KEY 等后重启），暂不可生稿'); return; }
+  if(!manuscript){ toast('请先在第 1 步上传或粘贴素材文稿'); $('#src').focus(); return; }
+  if(!aiState.ok){
+    toast('AI 尚未就绪。若右上角显示「后端xxx」正常，多半是本页加载时隧道恰好闪断——点右上「↻ 重试连接」再试一次');
+    $('#aiStatus').scrollIntoView({behavior:'smooth', block:'center'});
+    checkAI();
+    return;
+  }
   if(manuscript.length > 50000){ toast('素材过长（'+manuscript.length+' 字），请缩减到 5 万字以内再生成'); return; }
   const btn = $('#genBtn');
-  btn.disabled = true; btn.textContent = '⏳ 生稿中（长文约需 1~3 分钟）…';
+  const t0 = Date.now();
+  btn.disabled = true; btn.textContent = '⏳ 生稿中（长文约需 1~3 分钟，请勿关闭页面）…';
   $('#aiResult').style.display = 'none';
+  // 每15秒刷新一次进度提示，让用户知道页面没死（实测生稿约 20~30 秒）
+  let tick = setInterval(()=>{ const s=Math.round((Date.now()-t0)/1000);
+    btn.textContent = '⏳ 生稿中…已等待 '+s+' 秒（长文约需 1~3 分钟，请勿关闭页面）'; }, 15000);
   try{
-    const r = await fetch(API_BASE+'/api/ai/generate', {
+    // 必须带超时：裸 fetch 遇隧道半通不通会永久挂起，页面就成了「未响应」
+    const r = await fetchT(API_BASE+'/api/ai/generate', 300000, {
       method:'POST', headers:window.apiAuthHeaders(),
       body: JSON.stringify({ manuscript, prompt: $('#aiPrompt').value }),
     });
@@ -656,6 +666,7 @@ $('#genBtn').onclick = async ()=>{
     box.innerHTML = '❌ <b>生稿失败</b>：'+msg;
     toast('AI 生稿失败');
   }finally{
+    clearInterval(tick);
     btn.disabled = false; btn.textContent = '✨ 开始 AI 生稿';
   }
 };
@@ -827,10 +838,11 @@ goStep(1);
 
 /* 后端绑定状态 + 出口 IP 探测 */
 /* 兼容所有 Safari 的超时 fetch（AbortSignal.timeout 老版本 Safari 不支持） */
-function fetchT(url, ms){
+function fetchT(url, ms, opts){
   const c = new AbortController();
   const t = setTimeout(()=>c.abort(), ms);
-  return fetch(url, { signal: c.signal }).finally(()=>clearTimeout(t));
+  // opts：可选的 fetch 配置（如 POST 的 method/headers/body），用于给长耗时请求也加超时
+  return fetch(url, Object.assign({}, opts || {}, { signal: c.signal })).finally(()=>clearTimeout(t));
 }
 
 /* 生稿类请求失败时的诚实诊断：不再猜测，直接展示后端返回的真实错误 */
@@ -921,22 +933,30 @@ checkBackend();
 
 /* AI 生稿状态检测 + 初始化生稿要求 */
 async function checkAI(){
-  try{
-    const a = await fetch(API_BASE+'/api/ai/status'); const d = await a.json();
-    aiState.ok = d.configured; aiState.model = d.model || '';
-    if(d.apiKeyRequired && !window.ETSYOPS_API_KEY) showApiKeyWarn(); else hideApiKeyWarn();
-    const el = $('#aiStatus');
-    if(d.configured){
-      el.textContent = '✅ AI 已就绪 · 生稿（'+d.model+'）/ 生图（'+(d.imageModel||'')+'）· 第 3 步可用';
-      el.style.color = 'var(--good)';
-    } else {
-      el.textContent = '⚠ '+d.note+' 可跳过本步直接排版。';
-      el.style.color = 'var(--warn)';
+  // 与 checkBackend 保持一致：用带超时的 fetchT 并加重试。
+  // 之前这里用裸 fetch，隧道半通不通时会永久挂起 → 页面卡「未响应」且 AI 入口一直不亮。
+  for(let i=0;i<3;i++){
+    try{
+      const a = await fetchT(API_BASE+'/api/ai/status', 8000);
+      const d = await a.json();
+      aiState.ok = d.configured; aiState.model = d.model || '';
+      if(d.apiKeyRequired && !window.ETSYOPS_API_KEY) showApiKeyWarn(); else hideApiKeyWarn();
+      const el = $('#aiStatus');
+      if(d.configured){
+        el.textContent = '✅ AI 已就绪 · 生稿（'+d.model+'）/ 生图（'+(d.imageModel||'')+'）· 第 3 步可用';
+        el.style.color = 'var(--good)';
+      } else {
+        el.textContent = '⚠ '+d.note+' 可跳过本步直接排版。';
+        el.style.color = 'var(--warn)';
+      }
+      return;
+    }catch{
+      if(i<2) await new Promise(r=>setTimeout(r,1500));
     }
-  }catch{
-    $('#aiStatus').textContent = '⚠ 无法连接后端，AI 生稿不可用（可跳过本步直接排版）。';
-    $('#aiStatus').style.color = 'var(--warn)';
   }
+  aiState.ok = false;
+  $('#aiStatus').textContent = '⚠ 连不上后端（已重试3次），AI 生稿不可用。可点右上「↻ 重试连接」或稍后再试；也可跳过本步直接排版。';
+  $('#aiStatus').style.color = 'var(--warn)';
 }
 refreshStyleSel('');
 $('#aiPrompt').value = DEFAULT_PROMPT;
