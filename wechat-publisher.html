@@ -647,8 +647,16 @@ $('#genBtn').onclick = async ()=>{
       method:'POST', headers:window.apiAuthHeaders(),
       body: JSON.stringify({ manuscript, prompt: $('#aiPrompt').value }),
     });
-    const d = await r.json().catch(()=>({}));
-    if(!r.ok || !d.content) throw new Error(((d && d.note) ? d.note : 'AI 生稿失败') + '（HTTP ' + r.status + '）');
+    // 不要把 JSON 解析失败吞成 {} → 会报成「AI 生稿失败（HTTP 200）」，完全误导。
+    // 明确区分三种情况：后端返回了错误 JSON / 拿到的是 HTML（地址打错）/ 空响应。
+    const ct = (r.headers.get('content-type') || '');
+    let d = {};
+    if(ct.indexOf('application/json') < 0){
+      const snippet = (await r.text().catch(()=>'')).slice(0, 120).replace(/\s+/g,' ');
+      throw new Error('后端返回的不是 JSON（content-type: ' + (ct||'空') + '），请求地址可能被当成本地路径了。\n实际请求：' + API_BASE + '/api/ai/generate\n收到内容开头：' + snippet);
+    }
+    d = await r.json().catch(()=>({}));
+    if(!r.ok || !d.content) throw new Error(((d && d.note) ? d.note : 'AI 生稿失败（后端已响应但无内容）') + '（HTTP ' + r.status + '）');
     const out = parseAiOutput(d.content);
     if(out.title) $('#title').value = out.title;
     $('#src').value = out.body;
