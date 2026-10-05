@@ -541,12 +541,16 @@ function json(res, code, obj) {
   try { body = JSON.stringify(obj); }
   catch (e) { body = JSON.stringify({ error: 'serialize_error', note: '响应体过大或无法序列化：' + (e && e.message) }); code = 502; }
   const buf = Buffer.from(body, 'utf8');
-  // 必须显式给Content-Length（含字节数，不是字符数）。
+  // 必须显式给 Content-Length（含字节数，不是字符数）。
   // 否则 Node 会用 chunked 分块传输，chunked 响应穿过 Cloudflare Tunnel 时
   // 末尾的结束分块容易丢失，浏览器就表现为「后端已出稿但页面一直转圈/未响应」。
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': buf.length,
+    // no-transform：要求中间层（Cloudflare 边缘）不要对本响应做 Brotli/gzip 动态压缩。
+    // 实测：边缘会给隧道 JSON 加 content-encoding: br（605 字节 vs 未压缩 1166 字节），
+    // Edge 在「已收到响应头、正在读取正文」这一步解压 brotli 时挂住 → 页面报未响应。
+    'Cache-Control': 'no-store, no-transform',
     'Connection': 'close',
   });
   res.end(buf);

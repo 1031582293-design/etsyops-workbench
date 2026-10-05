@@ -120,7 +120,7 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build 5f5ac28</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build 9b82386</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
@@ -651,16 +651,24 @@ $('#genBtn').onclick = async ()=>{
     // 分两步 await（先等响应头，再读文本），这样「等不到响应头」和「响应体传不完」
     // 两种不同的失败能被区分开，而不是一起卡死看不出原因。
     btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（正在等待后端响应）';
+    const bodyJson = JSON.stringify({ manuscript, prompt: $('#aiPrompt').value });
+    // 'Accept-Encoding': 'identity' —— 不要压缩。
+    // Cloudflare 边缘会给隧道返回的 JSON 加 content-encoding: br，
+    // Edge 在「已收到响应头、正文读取中」这一步解压 brotli 时会挂住 → 页面报未响应。
+    // 加上 identity 让边缘跳过动态压缩；服务端也已加 no-transform 双保险。
     const r = await fetchT(API_BASE+'/api/ai/generate', 300000, {
-      method:'POST', headers:window.apiAuthHeaders(),
-      body: JSON.stringify({ manuscript, prompt: $('#aiPrompt').value }),
+      method:'POST',
+      headers: Object.assign(window.apiAuthHeaders(), { 'Accept-Encoding': 'identity' }),
+      body: bodyJson,
     });
     btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（已收到响应，正在读取正文）';
     const ct = (r.headers.get('content-type') || '');
+    const enc = (r.headers.get('content-encoding') || '');
     let txt = '';
     try{ txt = await r.text(); }
     catch(te){
-      throw new Error('响应体传输中断（HTTP ' + r.status + '，已收到响应头但正文没传完，通常是隧道/网络中途断开）：' + (te && te.message));
+      throw new Error('响应体传输中断（HTTP ' + r.status + '，content-encoding=' + (enc||'无') +
+        '，已收到响应头但正文没读完）。\n若是 content-encoding: br，几乎可以确定是边缘 Brotli 解压挂住。\n原始错误：' + (te && te.message));
     }
     // 不要把 JSON 解析失败吞成 {} → 会报成「AI 生稿失败（HTTP 200）」，完全误导。
     if(ct.indexOf('application/json') < 0){
