@@ -442,16 +442,21 @@ async function handleApi(req, res) {
   // AI 生成封面图（智谱 CogView，OpenAI 兼容 images/generations）
   if (p === '/api/ai/image' && req.method === 'POST') {
     if (!aiConfigured()) {
+      console.error('[ai/image] 拒绝：服务端未配置 AI');
       return json(res, 400, { error: 'ai_not_configured', note: '服务端未配置 AI_API_KEY（请在 .env 填写后重启后端）。' });
     }
+    const _t0 = Date.now();
     try {
       const b = await readJson(req);
       const prompt = (b.prompt || '').trim();
       const size = (b.size || '1440x720').trim();
       if (!prompt) return json(res, 400, { error: 'bad_request', note: '缺少 prompt（封面图描述）' });
       const r = await aiImage(prompt, size);
+      console.log('[ai/image] 生图成功 url=' + (r.url ? '有' : '无') + ' b64=' + (r.b64 ? r.b64.length + '字符' : '无') +
+        ' 耗时 ' + ((Date.now() - _t0) / 1000).toFixed(1) + 's');
       return json(res, 200, r);
     } catch (e) {
+      console.error('[ai/image] 生图失败：', e && e.message);
       return json(res, 502, { error: 'ai_error', note: e.message });
     }
   }
@@ -462,12 +467,17 @@ async function handleApi(req, res) {
 
   // 上传封面图（永久素材）
   if (p === '/api/wechat/upload' && req.method === 'POST') {
+    const _tu = Date.now();
     try {
       const b = await readJson(req);
+      console.log('[wechat/upload] 收到上传 base64长度=' + String(b.data || '').length + ' 文件名=' + (b.filename || '(默认)'));
       if (!b.data) return json(res, 400, { error: 'bad_request', note: '缺少 data(base64)' });
       const r = await uploadPermanentImage(b.filename || 'cover.png', b.data);
+      console.log('[wechat/upload] ★上传成功 media_id=' + (r && r.media_id) +
+        ' 耗时 ' + ((Date.now() - _tu) / 1000).toFixed(1) + 's');
       return json(res, 200, r);
     } catch (e) {
+      console.error('[wechat/upload] 上传失败：', e && e.message, e && e.wx ? JSON.stringify(e.wx) : '');
       return json(res, 502, { error: 'wechat_error', note: e.message, wx: e.wx || null });
     }
   }
@@ -492,9 +502,12 @@ async function handleApi(req, res) {
 
   // 创建草稿
   if (p === '/api/wechat/draft' && req.method === 'POST') {
+    const _td = Date.now();
     try {
       const b = await readJson(req);
       const a = b.articles?.[0] || b;
+      console.log('[wechat/draft] 收到写草稿请求 标题=' + JSON.stringify(String(a.title || '').slice(0, 40)) +
+        ' 正文=' + String(a.content || '').length + '字节 thumb=' + (a.thumb_media_id ? '有' : '无'));
       if (!a.title || !a.content) return json(res, 400, { error: 'bad_request', note: 'title / content 必填' });
       if (!a.thumb_media_id) return json(res, 400, { error: 'need_cover', note: '真实发布需上传封面图获取 thumb_media_id' });
       const result = await addDraft({
@@ -505,10 +518,13 @@ async function handleApi(req, res) {
         content_source_url: a.content_source_url || '',
         thumb_media_id: a.thumb_media_id,
         need_open_comment: a.need_open_comment ?? 1,
-        only_fans_can_comment: a.only_fans_can_comment ?? 0,
+        only_fans_can_comment: a.only_fans_can_comment ?? 1,
       });
+      console.log('[wechat/draft] ★草稿写入成功 media_id=' + (result && result.media_id) +
+        ' 耗时 ' + ((Date.now() - _td) / 1000).toFixed(1) + 's');
       return json(res, 200, result);
     } catch (e) {
+      console.error('[wechat/draft] 写入失败：', e && e.message, e && e.wx ? JSON.stringify(e.wx) : '');
       return json(res, 502, { error: 'wechat_error', note: e.message, wx: e.wx || null });
     }
   }

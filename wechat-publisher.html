@@ -709,9 +709,9 @@ $('#genTitleBtn').onclick = async ()=>{
   if(!aiState.ok){ toast('后端未配置 AI，暂不能生成标题'); return; }
   const btn = $('#genTitleBtn'); btn.disabled = true; btn.textContent = '⏳ 生成标题中…';
   try{
-    const r = await fetch(API_BASE+'/api/ai/title', { method:'POST', headers:window.apiAuthHeaders(), body: JSON.stringify({ draft, requirement: ($('#titleReq').value||'').trim() }) });
-    const d = await r.json();
-    if(!r.ok || !d.titles || !d.titles.length) throw new Error(d.note || '生成标题失败');
+    const d = await apiCall('/api/ai/title', { timeout: 90000, label: '生成标题',
+      body: { draft, requirement: ($('#titleReq').value||'').trim() } });
+    if(!d.titles || !d.titles.length) throw new Error('生成标题失败：后端未返回候选标题');
     const list = $('#titleList'); list.innerHTML = '';
     d.titles.forEach(t=>{
       const el = document.createElement('div');
@@ -731,9 +731,9 @@ $('#genCoverBtn').onclick = async ()=>{
   if(!aiState.ok){ toast('后端未配置 AI，暂不能生图'); return; }
   const btn = $('#genCoverBtn'); btn.disabled = true; btn.textContent = '🎨 生成中（数秒）…';
   try{
-    const r = await fetch(API_BASE+'/api/ai/image', { method:'POST', headers:window.apiAuthHeaders(), body: JSON.stringify({ prompt, size: $('#coverSize').value }) });
-    const d = await r.json();
-    if(!r.ok || (!d.url && !d.b64)) throw new Error(d.note || '生图失败');
+    const d = await apiCall('/api/ai/image', { timeout: 120000, label: '生成封面图',
+      body: { prompt, size: $('#coverSize').value } });
+    if(!d.url && !d.b64) throw new Error('生图失败：后端未返回图片数据');
     __lastCoverUrl = d.url || ''; __lastCoverB64 = d.b64 || '';
     const src = d.url || ('data:image/png;base64,'+d.b64);
     $('#coverImg').src = src; $('#dlCover').href = src;
@@ -750,12 +750,11 @@ $('#useCoverBtn').onclick = async ()=>{
   const btn = $('#useCoverBtn'); btn.disabled = true; btn.textContent = '⬆ 上传中…';
   try{
     const useB64 = !!__lastCoverB64;
-    const r = await fetch(API_BASE + (useB64 ? '/api/wechat/upload' : '/api/wechat/upload-url'), {
-      method:'POST', headers:window.apiAuthHeaders(),
-      body: JSON.stringify(useB64 ? { filename:'cover.png', data:__lastCoverB64 } : { url: __lastCoverUrl })
+    const d = await apiCall(useB64 ? '/api/wechat/upload' : '/api/wechat/upload-url', {
+      timeout: 90000, label: '封面上传',
+      body: useB64 ? { filename:'cover.png', data:__lastCoverB64 } : { url: __lastCoverUrl }
     });
-    const d = await r.json();
-    if(!r.ok || !d.media_id) throw new Error((d.note||'封面上传失败')+(d.wx?(' · '+JSON.stringify(d.wx)):''));
+    if(!d.media_id) throw new Error('封面上传失败：后端未返回 media_id');
     state.thumbMediaId = d.media_id;
     const box = $('#coverUp'); box.style.display = 'block';
     box.innerHTML = '✅ 已上传为封面素材，media_id：<code style="color:#04121a">'+d.media_id+'</code><br>发布步将自动使用此封面。';
@@ -803,16 +802,15 @@ async function publishReal(){
   const f = $('#coverFile').files[0];
   if(f){
     const b64 = await fileToBase64(f);
-    const up = await fetch(API_BASE+'/api/wechat/upload',{method:'POST',headers:window.apiAuthHeaders(),body:JSON.stringify({filename:f.name,data:b64})});
-    const ur = await up.json();
-    if(!up.ok || !ur.media_id) throw new Error((ur.note||'封面上传失败')+(ur.wx?(' · '+JSON.stringify(ur.wx)):''));
+    const ur = await apiCall('/api/wechat/upload', { timeout: 120000, label: '封面上传',
+      body: { filename: f.name, data: b64 } });
+    if(!ur.media_id) throw new Error('封面上传失败：后端未返回 media_id' + (ur.wx ? (' · ' + JSON.stringify(ur.wx)) : ''));
     thumb = ur.media_id;
   }
   if(!thumb) throw new Error('真实发布需要封面图：可在发布步上传封面文件，或在第 3 步用 AI 生成并「用作封面」上传');
   const payload = buildPayload(thumb);
-  const r = await fetch(API_BASE+'/api/wechat/draft',{method:'POST',headers:window.apiAuthHeaders(),body:JSON.stringify(payload)});
-  const dr = await r.json();
-  if(!r.ok || !dr.media_id) throw new Error((dr.note||'创建草稿失败')+(dr.wx?(' · '+JSON.stringify(dr.wx)):''));
+  const dr = await apiCall('/api/wechat/draft', { timeout: 90000, label: '写入草稿箱', body: payload });
+  if(!dr.media_id) throw new Error('创建草稿失败：后端未返回 media_id' + (dr.wx ? (' · ' + JSON.stringify(dr.wx)) : ''));
   return dr.media_id;
 }
 function showResp(html, ok){
@@ -873,6 +871,45 @@ function fetchT(url, ms, opts){
   const t = setTimeout(()=>c.abort(), ms);
   // opts：可选的 fetch 配置（如 POST 的 method/headers/body），用于给长耗时请求也加超时
   return fetch(url, Object.assign({}, opts || {}, { signal: c.signal })).finally(()=>clearTimeout(t));
+}
+
+/* ★ 全站统一的接口调用封装。所有后端请求都必须走它，禁止再写裸 fetch。
+   裸 fetch 的三个致命问题（都已实际踩过）：
+     1) 无超时 → 隧道/网络异常时永久挂起，页面表现为「未响应」，用户无法自救
+     2) 不加 Accept-Encoding: identity → Cloudflare 边缘会给JSON 加 Brotli，
+        Edge 解压时挂住（已出过一次完整故障）
+     3) 用 r.json() 直接解析 → 拿到非 JSON 时抛的是语法错误，看不出真实原因
+   本函数统一处理：超时、请求头、content-type 校验、文本读取、JSON 解析，
+   失败时抛出**可读的具体原因**（含实际 content-encoding 与内容开头）。*/
+async function apiCall(path, opts){
+  opts = opts || {};
+  const ms = opts.timeout || 60000;
+  const label = opts.label || path;
+  const headers = Object.assign(window.apiAuthHeaders(), { 'Accept-Encoding': 'identity' }, opts.headers || {});
+  const r = await fetchT(API_BASE + path, ms, {
+    method: opts.method || (opts.body ? 'POST' : 'GET'),
+    headers,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const ct = r.headers.get('content-type') || '';
+  const enc = r.headers.get('content-encoding') || '无';
+  let txt = '';
+  try{ txt = await r.text(); }
+  catch(te){
+    throw new Error(label + '：响应体传输中断（HTTP ' + r.status + '，content-encoding=' + enc +
+      '，已收到响应头但正文没读完）。' + (te && te.message));
+  }
+  if(ct.indexOf('application/json') < 0){
+    throw new Error(label + '：后端返回的不是 JSON（content-type=' + (ct||'空') + '，content-encoding=' + enc +
+      '）。\n实际请求：' + API_BASE + path +
+      '\n开头内容：' + txt.slice(0,120).replace(/\s+/g,' '));
+  }
+  let d;
+  try{ d = JSON.parse(txt || '{}'); }
+  catch(pe){ throw new Error(label + '：响应不是合法 JSON（HTTP ' + r.status + '，' + txt.length +
+      ' 字节，content-encoding=' + enc + '，疑似传输被截断）：开头 ' + txt.slice(0,120).replace(/\s+/g,' ')); }
+  if(!r.ok) throw new Error((d && (d.note || d.error)) || (label + ' 失败（HTTP ' + r.status + '）'));
+  return d;
 }
 
 /* 浏览器端错误上报：把用户看到的真实报错 POST 给后端，写进 backend.log。

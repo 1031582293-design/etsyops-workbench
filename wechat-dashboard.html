@@ -103,8 +103,26 @@
   async function api(path, ms){
     const c = new AbortController();
     const t = setTimeout(()=>c.abort(), ms||6000);
-    try{ const r = await fetch(API_BASE + path, { headers: (window.apiAuthHeaders ? window.apiAuthHeaders() : {}), signal: c.signal }); return r; }
+    // 带 Accept-Encoding: identity —— Cloudflare 边缘会给隧道 JSON 加 Brotli，
+    // 浏览器解压时可能挂住（已在发布页实际踩过一次），看板同样要避开。
+    try{
+      const r = await fetch(API_BASE + path, {
+        headers: Object.assign(window.apiAuthHeaders ? window.apiAuthHeaders() : {}, { 'Accept-Encoding': 'identity' }),
+        signal: c.signal
+      });
+      return r;
+    }
     finally{ clearTimeout(t); }
+  }
+  /* 安全取 JSON：先校验 content-type，失败时报出真实原因而不是 JSON 语法错误 */
+  async function apiJson(path, ms, label){
+    const r = await api(path, ms);
+    const ct = r.headers.get('content-type') || '';
+    if(ct.indexOf('application/json') < 0){
+      const head = (await r.text().catch(()=>'')).slice(0,100).replace(/\s+/g,' ');
+      throw new Error((label||path) + '：返回的不是 JSON（content-type=' + (ct||'空') + '）开头 ' + head);
+    }
+    return await r.json();
   }
   function showDashRetry(){ const b=document.getElementById('dashRetry'); if(b) b.style.display='inline-block'; }
 
@@ -112,7 +130,7 @@
     retry = retry || 0; const MAX = 3;
     // 绑定状态（带自动重连）
     try{
-      const s = await (await api('/api/wechat/status')).json();
+      const s = await apiJson('/api/wechat/status', 6000, '绑定状态');
       document.getElementById('dashRetry').style.display='none';
       if(s.configured){ STATUS_EL.textContent = '✅ 已绑定真实公众号 ' + (s.appid||''); STATUS_EL.className='badge'; }
       else { STATUS_EL.textContent = '⚠️ 未配置凭证'; STATUS_EL.className='badge off'; }
@@ -124,7 +142,7 @@
 
     // 总览
     let ov;
-    try{ ov = await (await api('/api/wechat/overview')).json(); }
+    try{ ov = await apiJson('/api/wechat/overview', 15000, '数据看板'); }
     catch(e){ document.getElementById('draftList').innerHTML='<div class="empty">无法连接后端，请确认 server.js 已运行 / WECHAT_API_BASE 已配置。</div>'; showDashRetry(); return; }
 
     // KPI
