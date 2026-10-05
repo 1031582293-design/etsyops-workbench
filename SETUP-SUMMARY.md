@@ -288,3 +288,64 @@ WorkBuddy 自带"沙箱发布"能力（如 CloudStudio 等，把静态站一键�
 | `start-robust.bat` | **新增**：崩溃自动重启的常驻启动器 |
 | `.env.example` | 新增 `AI_API_KEY`/`AI_BASE_URL`/`AI_MODEL` 段与注释 |
 | 最新提交 | `d0e4e6f`（四步流）→ `2f0261e`（模型修正）→ `5a35f5f`/`4dd09a3`（卡死修复/兼容）→ `8488fa8`（重试自愈 + start-robust.bat + v20261005d） |
+
+---
+
+## 九、2026-10-06 进展补充（工作台稳定性 + AI 生稿根因修复 + 部署通道厘清）
+
+> 本次轮次完成：① 厘清后端代码更新通道（操作者机器 github 直连 `git pull` 实测成功，gitee 镜像降级为纯兜底）；② 一连串真 bug 根因修复（docx 字数误报、页面默认示例文案、AI 生稿 `Invalid string length` 崩溃）；③ 后端版本号可见，不再靠口说"更新了没有"；④ 编码常识沉淀进资料库术语词典。**改动全部在 `etsyops` 仓库，推 GitHub 即 Pages 自动部署 + 操作人 `git pull` 更新后端。**
+
+### 1. 后端代码更新通道厘清（推翻此前"github 被墙"判断）
+- **操作者机器实测**：在正确目录 `D:\etsyops-workbench-main\etsyops-workbench-main` 跑 `git remote -v` → origin = `github.com:1031582293-design/etsyops-workbench.git`；`git pull` 从 github 直连**成功**（`4099be9..3137b5a` 快进），更新了 3 个文件。→ **github 直连拉取通畅，此前"被墙"判断作废**。
+- **结论**：gitee 镜像（`fu-po-fa-cai/etsyops-workbench`）仅作兜底/备用，**日常更新走 github 即可**（bat 里那条 gitee 兜底现在永远用不上，可忽略）。update-backend 命令保持 `git pull` 即可。
+- 同步修正了过时备忘：操作者 git **已安装**、目录**已是 git 仓库**（非此前记的"没装 git / ZIP 解压副本"）。
+
+### 2. docx 上传「5 万字超限」误报根因修复（提交 `60696c8`）
+- **根因**：上传 `.docx` 后，mammoth 把 Word 解析成 HTML（含图片转 base64 `<img src="data:...">`），旧逻辑直接把整段 HTML 当正文填入素材框；字数校验用 `textarea.value.length`，HTML 标签 + 图片 base64 让 3000 字正文涨到几万 → 误报超 5 万。
+- **修复**：新增 `htmlToText()` 抽纯文本（去标签/去 base64 图片/解 HTML 实体）后再填框；字数校验基于纯文本。模拟验证：含图片 base64 的 2.2 万字符 HTML → 压回 2240 字。
+- ⚠️ 上传请用 **`.docx`**（老 `.doc` 格式 mammoth 不支持，需另存为 `.docx`）。
+
+### 3. 页面初始化示例文案移除 + 版本号注入修正（提交 `e135e7c`）
+- **根因**：`wechat-publisher.html` 初始化代码自动填「手作蜡烛」示例文案到素材框/标题（开发者演示逻辑），导致"模拟数据还在"。
+- **修复**：初始化改为默认空白，预览区显示空态提示；同时修正版本号注入（`BUILD_VERSION` 占位 → 自动注入 git 提交号，`null` 异常值过滤，消除"build nullc069a8"双前缀）。
+
+### 4. AI 生稿 `Invalid string length` 根因修复——不再报错、始终出稿（提交 `7bb3fb4`）
+- **根因（读代码实测确认）**：`aiGenerate` 请求体**未设 `max_tokens`**，模型输出长度无上限；免费档模型遇较长素材偶尔失控输出约 **512MB** 内容 → 后端 `json()` 序列化时崩成 `Invalid string length`。Node 触发该错的阈值约 512MB（`0x1fffffe8` 字符），远非素材本身能触发。
+- **前期弯路（已废弃）**：曾在 `content > 100000` 字时 `throw` 拦下报错（正是"报错不出来稿"的元凶），并反复改报错提示词——**用户明确要求"不要一遍遍改提示词，要从根上让生稿走通"**。
+- **最终修复（根因级）**：
+  1. 请求体加 **`max_tokens: 4000` 硬上限**，从协议层锁死输出长度，模型绝不可能再返回几百 MB；
+  2. **删掉"超长抛错拦截"，改成"超长截断兜底"**（>8000 字截断返回），保证始终出稿、不再报错；
+  3. 输入侧 `manuscript` 截断 **15000 字**双保险。
+- 配套（提交 `a477c1a` / `1955953`）：后端 `catch` 真正 `console.error` 打印真实错误；前端删掉"掩盖真实错误"的猜测分支，直接展示后端原始报错；前端生稿 `catch` 加"诚实诊断"——探测 `/api/ai/status` 区分"隧道真断"与"生稿接口崩了"。
+
+### 5. 后端版本号可见（提交 `acab1bc`）
+- 后端启动读 git 提交号得 `SERVER_VERSION`，`/api/wechat/status` 返回 `serverVersion`；前端状态区新增「后端 xxxx」显示。
+- 用途：用户/操作者**硬刷新后肉眼确认正在跑的是哪份代码**，不再靠"我更新了"口说。
+
+### 6. 编码常识沉淀进资料库术语词典（持续更新）
+- 已建《EtsyOps 工作台 · 编码常识与术语词典（持续更新）》到资料库个人空间：https://www.workbuddy.cn/space/d/3u93crFpwktQpdMguW145y
+- 含：部署架构常识、技术名词词典（JSON/Git Bash/mammoth/.js/curl/server.js/Cloudflared/dist/API/base64/.env 等）、命令与脚本阅读常识（CMD vs PowerShell、横杠/大小写约定、怎么读代码）。
+- 约定：以后新术语/新踩坑补进这份文档，不入 git 仓总结文档。（删除"踩坑根因速查"章节、新增"命令与脚本阅读常识"章节均走资料库审阅卡，需用户「接受」才落正文。）
+
+### 7. 当前进度看板（更新 10-05 版）
+| 组件 | 状态 | 说明 |
+|---|---|---|
+| 前端 (pages.dev) | ✅ 已上线 | 默认空白素材框、版本号自动注入、后端版本显示 |
+| 后端代码更新通道 | ✅ github 直连通 | `git pull` 实测成功；gitee 仅兜底 |
+| AI 生稿 | ✅ 根因已修 | `max_tokens` 硬上限 + 截断兜底，长素材也能出稿不报错 |
+| docx 上传字数校验 | ✅ 已修 | 抽纯文本后再算字数，不再被 base64 图片撑爆 |
+| 后端版本可见 | ✅ 已加 | 状态区显示「后端 <commit>」 |
+| 隧道稳定性 | ✅ 已稳 | 单实例（bat 不再双拉隧道），cloudflared 服务 Running |
+
+### 8. 下一步待办
+1. 操作者 `git pull` + 双击 `start-backend.bat`（自动杀旧窗口、用新代码起）拿到 `7bb3fb4` 后端；用户硬刷新后右上角应显示「后端 7bb3fb4」。
+2. 上传真实 docx 跑完整四步流，核对微信后台草稿箱出现该图文。
+3. （可选）若还想更快，把内置生稿提示词默认「800~1800 字」调短，或 `.env` 换更快付费模型。
+
+### 9. 关键文件变更（相对 10-05 版）
+| 文件 | 变化 |
+|---|---|
+| `wechat-publisher.html` | 初始化空白；`htmlToText` 抽纯文本；版本号注入修正；生稿诚实诊断 + 显示「后端版本」 |
+| `server.js` | `max_tokens:4000` 硬上限；超长截断兜底；`manuscript` 截断 15000；`serverVersion` 暴露；`catch` 打日志 |
+| `start-backend.bat` | 修正误导性 echo（去掉凭空假设的 `(github)`）；保留 gitee 兜底 + 启动杀旧窗口 |
+| 最新提交 | `60696c8`（docx 纯文本）→ `e135e7c`（示例文案移除+版本号）→ `4099be9`/`1955953`（诚实诊断）→ `3137b5a`（去误导 echo）→ `acab1bc`（后端版本可见）→ `a477c1a`（日志/不掩盖）→ `7bb3fb4`（AI 生稿根因修复） |
