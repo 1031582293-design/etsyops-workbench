@@ -651,16 +651,16 @@ $('#genBtn').onclick = async ()=>{
     // 之前是把 25~55 秒的长响应挂在同一个连接上读，经Cloudflare Tunnel 时该连接
     // 会在正文传完前被掐断（已多次实测：后端日志显示「出稿成功」，curl 能完整收到，
     // 只有浏览器收不到 → 页面卡在「已收到响应，正在读取」直到未响应）。
-    // 现在提交只回一个 jobId（毫秒级），随后每 3 秒问一次进度，每次都是短连接，
-    // 天然规避长连接被掐断。
+    // 现在提交只回一个 jobId（毫秒级），随后每 2 秒问一次进度，每次都是短连接，
+    // 天然规避长连接被掐断（且服务端已去掉 Connection: close，浏览器可复用连接）。
     const sub = await apiCall('/api/ai/generate', { timeout: 30000, label: '提交生稿任务',
       body: { manuscript, prompt: $('#aiPrompt').value, async: true } });
     if(!sub.jobId) throw new Error('后端未返回任务号（jobId 缺失）');
 
     btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（任务已提交，AI 正在写作）';
     let res = null, fails = 0;
-    for(let i=0; i<100; i++){   // 最多等 100 次 × 3s ≈ 5 分钟
-      await new Promise(r=>setTimeout(r, 3000));
+    for(let i=0; i<150; i++){   // 最多等 150 次 × 2s ≈ 5 分钟
+      await new Promise(r=>setTimeout(r, 2000));
       let st = null;
       try{
         st = await apiCall('/api/ai/job?id=' + encodeURIComponent(sub.jobId), { timeout: 15000, label: '查询生稿进度' });

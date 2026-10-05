@@ -89,6 +89,10 @@ console.log('\n【1】AI 状态探测');
   ok(r.code === 200, 'GET /api/ai/status→ 200', `code=${r.code}`);
   ok(r.headers && r.headers['Content-Length'] !== undefined, '响应带 Content-Length', `cl=${r.headers && r.headers['Content-Length']}`);
   ok(r.headers && /no-transform/.test(r.headers['Cache-Control'] || ''), '响应带 no-transform（避边缘压缩）', r.headers && r.headers['Cache-Control']);
+  // 回归防护：Connection: close 会让浏览器每次新建连接，经隧道要~11 秒，
+  // 而连接复用只要 ~0.4 秒 → 轮询追不上，页面像卡死。禁止再出现该头。
+  const connHdr = (r.headers && (r.headers['Connection'] || '')).toLowerCase();
+  ok(!connHdr.includes('close'), '响应未设 Connection: close（保证连接可复用）', 'Connection=' + (connHdr || '无'));
   ok(r.json && r.json.configured === true, 'configured=true（AI 已配置）');
 }
 

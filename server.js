@@ -612,7 +612,11 @@ function json(res, code, obj) {
     // 实测：边缘会给隧道 JSON 加 content-encoding: br（605 字节 vs 未压缩 1166 字节），
     // Edge 在「已收到响应头、正在读取正文」这一步解压 brotli 时挂住 → 页面报未响应。
     'Cache-Control': 'no-store, no-transform',
-    'Connection': 'close',
+    // ⚠️ 不要再设 Connection: close。
+    // 设了 Content-Length 后响应长度已明确，本就不会走 chunked，close 是多余且有害的：
+    // 实测经 Cloudflare Tunnel，新建连接要 ~11 秒，而连接复用后只要 ~0.4 秒。
+    // Connection: close 会强制浏览器每次都重建连接 → 3 秒一次的轮询根本追不上，
+    // 表现为「每次轮询都等十几秒、页面像卡死」。必须让连接保持可复用。
   });
   res.end(buf);
 }
