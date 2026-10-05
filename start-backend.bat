@@ -29,8 +29,14 @@ echo   [提示] 自动更新失败，可能是离线或无权限，使用本地�
 echo [2/3] 启动 Node 后端（server.js :3000）...
 where node >nul 2>nul
 if errorlevel 1 goto noNode
-taskkill /fi "WINDOWTITLE eq EtsyOps-Backend" /f >nul 2>nul
-start "EtsyOps-Backend" /min node server.js
+REM /t 连子进程一起杀干净，否则旧的 node 会残留占着 3000 端口
+taskkill /fi "WINDOWTITLE eq EtsyOps-Backend" /f /t >nul 2>nul
+REM 输出重定向到 backend.log：进程崩溃的真实原因（uncaughtException 等）会落盘，
+REM 不用守着窗口截图。窗口标题仍是 EtsyOps-Backend，taskkill 与 /min 均照旧生效。
+echo.>> backend.log
+echo ==== 启动 %date% %time% ====>> backend.log
+start "EtsyOps-Backend" /min cmd /c "node server.js >> backend.log 2>&1"
+echo   [ok] 日志已写入 backend.log，崩溃原因看这个文件
 
 :step3
 echo [3/3] Cloudflare Tunnel 检查...

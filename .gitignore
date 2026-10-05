@@ -15,6 +15,9 @@ node_modules/
 # Cloudflare Tunnel token（含隧道凭据，切勿提交）
 tunnel-token.txt
 
+# 后端运行日志（start-backend.bat 写入，含崩溃堆栈，不入库）
+backend.log
+
 
 # 系统 / 编辑器
 .DS_Store
