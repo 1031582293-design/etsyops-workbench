@@ -120,7 +120,7 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build 0d87c74</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build 78d6d76</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
@@ -673,6 +673,7 @@ $('#genBtn').onclick = async ()=>{
     box.style.background='rgba(255,107,129,.12)'; box.style.borderColor='rgba(255,107,129,.4)';
     box.innerHTML = '❌ <b>生稿失败</b>：'+msg;
     toast('AI 生稿失败');
+    reportClientError('生稿失败', (e && e.message) || '未知错误', 'API_BASE=' + API_BASE + ' | 素材' + manuscript.length + '字 | 诊断=' + msg);
   }finally{
     clearInterval(tick);
     btn.disabled = false; btn.textContent = '✨ 开始 AI 生稿';
@@ -853,6 +854,26 @@ function fetchT(url, ms, opts){
   return fetch(url, Object.assign({}, opts || {}, { signal: c.signal })).finally(()=>clearTimeout(t));
 }
 
+/* 浏览器端错误上报：把用户看到的真实报错 POST 给后端，写进 backend.log。
+   排查者直接 GET /api/logs 就能看到，不必截图、不必猜。
+   用 sendBeacon 保证页面即使正在跳转/关闭也能送达；失败静默，绝不影响主流程。 */
+function reportClientError(where, msg, detail){
+  try{
+    const payload = JSON.stringify({ where, msg, detail: detail || '' });
+    if(navigator.sendBeacon){
+      navigator.sendBeacon(API_BASE+'/api/client-log', new Blob([payload], { type:'application/json' }));
+    } else {
+      fetch(API_BASE+'/api/client-log', { method:'POST', headers:{'Content-Type':'application/json'}, body:payload, keepalive:true }).catch(()=>{});
+    }
+  }catch(_){}
+}
+/* 捕获本页所有未处理错误与Promise 拒绝，一并上报 */
+window.addEventListener('error', ev=>reportClientError('window.error', ev.message, (ev.filename||'')+':'+(ev.lineno||'')));
+window.addEventListener('unhandledrejection', ev=>{
+  const r = ev && ev.reason;
+  reportClientError('unhandledrejection', (r && r.message) || String(r), (r && r.stack) || '');
+});
+
 /* 生稿类请求失败时的诚实诊断：不再猜测，直接展示后端返回的真实错误 */
 async function diagnoseAiFetchError(e){
   const raw = (e && e.message) ? e.message : '未知错误';
@@ -965,6 +986,7 @@ async function checkAI(){
   aiState.ok = false;
   $('#aiStatus').textContent = '⚠ 连不上后端（已重试3次），AI 生稿不可用。可点右上「↻ 重试连接」或稍后再试；也可跳过本步直接排版。';
   $('#aiStatus').style.color = 'var(--warn)';
+  reportClientError('checkAI失败3次', '无法连接后端 AI 状态接口', 'API_BASE=' + API_BASE);
 }
 refreshStyleSel('');
 $('#aiPrompt').value = DEFAULT_PROMPT;

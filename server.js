@@ -370,11 +370,33 @@ async function handleApi(req, res) {
     }
   }
 
+  // 浏览器端错误上报：前端出问题时自动把报错 POST 到这里，由后端写进 backend.log。
+  // 这样排查者直接看 /api/logs 就能拿到用户看到的真实报错，不必截图、不必猜。
+  // 不在免 key 白名单里：设了 API_KEY 时需带 key，避免公网被人灌垃圾日志。
+  if (p === '/api/client-log' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const where = String(b.where || '').slice(0, 120);
+      const msg = String(b.msg || '').slice(0, 500);
+      const detail = String(b.detail || '').slice(0, 800);
+      console.error('[前端报错] ' + where + ' :: ' + msg + (detail ? ' || ' + detail : ''));
+      return json(res, 200, { ok: true });
+    } catch (e) {
+      console.error('[client-log] 接收失败：', e && e.message);
+      return json(res, 200, { ok: true });
+    }
+  }
+
   // AI 生稿：按前端传来的生稿要求（prompt）把素材稿（manuscript）生成为公众号文案
   if (p === '/api/ai/generate' && req.method === 'POST') {
     if (!aiConfigured()) {
+      console.error('[ai/generate] 拒绝：服务端未配置 AI');
       return json(res, 400, { error: 'ai_not_configured', note: '服务端未配置 AI_API_KEY（请在 .env 填写后重启后端）。' });
     }
+    const _t0 = Date.now();
+    // 记录每次请求（含 Origin）：用于判断「浏览器到底有没有把请求发到后端」。
+    // 之前只打错误，导致「前端没发请求」和「后端出错」在日志上完全一样，看不出来。
+    console.log('[ai/generate] 收到请求 origin=' + (req.headers.origin || '(无)') + ' ua=' + String(req.headers['user-agent'] || '').slice(0, 60));
     try {
       const b = await readJson(req);
       const manuscript = (b.manuscript || '').trim().slice(0, 15000);
@@ -382,6 +404,7 @@ async function handleApi(req, res) {
       if (!manuscript) return json(res, 400, { error: 'bad_request', note: '缺少 manuscript（素材文稿）' });
       if (!prompt) return json(res, 400, { error: 'bad_request', note: '缺少 prompt（生稿要求）' });
       const content = await aiGenerate(prompt, '【原始素材】\n' + manuscript);
+      console.log('[ai/generate] 出稿成功 ' + content.length + ' 字，耗时 ' + ((Date.now() - _t0) / 1000).toFixed(1) + 's');
       return json(res, 200, { content });
     } catch (e) {
       console.error('[ai/generate] 生稿失败：', e && e.message);
