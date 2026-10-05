@@ -26,6 +26,10 @@ function loadDotEnv() {
 }
 loadDotEnv();
 
+// 崩溃兜底：单个请求的未捕获异常/未处理拒绝不应搞死整个进程（否则隧道转发不到本地 → 前端报“无法连接后端”）
+process.on('uncaughtException', (e) => console.error('[uncaughtException]', e && e.stack || e));
+process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e && e.stack || e));
+
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
