@@ -845,6 +845,22 @@ function showRetry(msg){
   const btn = document.getElementById('retryBtn'); if(btn) btn.style.display='inline-flex';
 }
 function hideRetry(){ const btn = document.getElementById('retryBtn'); if(btn) btn.style.display='none'; }
+// 轻量保活：每 45s 探一次后端，隧道恢复时 banner 自动变绿，无需手动刷新
+async function pingBackend(){
+  try{
+    const s = await fetchT(API_BASE+'/api/wechat/status', 5000); const d = await s.json();
+    backend.configured = d.configured;
+    const el = $('#bindStatus'); hideRetry();
+    if(d.configured){
+      el.textContent='✅ 已绑定真实公众号 '+d.appid;
+      el.style.borderColor='rgba(52,211,153,.5)'; el.style.color='var(--good)'; el.style.background='rgba(52,211,153,.12)';
+      $('#modeHint').textContent='当前：真实模式';
+    } else {
+      el.textContent='⚠ 未绑定 · 模拟模式';
+    }
+  }catch(e){ showRetry('⚠ 无法连接后端（隧道可能闪断）'); }
+}
+setInterval(pingBackend, 45000);
 // 后端开启 API Key 防护但本页未携带 key 时的醒目预警（避免静默全拦、误以为是智谱 key 问题）
 function showApiKeyWarn(){
   let el = document.getElementById('apiKeyWarn');
