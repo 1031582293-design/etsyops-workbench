@@ -9,7 +9,12 @@ cd /d %~dp0
 echo [1/3] 检查并更新代码（git pull 最新）...
 if not exist .git goto nonGit
 git pull 2>nul
-if errorlevel 1 goto pullFail
+if errorlevel 1 (
+  echo   [提示] origin(github) 拉取失败，尝试镜像 gitee…
+  git pull https://gitee.com/fu-po-fa-cai/etsyops-workbench.git main 2>nul
+  if errorlevel 1 goto pullFail
+  echo   [ok] 已从 gitee 镜像更新
+)
 echo   [ok] 代码已是最新
 goto step2
 
@@ -24,6 +29,7 @@ echo   [提示] 自动更新失败，可能是离线或无权限，使用本地�
 echo [2/3] 启动 Node 后端（server.js :3000）...
 where node >nul 2>nul
 if errorlevel 1 goto noNode
+taskkill /fi "WINDOWTITLE eq EtsyOps-Backend" /f >nul 2>nul
 start "EtsyOps-Backend" /min node server.js
 
 :step3
