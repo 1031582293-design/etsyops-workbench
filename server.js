@@ -228,6 +228,10 @@ async function aiGenerate(systemPrompt, userPrompt) {
     const _sum = (() => { try { return JSON.stringify(d).slice(0, 400); } catch { return '(响应体过大，无法序列化)'; } })();
     throw new Error('AI 接口返回异常：' + _sum);
   }
+  // 护栏：正常公众号文案不超过 2 万字；远超则判定为模型生成异常，避免 json() 序列化约 512MB 内容时崩成 Invalid string length
+  if (content.length > 100000) {
+    throw new Error('AI 返回内容异常过大（' + content.length + ' 字，远超公众号文案正常范围），疑似模型生成异常。建议：缩短素材到 1~2 万字以内，或分多次生成。');
+  }
   return content;
 }
 
@@ -247,7 +251,10 @@ async function aiImage(prompt, size = '1440x720') {
 
 async function readJson(req) {
   let raw = '';
-  for await (const chunk of req) raw += chunk;
+  for await (const chunk of req) {
+    raw += chunk;
+    if (raw.length > 50 * 1024 * 1024) throw new Error('请求体过大（超过 50MB），请缩短素材后重试');
+  }
   return JSON.parse(raw || '{}');
 }
 
@@ -347,6 +354,7 @@ async function handleApi(req, res) {
       const content = await aiGenerate(prompt, '【原始素材】\n' + manuscript);
       return json(res, 200, { content });
     } catch (e) {
+      console.error('[ai/generate] 生稿失败：', e && e.message);
       return json(res, 502, { error: 'ai_error', note: e.message });
     }
   }

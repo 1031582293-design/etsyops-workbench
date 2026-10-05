@@ -833,19 +833,17 @@ function fetchT(url, ms){
   return fetch(url, { signal: c.signal }).finally(()=>clearTimeout(t));
 }
 
-/* 生稿类请求失败时的诚实诊断：区分「隧道真断」与「后端在线但生稿接口崩了」 */
+/* 生稿类请求失败时的诚实诊断：不再猜测，直接展示后端返回的真实错误 */
 async function diagnoseAiFetchError(e){
   const raw = (e && e.message) ? e.message : '未知错误';
-  if(raw.indexOf('Invalid string length')>=0){
-    return '提交或后端返回内容过大（字符串超限，非素材本身字数问题）。请先清空素材框只留当前文稿重试；若仍报，请把操作者电脑后端窗口的红色报错发我——多半是 AI 模型/接口返回了异常大的内容。';
-  }
   if(raw === 'Failed to fetch' || raw.indexOf('Failed to fetch')>=0){
     let alive = false;
     try{ const s2 = await fetchT(API_BASE+'/api/ai/status', 5000); alive = !!(s2 && (s2.ok || (s2.status>=400 && s2.status<500))); }catch(_){}
     if(alive) return '后端在线（状态接口能通），但「生稿」接口调用时连接被中断——多半是后端正在调用的 AI 模型/接口报错，或后端跑了旧版 server.js 在调 AI 时崩了。请把操作者电脑后端窗口最后几行红色报错截图发我（注意：右上角「已绑定」只说明状态接口正常，不代表生稿接口正常）。';
     return '网络/隧道确实中断（连状态接口都连不上）。请确认 cloudflared 服务 Running、后端窗口在跑、且隧道未闪断。';
   }
-  return raw;
+  // 非隧道问题：直接把后端返回的原始错误展示出来（含真实原因与字数），不再用猜测文案掩盖
+  return raw + '\n（这是后端返回的原始错误；操作者电脑后端窗口也会打印同样的红色报错，可一并发我以便精确定位）';
 }
 
 async function checkBackend(retry){
