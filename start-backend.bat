@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 REM ============================================================
 REM  EtsyOps 后端一键启动（Windows · 团队操作人电脑）
 REM  前提：已安装 Node.js 与 cloudflared，并 clone 本仓库到本地
