@@ -26,3 +26,6 @@ backend.log
 
 # 构建产物/临时压缩包
 *.zip
+
+# 自测生成物（勿提交）
+server.test.js
