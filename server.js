@@ -258,6 +258,17 @@ async function readJson(req) {
   return JSON.parse(raw || '{}');
 }
 
+/* ★ 生稿任务缓存（模块顶层，供handleApi 与文件末尾的清理定时器共同访问）
+   把「长时间单连接」改成「短连接提交 + 短连接轮询」：
+   AI 生稿需 25~55 秒，若浏览器一直挂在同一连接上读响应体，经过 Cloudflare Tunnel 时
+   该连接会在正文传完前被掐断 → 页面永远转圈/未响应（已实测：后端日志显示"出稿成功"、
+   curl 能完整收到，只有浏览器收不到）。现在 POST /api/ai/generate 立刻返回 jobId，
+   前端每 3 秒 GET /api/ai/job?id=xxx 查结果，每次都是短连接。
+   ⚠️ 必须声明在模块顶层：曾误放在 handleApi 函数内部，导致末尾清理定时器报
+   ReferenceError: _genJobs is not defined。 */
+const _genJobs = new Map(); // id -> { status:'running'|'done'|'error', content, note, at }
+let _genJobSeq = 0;
+
 async function handleApi(req, res) {
   const p = (req.url || '').split('?')[0];
   corsHeaders(res, req);
@@ -393,16 +404,7 @@ async function handleApi(req, res) {
     }
   }
 
-  // ★ 生稿任务缓存：把「长时间单连接」改成「短连接提交 + 短连接轮询」。
-// 起因：AI 生稿需 25~55 秒，浏览器一直挂在同一个连接上读响应体，
-// 经过 Cloudflare Tunnel 时该连接会在正文传完前被掐断 → 页��永远转圈/未响应
-// （已实测：后端每次都「出稿成功」，curl 能完整收到，只有浏览器收不到）。
-// 现在：POST /api/ai/generate 立刻返回 jobId；前端每 3 秒 GET /api/ai/job?id=xxx 查结果。
-// 每次都是短连接，天然规避长连接被掐断的问题。
-const _genJobs = new Map(); // id -> { status:'running'|'done'|'error', content, note, at }
-let _genJobSeq = 0;
-
-// AI 生稿：按前端传来的生稿要求（prompt）把素材稿（manuscript）生成为公众号文案
+  // AI 生稿：按前端传来的生稿要求（prompt）把素材稿（manuscript）生成为公众号文案
   if (p === '/api/ai/generate' && req.method === 'POST') {
     if (!aiConfigured()) {
       console.error('[ai/generate] 拒绝：服务端未配置 AI');
@@ -452,7 +454,9 @@ let _genJobSeq = 0;
     const job = _genJobs.get(id);
     if (!job) return json(res, 404, { error: 'job_not_found', note: '任务不存在或已过期（请重新生稿）' });
     if (job.status === 'done' || job.status === 'error') {
-      _genJobs.delete(id); // 取过一次就清掉，避免内存堆积
+      // ⚠️ 不要在这里立即 delete：若这一轮响应恰好被隧道掐断，前端下一轮就查不到 →
+      // 报"任务不存在"，用户白等一场。改为打上「已取过」时间戳，交给末尾定时器延迟清理。
+      job.takenAt = Date.now();
       if (job.status === 'error') return json(res, 200, { status: 'error', error: 'ai_error', note: job.note });
       return json(res, 200, { status: 'done', content: job.content });
     }
@@ -666,6 +670,10 @@ server.listen(PORT, HOST, () => {
 setInterval(() => {
   const now = Date.now();
   for (const [id, job] of _genJobs) {
-    if (now - job.at > 10 * 60 * 1000) _genJobs.delete(id);
+    // 已完成的再多留 2 分钟（容忍某一轮轮询响应被隧道掐断后重试），之后才清；
+    // 一直没人取的（还在跑或前端已放弃）超过 10 分钟也清掉，防止内存堆积。
+    if (job.takenAt ? now - job.takenAt > 2 * 60 * 1000 : now - job.at > 10 * 60 * 1000) {
+      _genJobs.delete(id);
+    }
   }
-}, 60 * 1000).unref?.();
+}, 30 * 1000).unref?.();

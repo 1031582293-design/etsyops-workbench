@@ -658,10 +658,20 @@ $('#genBtn').onclick = async ()=>{
     if(!sub.jobId) throw new Error('后端未返回任务号（jobId 缺失）');
 
     btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（任务已提交，AI 正在写作）';
-    let res = null;
-    for(let i=0; i<100; i++){   // 最多等100 次 × 3s ≈ 5 分钟
+    let res = null, fails = 0;
+    for(let i=0; i<100; i++){   // 最多等 100 次 × 3s ≈ 5 分钟
       await new Promise(r=>setTimeout(r, 3000));
-      const st = await apiCall('/api/ai/job?id=' + encodeURIComponent(sub.jobId), { timeout: 15000, label: '查询生稿进度' });
+      let st = null;
+      try{
+        st = await apiCall('/api/ai/job?id=' + encodeURIComponent(sub.jobId), { timeout: 15000, label: '查询生稿进度' });
+      }catch(pe){
+        // 单次查询失败（网络抖动/某次响应被掐断）不该直接终止整个流程，连丢 5 次才算真失败
+        fails++;
+        if(fails >= 5) throw new Error('连续 5 次查询进度失败：' + (pe && pe.message));
+        btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（第 '+fails+' 次查询未成功，重试中…）';
+        continue;
+      }
+      fails = 0;
       if(st.status === 'done'){ res = st; break; }
       if(st.status === 'error') throw new Error(st.note || 'AI 生稿失败');
       btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（AI 写作中，服务器已用时 ' + (st.waited||0) +' 秒）';
