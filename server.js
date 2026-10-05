@@ -215,6 +215,7 @@ async function aiGenerate(systemPrompt, userPrompt) {
     body: JSON.stringify({
       model: AI_MODEL,
       temperature: 0.7,
+      max_tokens: 4000,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -223,15 +224,14 @@ async function aiGenerate(systemPrompt, userPrompt) {
     signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
   const d = await r.json().catch(() => ({}));
-  const content = d.choices?.[0]?.message?.content;
+  let content = d.choices?.[0]?.message?.content;
   if (!content) {
     const _sum = (() => { try { return JSON.stringify(d).slice(0, 400); } catch { return '(响应体过大，无法序列化)'; } })();
     throw new Error('AI 接口返回异常：' + _sum);
   }
-  // 护栏：正常公众号文案不超过 2 万字；远超则判定为模型生成异常，避免 json() 序列化约 512MB 内容时崩成 Invalid string length
-  if (content.length > 100000) {
-    throw new Error('AI 返回内容异常过大（' + content.length + ' 字，远超公众号文案正常范围），疑似模型生成异常。建议：缩短素材到 1~2 万字以内，或分多次生成。');
-  }
+  // 长度兜底（不再因超长报过错）：正常公众号文案远不到 8000 字；极个别模型失控输出时截断到前 8000 字，
+  // 保证「始终出稿」而非中断。配合下方 max_tokens 硬上限，正常生稿基本不会触达此分支。
+  if (content.length > 8000) content = content.slice(0, 8000);
   return content;
 }
 
@@ -347,7 +347,7 @@ async function handleApi(req, res) {
     }
     try {
       const b = await readJson(req);
-      const manuscript = (b.manuscript || '').trim();
+      const manuscript = (b.manuscript || '').trim().slice(0, 15000);
       const prompt = (b.prompt || '').trim();
       if (!manuscript) return json(res, 400, { error: 'bad_request', note: '缺少 manuscript（素材文稿）' });
       if (!prompt) return json(res, 400, { error: 'bad_request', note: '缺少 prompt（生稿要求）' });
