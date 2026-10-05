@@ -265,6 +265,8 @@ async function handleApi(req, res) {
   // 可选 API Key 防护：除状态/出口 IP/AI 状态探测外，写操作接口必须携带正确 key。
   // 注意：此 key 是「后端接口防护 key」（来自 .env 的 API_KEY），与智谱 AI_API_KEY 完全无关。
   // 前端 key 来自 Cloudflare 构建变量 WECHAT_API_KEY 或网址 ?apikey=；若后端设了而前端没带/带错会被统一拦截——下方给出明确区分的报错，避免与智谱 key 混淆。
+  // 注意：/api/logs 不在下方白名单里 → 它属于「写操作级」保护，未设API_KEY 时也可读，
+  // 一旦 .env 设了 API_KEY 则必须带 key，杜绝公网任何人读取后端日志。
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status') {
     const url = new URL(req.url, 'http://localhost');
     const provided = req.headers['x-api-key'] || url.searchParams.get('key');
@@ -338,6 +340,34 @@ async function handleApi(req, res) {
         ? 'AI 生稿已就绪（' + AI_MODEL + '）；AI 生图已就绪（' + AI_IMAGE_MODEL + '）。'
         : '服务端未配置 AI_API_KEY / AI_BASE_URL / AI_MODEL（.env），AI 生稿与生图均不可用。',
     });
+  }
+
+  // 后端运行日志（诊断用）：start-backend.bat 把 stdout/stderr 重定向到 backend.log，
+  // 这里读取末尾若干行，让排查者无需截图即可判断「是隧道断、还是后端进程崩了」。
+  // 安全：日志可能含 AppSecret / AI key / 手机号等，统一做脱敏后再返回。
+  if (p === '/api/logs' && req.method === 'GET') {
+    const url2 = new URL(req.url, 'http://localhost');
+    const n = Math.min(500, Math.max(20, parseInt(url2.searchParams.get('n') || '120', 10) || 120));
+    try {
+      const raw = await readFile(join(ROOT, 'backend.log'), 'utf8');
+      const lines = raw.split('\n');
+      const tail = lines.slice(-n).join('\n').replace(/\r/g, '');
+      // 脱敏：sk-xxx 形态的 key、appid、access_token、以及长串 secret
+      const safe = tail
+        .replace(/sk-[A-Za-z0-9_\-]{8,}/g, 'sk-***REDACTED***')
+        .replace(/(secret|token|apikey|api_key|password)\s*[=:]\s*\S+/gi, '$1=***REDACTED***')
+        .replace(/\bwx[0-9a-f]{16}\b/gi, 'wx****REDACTED')
+        .replace(/[A-Za-z0-9_\-]{60,}/g, '***REDACTED***');
+      return json(res, 200, {
+        ok: true,
+        totalLines: lines.length,
+        showing: Math.min(n, lines.length),
+        note: '日志内容已脱敏。若要看崩溃原因，搜 uncaughtException / unhandledRejection / Error。',
+        log: safe,
+      });
+    } catch (e) {
+      return json(res, 404, { ok: false, error: 'log_missing', note: '读不到 backend.log：' + e.message + '（若刚改完 bat 还没重启后端，则该文件还不存在）' });
+    }
   }
 
   // AI 生稿：按前端传来的生稿要求（prompt）把素材稿（manuscript）生成为公众号文案
