@@ -248,9 +248,12 @@ WorkBuddy 自带"沙箱发布"能力（如 CloudStudio 等，把静态站一键�
 - 两页加**可见版本号**（`build v20261005d`），一眼判断是否部署到最新、是否还在跑旧缓存。
 - 新增 **`start-robust.bat`**（替换 `start-backend.bat`）：git pull + cloudflared 独立窗口崩溃 3s 重连 + server.js 崩溃 3s 重启循环 + 接电源禁睡眠。**任一阵列崩溃自动拉起，不用人点。**
 
-### 6. 免费 AI key（已验证可用，替代付费 OpenAI）
-- **硅基流动 SiliconFlow** `https://cloud.siliconflow.cn`：国内直连、免信用卡、新用户送 2000~3000 万 Tokens（基本等于免费）；key 在「账户 → API 密钥」；填 `AI_BASE_URL=https://api.siliconflow.cn/v1`、`AI_MODEL=deepseek-ai/DeepSeek-V3`。
-- **阿里云百炼** `https://bailian.aliyun.com`：新用户每模型送 100 万 Tokens（90 天）；填 `AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`、`AI_MODEL=qwen-plus`。
+### 6. 免费 AI key（2026-10-05 核实，已修正此前过时信息）
+> ⚠️ 此前写的"硅基流动送 2000~3000 万 Tokens 永久"已过时（2026 年中已缩水）。以下为 2026-10 实测政策。**两家免费额度/免费模型都需先「实名认证」，且百炼需「开通服务」，否则看不到额度——这是"好像没有"的最常见原因。**
+- **硅基流动 SiliconFlow** `https://cloud.siliconflow.cn`：新用户一次性赠送 **¥16（国内站）/ $1（全球站）** 试用额度（非永久大额）；**实名认证后**可用一批「永久免费模型」（如 `Qwen/Qwen3-8B-Instruct`、`THUDM/GLM-Z1-9B` 等），但有固定限速（DeepSeek-R1/V3 限 30 次/小时，未实名仅 100 次/天）。填 `AI_BASE_URL=https://api.siliconflow.cn/v1`、`AI_MODEL=Qwen/Qwen3-8B-Instruct`（免费档）或花 ¥16 试 `deepseek-ai/DeepSeek-V3`。
+- **阿里云百炼** `https://bailian.aliyun.com`：注册 → **开通服务（同意协议）+ 实名** → 系统自动发放**每模型 100 万 Tokens（90 天）**，累计超 7000 万，限「中国内地/华北2北京」地域模型；`qwen-plus` 在免费之列。填 `AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1`、`AI_MODEL=qwen-plus`。
+- **火山引擎（豆包）** `https://console.volcengine.com/ark`：每日 **200 万 Tokens 免费额度（每日 0 点刷新，不累积）**，适合日常生稿；填 `AI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3`、`AI_MODEL=doubao-seed-2.0-pro`（或 doubao-lite）。
+- **百度千帆** `https://qianfan.baidu.com`：每模型 100 万 Tokens（3 个月）；ERNIE-Speed/Lite 永久免费。
 - 备选（免信用卡、需境外网络）：Groq、OpenRouter（模型名加 `:free`）。**OpenAI 官方已无免费 key，Gemini 不兼容 OpenAI 格式，先别碰。**
 
 ### 7. 约定固化（写进 `~/.workbuddy/MEMORY.md`）
