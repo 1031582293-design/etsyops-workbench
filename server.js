@@ -296,6 +296,12 @@ async function handleApi(req, res) {
     });
   }
 
+  // 保活心跳：生稿/生图可能耗时 30~180秒，期间隧道/浏览器连接若空闲可能被中间层掐断。
+  // 前端在等待长任务时会周期性打这个极轻量的接口，维持连接不中断。
+  if (p === '/api/ping' && req.method === 'GET') {
+    return json(res, 200, { ok: true, t: Date.now(), v: SERVER_VERSION });
+  }
+
   // 出口 IP（用于公众号 IP 白名单）
   if (p === '/api/wechat/ip' && req.method === 'GET') {
     // 依次尝试多个探测服务（国内机器常连不上 ipify），谁通用谁；都不通才 unknown
@@ -534,8 +540,16 @@ function json(res, code, obj) {
   let body;
   try { body = JSON.stringify(obj); }
   catch (e) { body = JSON.stringify({ error: 'serialize_error', note: '响应体过大或无法序列化：' + (e && e.message) }); code = 502; }
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(body);
+  const buf = Buffer.from(body, 'utf8');
+  // 必须显式给Content-Length（含字节数，不是字符数）。
+  // 否则 Node 会用 chunked 分块传输，chunked 响应穿过 Cloudflare Tunnel 时
+  // 末尾的结束分块容易丢失，浏览器就表现为「后端已出稿但页面一直转圈/未响应」。
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': buf.length,
+    'Connection': 'close',
+  });
+  res.end(buf);
 }
 
 /* ===================== 静态文件服务 ===================== */

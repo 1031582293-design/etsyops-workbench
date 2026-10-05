@@ -120,7 +120,7 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build 78d6d76</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build 84404d2</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
@@ -638,9 +638,13 @@ $('#genBtn').onclick = async ()=>{
   const t0 = Date.now();
   btn.disabled = true; btn.textContent = '⏳ 生稿中（长文约需 1~3 分钟，请勿关闭页面）…';
   $('#aiResult').style.display = 'none';
-  // 每15秒刷新一次进度提示，让用户知道页面没死（实测生稿约 20~30 秒）
-  let tick = setInterval(()=>{ const s=Math.round((Date.now()-t0)/1000);
-    btn.textContent = '⏳ 生稿中…已等待 '+s+' 秒（长文约需 1~3 分钟，请勿关闭页面）'; }, 15000);
+  // 每 5 秒刷新进度（让用户知道页面没死）；同时打一次极轻量的 /api/ping 保活，
+  // 避免生稿这 30~180 秒里连接空闲被隧道/中间层掐断而表现为「页面未响应」。
+  let tick = setInterval(()=>{
+    const s=Math.round((Date.now()-t0)/1000);
+    btn.textContent = '⏳ 生稿中…已等待 '+s+' 秒（长文约需 1~3 分钟，请勿关闭页面）';
+    fetchT(API_BASE+'/api/ping', 8000).catch(()=>{});
+  }, 5000);
   try{
     // 必须带超时：裸 fetch 遇隧道半通不通会永久挂起，页面就成了「未响应」
     const r = await fetchT(API_BASE+'/api/ai/generate', 300000, {
