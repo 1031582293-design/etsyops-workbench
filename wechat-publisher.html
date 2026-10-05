@@ -120,7 +120,7 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build v20261006a</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build BUILD_VERSION</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
@@ -152,6 +152,7 @@
         <input type="text" id="title" placeholder="给文章起个标题…（AI 生稿后自动填写）" />
         <label class="fld">素材正文（可编辑，AI 生稿的输入；排版时支持 Markdown）</label>
         <textarea id="src" placeholder="在这里粘贴或上传你的文稿…"></textarea>
+        <div class="err" id="srcErr" style="display:none;color:#ff6b81;font-size:12.5px;margin-top:8px;padding:8px 10px;background:rgba(255,107,129,.1);border:1px solid rgba(255,107,129,.35);border-radius:8px"></div>
       </div>
 
       <!-- STEP 2 · AI 生稿（可选） -->
@@ -424,7 +425,7 @@ function goStep(n){
   window.scrollTo({top:0,behavior:'smooth'});
   if(n===4) applyTplStyle();
 }
-document.querySelectorAll('.step-chip').forEach(c=>c.onclick=()=>goStep(+c.dataset.step));
+document.querySelectorAll('.step-chip').forEach(c=>c.onclick=()=>{ const n=+c.dataset.step; if(n>1 && !validateManuscript()){ toast('请先把素材缩减到 5 万字以内，再进入下一步'); return; } goStep(n); });
 
 /* ---------- 事件绑定 ---------- */
 $('#drop').onclick=()=>$('#file').click();
@@ -478,6 +479,17 @@ function handleFile(f){
     reader.readAsText(f);
   }
 }
+function validateManuscript(){
+  const box = document.getElementById('srcErr');
+  const len = ($('#src').value||'').trim().length;
+  if(len>50000){
+    if(box){ box.style.display='block'; box.textContent='⚠ 素材过长（'+len+' 字），已超 5 万字上限。请缩减后再继续，否则 AI 生稿会因字符串过大而失败（Invalid string length）。'; }
+    return false;
+  }
+  if(box) box.style.display='none';
+  return true;
+}
+
 function fillText(t, fname){
   t = (t||'').trim(); if(!t){ toast('文件内容为空'); return; }
   // 多文件依次载入：追加并加分隔线，不覆盖已有内容
@@ -486,9 +498,11 @@ function fillText(t, fname){
   $('#src').value = cur ? (cur+'\n\n---\n\n'+head+t) : (head+t);
   if(!$('#title').value) $('#title').value='未命名文章';
   renderPreview();
+  validateManuscript();
 }
 
-['title','src','author','cover','digest'].forEach(id=> $('#'+id).addEventListener('input', renderPreview));
+['title','src','author','cover','digest'].forEach(id=> $('#'+id).addEventListener('input', ()=>{ if(id==='src') validateManuscript(); renderPreview(); }));
+$('#src').addEventListener('input', validateManuscript);
 $('#toStep3').onclick=()=>goStep(5);
 
 /* ---------- AI 生稿 ---------- */
