@@ -34,12 +34,11 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'https://etsyops-workbenc
 // 可选 API Key：设置了之后，发布/上传等写操作接口必须携带正确 key，挡住公开隧道的滥用。
 const API_KEY = process.env.API_KEY || '';
 function corsHeaders(res, req) {
+  // 回显来源（没有 origin 时放行 *），确保 pages.dev / localhost / 127.0.0.1 / file:// 等任意页面 fetch 都不被浏览器 CORS 拦截
   const origin = req.headers.origin;
-  if (origin && (ALLOWED_ORIGINS.includes('*') || ALLOWED_ORIGINS.includes(origin))) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
+  res.setHeader('Access-Control-Allow-Origin', origin || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
   res.setHeader('Vary', 'Origin');
 }
 

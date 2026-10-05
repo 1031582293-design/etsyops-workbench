@@ -313,6 +313,11 @@ if(!API_BASE){
   const b=document.getElementById('bindStatus'); if(b){ b.textContent='⚠ 未配置后端地址'; b.style.color='var(--warn)'; b.style.borderColor='rgba(255,107,129,.4)'; }
   const h=document.getElementById('modeHint'); if(h) h.textContent='当前：未知 · 请在网址后加 ?api=https://api.mailili-agency.com 再打开';
 }
+// 全局兜底：脚本一旦报错，把错误显示到绑定状态处，避免“一直卡在检测绑定状态”却看不到原因
+window.addEventListener('error', function(ev){
+  const b=document.getElementById('bindStatus');
+  if(b && /检测/.test(b.textContent)) b.textContent='⚠ 页面脚本错误：'+(ev.message||(ev.error&&ev.error.message)||'未知')+'（F12 Console 看详情）';
+});
 document.getElementById('goDash').href = window.withApi ? window.withApi('wechat-dashboard.html') : 'wechat-dashboard.html';
 const SAMPLE = `# 手作蜡烛，为什么成了 Z 世代的疗愈刚需？
 
