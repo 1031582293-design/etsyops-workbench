@@ -451,14 +451,34 @@ async function handleApi(req, res) {
   if (p === '/api/ai/job' && req.method === 'GET') {
     const _u = new URL(req.url, 'http://localhost');
     const id = _u.searchParams.get('id') || '';
+    const from = parseInt(_u.searchParams.get('from') || '0', 10) || 0;
     const job = _genJobs.get(id);
     if (!job) return json(res, 404, { error: 'job_not_found', note: '任务不存在或已过期（请重新生稿）' });
-    if (job.status === 'done' || job.status === 'error') {
-      // ⚠️ 不要在这里立即 delete：若这一轮响应恰好被隧道掐断，前端下一轮就查不到 →
-      // 报"任务不存在"，用户白等一场。改为打上「已取过」时间戳，交给末尾定时器延迟清理。
+    if (job.status === 'error') {
       job.takenAt = Date.now();
-      if (job.status === 'error') return json(res, 200, { status: 'error', error: 'ai_error', note: job.note });
-      return json(res, 200, { status: 'done', content: job.content });
+      return json(res, 200, { status: 'error', error: 'ai_error', note: job.note });
+    }
+    if (job.status === 'done') {
+      // ⚠️ 关键：done 时**不再一次性返回全文**。
+      // 实测：7448 字的稿件（约 20KB JSON）经隧道到浏览器会被截断（只剩约 1/3），
+      // 表现为「一直转圈 / 页面未响应」；而 curl 能完整收到 → 是浏览器侧的大响应问题。
+      // 改为分片：done 只报总长度与分片大小，前端再用 from=<offset> 逐片取，每片都是小响应。
+      job.takenAt = Date.now();
+      const CHUNK = 1200; // 每片 1200 字，JSON 约 4KB，足够小
+      const total = job.content.length;
+      // from >= total 说明已取完（重复请求最后一片时from 已是 total）
+      if (from >= total) {
+        return json(res, 200, { status: 'done', from, end: total, total, content: '', note: '已取完' });
+      }
+      const chunk = job.content.slice(from, from + CHUNK);
+      const end = from + chunk.length;
+      const finished = end >= total;
+      return json(res, 200, {
+        status: finished ? 'done' : 'chunk',
+        from, end, total,
+        content: chunk,
+        note: finished ? '' : ('内容分片传输中，已取' + end + '/' + total + ' 字'),
+      });
     }
     return json(res, 200, { status: 'running', waited: Math.round((Date.now() - job.at) / 1000) });
   }
