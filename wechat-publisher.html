@@ -650,7 +650,7 @@ $('#genBtn').onclick = async ()=>{
     toast('AI 生稿完成');
   }catch(e){
     let msg = (e && e.message) ? e.message : '未知错误';
-    if(msg.indexOf('Invalid string length')>=0) msg = '素材或返回内容过大，请缩短素材到 5 万字以内再试';
+    if(msg.indexOf('Invalid string length')>=0) msg = '提交或后端返回内容过大（字符串超限，非素材本身字数问题）。请先清空素材框只留当前文稿重试；若仍报，请把操作者电脑后端窗口的红色报错发我——多半是 AI 模型/接口返回了异常大的内容。';
     else if(msg === 'Failed to fetch' || msg.indexOf('Failed to fetch')>=0) msg = '网络/隧道中断（Failed to fetch）——请确认 cloudflared 服务 Running、后端窗口在跑、且隧道未闪断';
     const box = $('#aiResult'); box.style.display='block';
     box.style.background='rgba(255,107,129,.12)'; box.style.borderColor='rgba(255,107,129,.4)';
