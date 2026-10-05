@@ -820,9 +820,9 @@ $('#copyHtml').onclick=()=>{
 $('#closeModal').onclick=()=>$('#mask').classList.remove('show');
 $('#mask').onclick=e=>{ if(e.target===$('#mask')) $('#mask').classList.remove('show'); };
 
-/* 初始化 */
-$('#src').value = SAMPLE;
-$('#title').value = '手作蜡烛，为什么成了 Z 世代的疗愈刚需？';
+/* 初始化：默认空白，示例文案仅保留在 SAMPLE 常量里备用 */
+$('#src').value = '';
+$('#title').value = '';
 renderPreview();
 goStep(1);
 
