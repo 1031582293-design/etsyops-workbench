@@ -217,7 +217,8 @@ async function aiGenerate(systemPrompt, userPrompt) {
   const d = await r.json().catch(() => ({}));
   const content = d.choices?.[0]?.message?.content;
   if (!content) {
-    throw new Error('AI 接口返回异常：' + JSON.stringify(d).slice(0, 400));
+    const _sum = (() => { try { return JSON.stringify(d).slice(0, 400); } catch { return '(响应体过大，无法序列化)'; } })();
+    throw new Error('AI 接口返回异常：' + _sum);
   }
   return content;
 }
@@ -460,8 +461,11 @@ async function handleApi(req, res) {
 }
 
 function json(res, code, obj) {
+  let body;
+  try { body = JSON.stringify(obj); }
+  catch (e) { body = JSON.stringify({ error: 'serialize_error', note: '响应体过大或无法序列化：' + (e && e.message) }); code = 502; }
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(obj));
+  res.end(body);
 }
 
 /* ===================== 静态文件服务 ===================== */
