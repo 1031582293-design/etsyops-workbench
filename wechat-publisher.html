@@ -488,7 +488,7 @@ function fillText(t, fname){
   renderPreview();
 }
 
-['title','src','author','cover','digest'].forEach(id=> $(id).addEventListener('input', renderPreview));
+['title','src','author','cover','digest'].forEach(id=> $('#'+id).addEventListener('input', renderPreview));
 $('#toStep3').onclick=()=>goStep(5);
 
 /* ---------- AI 生稿 ---------- */
