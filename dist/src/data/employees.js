@@ -129,7 +129,7 @@ export const EMPLOYEES = [
       { t: '③ 发布草稿箱', skill: 'Draft Push', sop: '调用微信草稿箱接口，将排版稿写入公众号草稿（不群发）', d: '调用微信草稿箱接口，将排版稿写入公众号草稿（不群发），由后端凭证真实写入。', out: '草稿箱草稿' },
       { t: '数据复盘', skill: 'Wx Metrics', sop: '草稿转群发后追踪打开/分享/转化', d: '优化选题与排版。', out: '数据周报' }
     ],
-    deliverables: [{ t: '排版发布工具', d: 'wechat-publisher.html · 三步闭环已打通（演示模式）' }]
+    deliverables: [{ t: '排版发布工具', d: 'wechat-publisher.html · 文稿→AI生稿→排版→草稿箱 闭环已打通' }]
   },
   {
     id: 'tiktok', name: 'TikTok 运营', role: 'TikTok Ops', cat: '自媒体', icon: '🎶',
