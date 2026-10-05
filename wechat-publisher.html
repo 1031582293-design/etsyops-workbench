@@ -176,6 +176,7 @@
           <button class="btn ghost" id="skipGen">跳过，直接去排版 →</button>
         </div>
         <div class="ok-box" id="aiResult" style="display:none"></div>
+        <div class="ok-box" id="aiTrace" style="display:none;margin-top:10px;font-family:ui-monospace,Consolas,monospace;font-size:12px;line-height:1.75;white-space:pre-wrap;word-break:break-all"></div>
       </div>
 
       <!-- STEP 3 · AI 生成标题 + 封面图（可选） -->
@@ -647,42 +648,53 @@ $('#genBtn').onclick = async ()=>{
     btn.textContent = '⏳ 生稿中…已等待 '+s+' 秒（长文约需 1~3 分钟，请勿关闭页面）';
   }, 1000);
   try{
-    // ★ 改为「提交任务 + 轮询结果」模式。
-    // 之前是把 25~55 秒的长响应挂在同一个连接上读，经Cloudflare Tunnel 时该连接
-    // 会在正文传完前被掐断（已多次实测：后端日志显示「出稿成功」，curl 能完整收到，
-    // 只有浏览器收不到 → 页面卡在「已收到响应，正在读取」直到未响应）。
-    // 现在提交只回一个 jobId（毫秒级），随后每 2 秒问一次进度，每次都是短连接，
-    // 天然规避长连接被掐断（且服务端已去掉 Connection: close，浏览器可复用连接）。
+    // ★ 提交任务 + 轮询（实现与 btest.html 完全一致，那套已实测 20 秒出稿成功）
+    // 关键点：每一步都打印精确耗时到页面日志区，卡在哪一步一眼可见，不再靠猜。
+    const T = [];
+    const mark = (s2)=>{ T.push(s2); if(window.__markTrace) window.__markTrace(); const b=$('#aiTrace'); if(b){ b.style.display='block';
+      b.innerHTML = '<b>生稿过程实时日志</b><br>' + T.join('<br>'); } };
+    mark('提交中…');
     const sub = await apiCall('/api/ai/generate', { timeout: 30000, label: '提交生稿任务',
       body: { manuscript, prompt: $('#aiPrompt').value, async: true } });
     if(!sub.jobId) throw new Error('后端未返回任务号（jobId 缺失）');
+    mark('✓ 任务已提交 jobId=' + sub.jobId + '（耗时 ' + Math.round((Date.now()-t0)/1000) + ' 秒）');
 
-    btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（任务已提交，AI 正在写作）';
     let res = null, fails = 0;
-    for(let i=0; i<150; i++){   // 最多等 150 次 × 2s ≈ 5 分钟
+    for(let i=0; i<150; i++){
       await new Promise(r=>setTimeout(r, 2000));
       let st = null;
+      const t1 = Date.now();
       try{
-        st = await apiCall('/api/ai/job?id=' + encodeURIComponent(sub.jobId), { timeout: 15000, label: '查询生稿进度' });
+        st = await apiCall('/api/ai/job?id=' + encodeURIComponent(sub.jobId), { timeout: 20000, label: '查询生稿进度' });
       }catch(pe){
-        // 单次查询失败（网络抖动/某次响应被掐断）不该直接终止整个流程，连丢 5 次才算真失败
         fails++;
+        mark('第 ' + (i+1) + ' 次查询失败（第'+fails+'次，重试中）：' + (pe && pe.message));
         if(fails >= 5) throw new Error('连续 5 次查询进度失败：' + (pe && pe.message));
-        btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（第 '+fails+' 次查询未成功，重试中…）';
         continue;
       }
       fails = 0;
-      if(st.status === 'done'){ res = st; break; }
-      if(st.status === 'error') throw new Error(st.note || 'AI 生稿失败');
-      btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（AI 写作中，服务器已用时 ' + (st.waited||0) +' 秒）';
+      const cost = Math.round((Date.now()-t1)/1000 * 10) / 10;
+      if(st.status === 'done'){
+        mark('第 ' + (i+1) + ' 次查询 → ★done（本次耗时 ' + cost + 's）');
+        res = st; break;
+      }
+      mark('第 ' + (i+1) + ' 次查询 → ' + st.status + ' 服务器已写 ' + (st.waited||0) + 's（本次耗时 ' + cost + 's）');
+      btn.textContent = '⏳ 生稿中…已等待 '+Math.round((Date.now()-t0)/1000)+' 秒（AI 写作中）';
     }
     if(!res) throw new Error('等待超过 5 分钟仍未出稿，请重试');
     const d = res;
     if(!d.content) throw new Error('AI 生稿失败：后端已响应但无内容');
+    mark('✓ 读稿成功，长度 ' + d.content.length + ' 字');
+
     const out = parseAiOutput(d.content);
+    mark('· 解析完成：标题 ' + (out.title||'(无)').slice(0,20) + ' / 正文 ' + out.body.length + ' 字');
     if(out.title) $('#title').value = out.title;
     $('#src').value = out.body;
+    // renderPreview 会同步做 md→html + 插图片，先让出一帧，避免和结果展示抢主线程
+    await new Promise(r=>requestAnimationFrame(()=>setTimeout(r,0)));
+    const _rp0 = Date.now();
     renderPreview();
+    mark('· 预览渲染完成（耗时 ' + Math.round((Date.now()-_rp0)/1000*10)/10 + 's）');
     let html = '✅ <b>生稿完成</b>，标题与正文已填入，可回到第 3 步排版微调。';
     if(out.alts) html += '<br><b>备选标题</b>：<br>'+out.alts.replace(/\n/g,'<br>');
     if(out.risk) html += '<br><b>风险/侵权自查</b>：'+out.risk.replace(/\n/g,'<br>');
@@ -926,6 +938,22 @@ function reportClientError(where, msg, detail){
     }
   }catch(_){}
 }
+/* 卡死自诊断：页面超过 25 秒没有任何一次 mark() 更新，就主动上报，
+   这样即使浏览器真的卡住，也能从日志看到它停在哪一步之前。*/
+let __lastTraceAt = Date.now();
+window.__markTrace = function(){ __lastTraceAt = Date.now(); };
+setTimeout(function tickWatch(){
+  const idle = Math.round((Date.now() - __lastTraceAt)/1000);
+  if(idle >= 25){
+    const b=document.getElementById('aiTrace');
+    if(b && b.style.display!=='none'){
+      reportClientError('页面疑似卡死', '生稿流程已' + idle + '秒无进展', '最后日志: ' + (b.textContent||'').slice(-200));
+    }
+    __lastTraceAt = Date.now();
+  }
+  setTimeout(tickWatch, 5000);
+}, 5000);
+
 /* 捕获本页所有未处理错误与Promise 拒绝，一并上报 */
 window.addEventListener('error', ev=>reportClientError('window.error', ev.message, (ev.filename||'')+':'+(ev.lineno||'')));
 window.addEventListener('unhandledrejection', ev=>{
