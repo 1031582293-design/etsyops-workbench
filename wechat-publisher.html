@@ -813,6 +813,11 @@ async function checkBackend(retry){
     } else {
       el.textContent='⚠ 未绑定 · 模拟模式';
     }
+    // 后端 .env 配了 WECHAT_AUTHOR 时自动填入作者名（覆盖占位默认值）
+    if(d.author){
+      const a=document.getElementById('author');
+      if(a && (!a.value || a.value==='Etsy好物研究所')){ a.value=d.author; if(typeof renderPreview==='function') renderPreview(); }
+    }
     try{
       const ip = await fetchT(API_BASE+'/api/wechat/ip', 6000); const id = await ip.json();
       backend.ip = id.ip;

@@ -65,6 +65,7 @@ const MIME = {
 /* ===================== 公众号 API 代理 ===================== */
 const WX_APPID = process.env.WECHAT_APPID || '';
 const WX_SECRET = process.env.WECHAT_APPSECRET || '';
+const WX_AUTHOR = process.env.WECHAT_AUTHOR || '';
 const WX_BASE = 'https://api.weixin.qq.com';
 let tokenCache = { token: '', expiresAt: 0 };
 
@@ -266,6 +267,7 @@ async function handleApi(req, res) {
       configured: wechatConfigured(),
       apiKeyRequired: Boolean(API_KEY),
       appid: wechatConfigured() ? WX_APPID.slice(0, 4) + '****' + WX_APPID.slice(-4) : '',
+      author: WX_AUTHOR,
       note: wechatConfigured()
         ? '已检测到公众号凭证，发布将写入真实草稿箱。'
         : '未配置 WECHAT_APPID / WECHAT_APPSECRET（请在 .env 或系统环境变量中设置），当前前端为模拟发布。',
