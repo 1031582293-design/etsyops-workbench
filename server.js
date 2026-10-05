@@ -7,8 +7,16 @@ import { readFile, stat } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join, normalize, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)));
+
+// 后端自身版本号（git 短提交号），供前端状态区显示，便于确认“正在跑的是哪份代码”
+const SERVER_VERSION = (() => {
+  try {
+    return execSync('git rev-parse --short HEAD', { cwd: ROOT }).toString().trim() || 'unknown';
+  } catch { return 'unknown'; }
+})();
 
 // 零依赖读取 .env（不引入 dotenv 依赖；.env 已被 .gitignore 忽略，凭证不入库）
 function loadDotEnv() {
@@ -272,6 +280,7 @@ async function handleApi(req, res) {
       apiKeyRequired: Boolean(API_KEY),
       appid: wechatConfigured() ? WX_APPID.slice(0, 4) + '****' + WX_APPID.slice(-4) : '',
       author: WX_AUTHOR,
+      serverVersion: SERVER_VERSION,
       note: wechatConfigured()
         ? '已检测到公众号凭证，发布将写入真实草稿箱。'
         : '未配置 WECHAT_APPID / WECHAT_APPSECRET（请在 .env 或系统环境变量中设置），当前前端将无法真实写入草稿箱。',

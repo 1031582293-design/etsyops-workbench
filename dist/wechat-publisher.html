@@ -120,10 +120,11 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build build 2bbd3ef</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build 3137b5a</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
+      <span id="srvVer" class="demo-flag" style="opacity:.6;font-size:11px"></span>
       <button id="retryBtn" class="btn ghost" style="display:none" onclick="checkBackend()">↻ 重试连接</button>
       <a class="btn ghost" id="goDash" href="wechat-dashboard.html">📊 数据看板</a>
       <a class="btn ghost" href="index.html">← 返回工作台</a>
@@ -859,6 +860,7 @@ async function checkBackend(retry){
       el.textContent='✅ 已绑定真实公众号 '+d.appid;
       el.style.borderColor='rgba(52,211,153,.5)'; el.style.color='var(--good)'; el.style.background='rgba(52,211,153,.12)';
       $('#modeHint').textContent='当前：真实模式';
+      if(d.serverVersion) $('#srvVer').textContent='后端 '+d.serverVersion;
     } else {
       el.textContent='⚠ 未绑定 · 请配置公众号凭证';
     }
@@ -899,6 +901,7 @@ async function pingBackend(){
       el.textContent='✅ 已绑定真实公众号 '+d.appid;
       el.style.borderColor='rgba(52,211,153,.5)'; el.style.color='var(--good)'; el.style.background='rgba(52,211,153,.12)';
       $('#modeHint').textContent='当前：真实模式';
+      if(d.serverVersion) $('#srvVer').textContent='后端 '+d.serverVersion;
     } else {
       el.textContent='⚠ 未绑定 · 请配置公众号凭证';
     }
