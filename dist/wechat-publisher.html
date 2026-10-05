@@ -454,6 +454,18 @@ async function pdfToText(buf){
   return out.trim();
 }
 
+
+function htmlToText(html){
+  if(!html) return '';
+  let s = (html||'')
+    .replace(/<\/(p|div|h[1-6]|li|tr|blockquote)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  return s.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function handleFile(f){
   if(!f) return;
   const name=f.name.toLowerCase();
@@ -462,7 +474,7 @@ function handleFile(f){
   if(name.endsWith('.docx')){
     ensureMammoth(err=>{
       if(err){ toast('docx 解析库加载失败，请联网后重试'); return; }
-      reader.onload=()=>window.mammoth.convertToHtml({arrayBuffer:reader.result}).then(r=>{ fillText(r.value, f.name); toast('docx 已解析'); }).catch(()=>toast('docx 解析失败'));
+      reader.onload=()=>window.mammoth.convertToHtml({arrayBuffer:reader.result}).then(r=>{ fillText(htmlToText(r.value), f.name); toast('docx 已解析'); }).catch(()=>toast('docx 解析失败'));
       reader.readAsArrayBuffer(f);
     });
   } else if(name.endsWith('.pdf')){
@@ -472,7 +484,7 @@ function handleFile(f){
       reader.readAsArrayBuffer(f);
     });
   } else if(name.endsWith('.html')||name.endsWith('.htm')){
-    reader.onload=()=>{ const doc=new DOMParser().parseFromString(reader.result,'text/html'); fillText(doc.body.innerText, f.name); toast('HTML 已抽取正文'); };
+    reader.onload=()=>{ const doc=new DOMParser().parseFromString(reader.result,'text/html'); fillText(doc.body.innerText||doc.body.textContent||'', f.name); toast('HTML 已抽取正文'); };
     reader.readAsText(f);
   } else {
     reader.onload=()=>{ fillText(reader.result, f.name); toast('文稿已载入'); };
