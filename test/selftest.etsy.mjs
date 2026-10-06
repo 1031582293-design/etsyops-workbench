@@ -946,6 +946,30 @@ console.log('\n【21】连通性自检接口（排查「网络到底通不通」
   }
 }
 
+// ========== 21. 实例身份自检（whoami） ==========
+// 起因：两台电脑同时跑后端 + 隧道抢同一个域名，Cloudflare 在两个 connector 间轮询，
+// 表现为「刚修好的问题又复现」「报的 not_found 一直不变」，排查时完全无从下手。
+// whoami 是唯一能分辨手段 —— hostname / pid / 启动时刻 / commit 都不在 URL 或报错里。
+{
+  const r = await callApi('GET', '/api/etsy/whoami');
+  ok(r.code === 200, 'whoami 返回 200（不需要任何凭证）', 'code=' + r.code);
+  const j = r.json || {};
+  ok(typeof j.hostname === 'string' && j.hostname.length > 0, '★ 返回 hostname（判断是哪台机器的关键）', j.hostname);
+  ok(Number.isInteger(j.pid) && j.pid > 0, '返回 pid', String(j.pid));
+  ok(Number.isInteger(j.startedAt) && j.startedAt > 0, '返回启动时刻');
+  ok(typeof j.startedAtText === 'string' && j.startedAtText.length > 0, '返回可读的启动时间');
+  ok(Number.isInteger(j.uptimeSec) && j.uptimeSec >= 0, '返回已运行时长（秒）');
+  ok(typeof j.repoCommit === 'string' && j.repoCommit.length > 0,
+    '★ 返回 git commit（判断跑的是不是最新代码）', j.repoCommit);
+  ok('nodeVersion' in j && 'platform' in j, '返回运行环境信息');
+  ok(typeof j.note === 'string' && /只能由一个后端/.test(j.note),
+    '★ 明确提示多实例争抢的处置原则');
+
+  // 反复调用应返回同一个 pid —— 同一进程内身份必须稳定，否则无法据此判断实例
+  const r2 = await callApi('GET', '/api/etsy/whoami');
+  ok(r2.json && r2.json.pid === j.pid && r2.json.startedAt === j.startedAt,
+    '同一进程内身份稳定（pid / startedAt 不变）');
+}
 console.log('\n' + '='.repeat(76));
 console.log(`结果：通过 ${pass} 项，失败 ${fail} 项`);
 console.log('='.repeat(76));

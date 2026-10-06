@@ -7,6 +7,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { join, normalize, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hostname as osHostname } from 'node:os';
 import { execSync } from 'node:child_process';
 import * as etsy from './etsy-api.js';
 
@@ -94,6 +95,23 @@ function updateRun(id, patch) {
      - OAuth 回调（/api/etsy/callback）必须在 API_KEY 白名单里，
        否则店主的浏览器从 Etsy 跳回来时没有 key，会被我们自己拦住 → 授权永远失败；
      - 写操作额外受 ETSY_ALLOW_WRITE=1 开关限制（.env 控制），默认只读。*/
+
+/* 实例身份：用于回答「这个请求是哪台机器在处理」。
+ * 多实例抢同一域名时（两台电脑都起了后端 + 隧道），这是唯一能分辨的手段 ——
+ * hostname / pid / 启动时刻 / 跑的是哪个 commit，四项都无法从 URL 或报错推断出来。
+ * 2026-10-06 夜里就因为没这个信息，误以为是缓存和 DNS 问题，实际是两个 connector 在轮询。 */
+const SERVER_ID = (() => {
+  let commit = '(未知)';
+  let dirty = null;
+  try {
+    commit = execSync('git rev-parse --short HEAD', { cwd: dirname(fileURLToPath(import.meta.url)), stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString().trim();
+    dirty = /\M/.test(execSync('git status --porcelain', { cwd: dirname(fileURLToPath(import.meta.url)), stdio: ['ignore', 'pipe', 'ignore'] }).toString());
+  } catch {
+    commit = '(非 git 目录或 git 不可用)';
+  }
+  return { hostname: osHostname(), pid: process.pid, startedAt: Date.now(), commit, dirty };
+})();
 
 const ETSY_CFG = etsy.etsyConfig(process.env);
 const ETSY_TOKEN_FILE = join(DATA_DIR, 'etsy-token.json');
@@ -426,7 +444,8 @@ async function handleApi(req, res) {
   //★ 回调的两个变体路径都要免 key（见下方路由注释），否则店主从 Etsy 跳回来时带不了 key
   // ★ connectivity 也要免 key：它是纯诊断接口（只发GET、不碰店铺数据），
   //   排查「授权失败」时往往还没配好凭证/没授权，那时正是最需要用它的时候。
-  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status', '/api/etsy/connectivity'];
+  // whoami 与 connectivity 一样是纯诊断（不碰店铺数据），放在免 key 白名单里
+  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status', '/api/etsy/connectivity', '/api/etsy/whoami'];
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status'
       && !ETSY_OPEN_PATHS.includes(p)) {
     const url = new URL(req.url, 'http://localhost');
@@ -828,6 +847,36 @@ async function handleApi(req, res) {
         : (reachable > 0
           ? '部分连通。授权只用到第一个目标；看它是否 reachable。'
           : '全部不通：这台机器连不上 Etsy。若你在用 VPN/代理，确认它已开启并接管了流量；若刚切换过网络，等它稳定后重试。'),
+    });
+  }
+
+  /* 实例身份自检：回答「这个请求到底是谁在处理」。
+   *
+   * 起因（2026-10-06 夜里）：两台电脑同时跑后端 + 隧道，隧道指向同一个域名，
+   * Cloudflare 会在两个 connector 之间做负载均衡 —— 于是同一个 URL 有时是新代码、
+   * 有时是旧代码，表现为「刚修好的问题又复现」「报错的 not_found 一直不变」，
+   * 排查时完全无从下手（实际卡了半小时，以为是缓存或 DNS）。
+   *
+   * 所以必须能一眼看出：请求落到的是哪台机器、跑的哪个 commit、什么时候启动的。
+   * 这三项都无法从 URL 或报错里推断出来，只能由后端自己报。
+   * 不需要任何凭证，进免key 白名单。
+   */
+  if (p === '/api/etsy/whoami' && req.method === 'GET') {
+    return json(res, 200, {
+      ok: true,
+      hostname: SERVER_ID.hostname,
+      pid: SERVER_ID.pid,
+      startedAt: SERVER_ID.startedAt,
+      startedAtText: new Date(SERVER_ID.startedAt).toLocaleString('zh-CN'),
+      uptimeSec: Math.round((Date.now() - SERVER_ID.startedAt) / 1000),
+      repoCommit: SERVER_ID.commit,
+      nodeVersion: process.version,
+      platform: process.platform,
+      // ★ 判定「是否跑着最新代码」：与本地 HEAD 比对。让"重启了但没 pull"
+      //   这种问题一眼可见，而不是靠猜。
+      isWorkingTreeDirty: SERVER_ID.dirty,
+      note: '若页面上显示的机器与预期不同，说明有多个后端同时抢这个域名；' +
+            '同一域名只能由一个后端 + 一个隧道提供，否则请求会随机落到不同机器上。',
     });
   }
 

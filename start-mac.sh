@@ -35,11 +35,32 @@ ok "node $(node -v)"
 say ""
 say "[2/5] 更新代码（git pull）…"
 if [ -d .git ]; then
+  # ★ 三个改动，缺一不可（2026-10-06 夜里踩过）：
+  #   1) 不再用 2>/dev/null 吞错误 —— 原脚本无论 pull 成没成功都打印「代码已是最新」，
+  #      失败时只有一句「可能是离线」，导致以为更新成功了、实际跑的是旧代码，
+  #      表现为「刚修好的问题又复现」「报的 not_found 一直不变」，白排查半小时。
+  #   2) 记录 pull 前后的 commit，落后就明确警告「本次跑的是旧代码」。
+  #   3) pull 失败时把真实原因（存到临时文件再读出来）打出来，便于判断是网络还是鉴权。
+  BEFORE=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
+  PULL_ERR=""
   GIT_SSH_COMMAND="ssh -i $HOME/.ssh/etsyops_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes" \
-    git pull 2>/dev/null \
-  || git pull https://gitee.com/fu-po-fa-cai/etsyops-workbench.git main 2>/dev/null \
-  || warn "自动更新失败（可能是离线），使用本地已有代码继续"
-  ok "代码已是最新"
+    git pull > /tmp/etsyops_pull.log 2>&1 \
+  || GIT_SSH_COMMAND="ssh -i $HOME/.ssh/etsyops_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes" \
+    git pull https://gitee.com/fu-po-fa-cai/etsyops-workbench.git main >> /tmp/etsyops_pull.log 2>&1 \
+  || PULL_ERR=$(tail -3 /tmp/etsyops_pull.log | tr '\n' ' ')
+
+  AFTER=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
+
+  if [ -n "$PULL_ERR" ]; then
+    warn "⚠️自动更新失败，本次运行的是本地已有代码（$BEFORE）"
+    warn "   原因：$PULL_ERR"
+    warn "   若你刚改了代码并以为已生效——并没有，请检查网络后重跑本脚本。"
+  elif [ "$BEFORE" != "$AFTER" ]; then
+    ok "代码已更新 $BEFORE → $AFTER"
+  else
+    ok "代码已是最新（$AFTER）"
+  fi
+  rm -f /tmp/etsyops_pull.log 2>/dev/null || true
 else
   warn "非 git 目录，跳过更新"
 fi

@@ -63,7 +63,7 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 - 同步模式仍可用（旧前端兼容）
 - **等 35 秒验证清理定时器不报 ReferenceError**（捕获作用域错误这类只在运行期暴露的 bug）
 
-**Etsy selftest.etsy.mjs（226 项）**
+**Etsy selftest.etsy.mjs（236 项）**
 按「最容易造成真实损失」排序，重点覆盖：
 - **金额 subunit**：$29.99→2999、$0.29→29、负数与非数字被拒
 - **★ inventory 价格格式不对称**：读回是 Money 对象 `{amount, divisor}`，
@@ -92,6 +92,8 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
   `redirect_uri` 不匹配 / 授权码已用一次 / 凭证不对，三者各给不同指引
 - **连通性自检**：`/api/etsy/connectivity` 不需要凭证即可测「这台机器能不能连 Etsy」，
   逐项给出结论 + 下一步动作（排查「授权失败」的第一件事）
+- **实例身份自检**：`/api/etsy/whoami` 返回 hostname / pid / 启动时刻 / git commit，
+  且同进程内身份稳定。这是**多后端抢同一域名**时唯一的分辨手段
 - **★ 回调路径兼容**：`/api/etsy/callback` 与 `/api/etsy/oauth/callback` **两个路径
   都必须进回调逻辑**（曾因指引里写了后者、代码只注册前者，导致点「同意」后拿到
   404 not_found、授权 100% 失败）；state校验（CSRF 防护）仍生效；
