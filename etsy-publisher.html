@@ -457,12 +457,14 @@ async function boot(){
   if (!STATUS.configured){
     const miss = [];
     if (!STATUS.hasCredentials) miss.push('<b>ETSY_KEYSTRING + ETSY_SHARED_SECRET</b>');
-    if (!STATUS.hasShopId) miss.push('<b>ETSY_SHOP_ID</b>');
     if (!STATUS.hasRedirectUri) miss.push('<b>ETSY_REDIRECT_URI</b>');
     gate('后端还没配置 Etsy 凭证',
       '<p>服务端 .env 里缺这几项，所以 Etsy 相关接口现在是关闭的：</p>' +
       '<div class="reasons">' + miss.map(m => '· ' + m).join('<br>') + '</div>' +
-      '<p>填完 .env 后<strong>重启后端</strong>，再刷新本页。公众号与 AI 功能不受影响。</p>');
+      '<p>填完 .env 后<strong>重启后端</strong>，再刷新本页。公众号与 AI 功能不受影响。</p>' +
+      '<p style="font-size:12.5px;color:var(--text-faint)">注意：<b>不需要填 ETSY_SHOP_ID</b>——' +
+      'Etsy 界面上任何地方都不显示这个数字，填不了也查不到。' +
+      '下面完成授权时会自动识别出来并保存。</p>');
     return;
   }
   if (!STATUS.authorized){
@@ -474,13 +476,22 @@ async function boot(){
       '<li>点<strong>同意</strong>，浏览器自动跳回本工作台</li>' +
       '</ol>' +
       '<p style="font-size:12.5px;color:var(--text-faint)">授权有效期 90 天，到期前工作台会提醒重新授权。' +
-      '本次授权不会上架任何商品、不花钱。</p>' +
+      '本次授权不会上架任何商品、不花钱。<br>' +
+      '顺便会<b>自动识别出你的 shop_id</b> 并保存，你不用手工查那个数字。</p>' +
       '<div class="btnrow"><a class="btn primary" href="' + API_BASE + '/api/etsy/auth">连接 Etsy 店铺</a>' +
       '<button class="btn ghost" onclick="location.reload()">我已授权，重新检查</button></div>');
     return;
   }
   document.getElementById('main').classList.remove('hidden');
-  log('已连接，shop_id=' + STATUS.shopId);
+  log('已连接' + (STATUS.shopName ? '：' + STATUS.shopName : '') + (STATUS.shopId ? '（shop_id=' + STATUS.shopId + '）' : ''));
+  // 多店铺账号：自动发现会拒绝擅自挑选（可能把商品写进错误的店），这里明确告知
+  if (STATUS.needShopChoice){
+    showMsg(document.getElementById('msg1'), 'warn',
+      '<b>已授权，但还不知道该用哪个店铺。</b><br>' +
+      '这个 Etsy 账号下有多个店铺，程序不会替你猜——把商品写进错误的店铺是要收拾的烂摊子。<br>' +
+      '请让管理员在服务端 .env 里加一行 <code>ETSY_SHOP_ID=数字</code> 指定要用的店，然后重启后端。' +
+      '数字在店铺网址最后一段（形如 etsy.com/shop/店名/<b>12345678</b>）。');
+  }
   if (!STATUS.allowWrite){
     showMsg(document.getElementById('msg5'), 'warn',
       '<b>写操作当前关闭。</b>服务端 .env 里没有 <code>ETSY_ALLOW_WRITE=1</code>，' +
@@ -505,7 +516,11 @@ function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&'
 
 function renderStatus(){
   document.getElementById('svVer').textContent = STATUS.serverVersion || '—';
-  document.getElementById('svShop').textContent = STATUS.shopId || '未配置';
+  document.getElementById('svShop').innerHTML = STATUS.shopId
+    ? esc(STATUS.shopId) + (STATUS.shopName ? ' · ' + esc(STATUS.shopName) : '') +
+      '<br><span style="font-size:10.5px;color:var(--text-faint)">' +
+      (STATUS.shopIdSource === 'env' ? '来自 .env 配置' : '授权时自动识别') + '</span>'
+    : (STATUS.authorized ? '<span style="color:var(--warn)">待指定（多店铺）</span>' : '授权后自动识别');
   document.getElementById('svAuth').innerHTML = STATUS.authorized
     ? '<span style="color:var(--good)">已授权</span>'
     : '<span style="color:var(--bad)">未授权</span>';

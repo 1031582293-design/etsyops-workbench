@@ -63,7 +63,7 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 - 同步模式仍可用（旧前端兼容）
 - **等 35 秒验证清理定时器不报 ReferenceError**（捕获作用域错误这类只在运行期暴露的 bug）
 
-**Etsy selftest.etsy.mjs（161 项）**
+**Etsy selftest.etsy.mjs（188 项）**
 按「最容易造成真实损失」排序，重点覆盖：
 - **金额 subunit**：$29.99→2999、$0.29→29、负数与非数字被拒
 - **★ inventory 价格格式不对称**：读回是 Money 对象 `{amount, divisor}`，
@@ -83,8 +83,11 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 - **429 退避**：按 `retry-after` 退避、持续 429 最终抛错并带剩余配额
 - **报错可读**：错误里带 Etsy 原文；非 JSON 响应（Cloudflare 502 HTML）也不崩
 - **授权 URL**：S256 + state 齐全，且不泄漏 verifier
-- **路由降级**：未配置凭证时各接口返回 400 并点名缺哪个变量；
-  `validate` 永远可用（不依赖凭证）；带变体时返回展开好的组合行给前端渲染
+- **shop_id 自动发现**：从 access token 前缀取 user_id → 查`/users/{user_id}/shops`
+  反查 shop_id；**多店铺时拒绝自动挑选**（可能把商品写进错误的店），单店铺自动采用；
+  客户端的 shopId 必须**动态取**（授权前为空、发现后立刻可用）
+- **路由降级**：未配置凭证时各接口返回 400 并点名缺哪个变量；报错**不再要求填
+  ETSY_SHOP_ID**（已自动发现）；`validate` 永远可用；带变体时返回组合行给前端渲染
 
 **前端 selftest.frontend.mjs（22 项）**
 - `apiCall` 强制带 `Accept-Encoding: identity`、正确拼 URL、带 `AbortSignal`
@@ -111,6 +114,26 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 | **inventory 的 price 用了 subunit** | 与 createDraftListing 规则相反，$29.99 会变成 $29 —— **100 倍价格事故** | 改为浮点；新增 `toFloatPrice()` 统一读写不对称；专门测「读是对象、写是浮点」 |
 | **整表 PUT 时只归一化了被修改行的价格** | 未命中的行会带着 Money 对象格式写回 Etsy，写入格式错误 | 归一化提到 patch 循环**之前**，对所有行执行 |
 | **组合数用 `reduce(..., 0)`** | 乘法累乘初始值 0 → 任何数乘 0 都等于 0，组合数恒为 0（页面据此显示的行数全错） | 初始值改1，并测 1/2/3 维度共 10 项断言 |
+
+## shop_id 为什么不用手工填
+
+Etsy 的**任何界面都不显示数字 shop_id**（Shop Manager、店铺网址、开发者后台都没有），
+让操作者手工找是不现实的；而所有写操作（建草稿 / 改库存 / 填物流单号）的 URL 里都必须带它。
+
+所以设计成自动发现：
+
+```
+授权成功 → access_token 形如 {user_id}.{token}
+         → 取点号前那段得到 user_id
+         → GET /users/{user_id}/shops
+         → 得到 shop_id，存进 data/etsy-shop.json
+```
+
+**多店铺时程序不自动挑**——把商品写进错误的店铺是要收拾的烂摊子，会在状态里返回
+`needShopChoice` 并提示在 `.env` 里用 `ETSY_SHOP_ID` 指定。
+
+⚠️ 客户端的 `shopId` 必须是 `shopIdProvider()` 动态取，不能把 `config.shopId` 烤死进闭包——
+否则授权前它是空的，授权后即使发现了也拿不到。测试里有专门的断言守着这一条。
 
 ## 关于 inventory 价格格式（最容易改错的一处）
 

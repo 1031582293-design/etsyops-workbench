@@ -18,6 +18,11 @@
  *
  * 3) 上架费 $0.20 只在 state=active 时收，草稿不收。所以建草稿与发布必须拆成
  *    两个独立动作，中间留人工确认。见 draftListing() 与 publishListing()。
+ *
+ * 4) shop_id 不需要人工填。Etsy 授权返回的 access_token 形如 `{user_id}.{token}`，
+ *    从前缀就能直接拿到 user_id；再用 getShopByOwnerUserId
+ *    （GET /users/{user_id}/shops）反查出自己的 shop_id。见 discoverShopId()。
+ *    这条链路让操作者一个数字都不用手工查——Etsy 界面上任何位置都不显示 shop_id。
  */
 
 // ---------------------------------------------------------------- 配置
@@ -31,6 +36,8 @@ function etsyConfig(env = process.env) {
     // x-api-key 必须是 keystring:shared_secret。2026-01-18 起 Etsy 强制要求带 shared secret，
     // 只给 keystring 会 401。
     apiKeyHeader: keystring && sharedSecret ? `${keystring}:${sharedSecret}` : '',
+    // ★ shop_id 现在是**可选**的：留空时会在授权成功后自动发现并落盘（见 discoverShopId）。
+    //   保留这个配置项是为了覆盖「一个账号授权了多个店、想指定用哪个店」的情况。
     shopId: (env.ETSY_SHOP_ID || '').trim(),
     redirectUri: (env.ETSY_REDIRECT_URI || '').trim(),
     baseUrl: (env.ETSY_BASE_URL || 'https://openapi.etsy.com/v3/application').replace(/\/+$/, ''),
@@ -51,6 +58,50 @@ function etsyConfig(env = process.env) {
 }
 
 // ---------------------------------------------------------------- 小工具
+
+/* 从 access_token 里取 user_id。
+   Etsy 的 access_token 格式是 `{user_id}.{token}`，例如
+   `12345678.jKBPLnOiYt7vpWlsny_lDKqINn4Ny_jwH89hA4IZgggyzqmV_bmQHGJ3HOHH2DmZxOJn5V1qQFnVP9bCn9jnrggCRz`
+   —— 点号前那段就是 user_id。这是整条自动发现链路的起点：
+   **不需要用户去 Etsy 界面上找 shop_id**（Etsy 任何界面都不显示它）。
+
+   安全说明：这里只取出数字部分做URL 拼接，不把 token 本身往任何地方输出。 */
+function userIdFromToken(accessToken) {
+  const s = String(accessToken || '');
+  const i = s.indexOf('.');
+  if (i <= 0) return null;
+  const head = s.slice(0, i);
+  return /^\d+$/.test(head) ? head : null;
+}
+
+/* 自动发现自己的 shop_id。
+   链路：access_token → user_id → GET /users/{user_id}/shops → shop_id / shop_name。
+
+   为什么需要这个：Etsy 的界面上（Shop Manager、店铺网址、开发者后台）都不直接显示
+   数字 shop_id，让操作者手工找是不现实的；而所有写操作（建草稿、改库存、发货）
+   的 URL 里都必须带它。见 README「shop_id 不用手工填」的说明。 */
+async function discoverShopId(client, accessToken) {
+  const userId = userIdFromToken(accessToken);
+  if (!userId) {
+    throw new Error('无法从 access token 里解析出 user_id（token 格式应为 {user_id}.{token}），请重新授权一次');
+  }
+  const d = await client.get(`/users/${userId}/shops`);
+  const shops = Array.isArray(d.results) ? d.results : (d && d.shop_id ? [d] : []);
+  if (!shops.length) {
+    throw new Error(`已解析出 user_id=${userId}，但该用户下没有查到任何店铺。请确认授权的是店铺账号本人。`);
+  }
+  const first = shops[0];
+  return {
+    userId: String(userId),
+    shopId: String(first.shop_id),
+    shopName: first.shop_name || '',
+    currencyCode: first.currency_code || '',
+    // 一个账号可能有多个店：只有 1 个时自动采用；有多个时必须让人明确选，
+    // 否则可能把商品写进错误的店铺——那是要收拾的烂摊子。
+    ambiguous: shops.length > 1,
+    allShops: shops.map(s => ({ shopId: String(s.shop_id), shopName: s.shop_name || '', currencyCode: s.currency_code || '' })),
+  };
+}
 
 // 本文件零依赖（仅 Node 内置）：crypto 用于 PKCE 与随机 verifier
 import { createHash, randomBytes } from 'node:crypto';
@@ -222,7 +273,7 @@ function normalizeTokenResponse(d, now = Date.now()) {
    - access token 临近过期自动刷新一次，并处理 refresh token 轮换；
    - 401 自动重试一次（刷新后重试），避免并发请求撞在一起导致重复刷新；
    - 429 按 retry-after 退避（指数退避，封顶 8 秒，只重试可重试的写操作）。 */
-function createClient({ config, store, fetchImpl = fetch, now = () => Date.now(), sleep = (ms) => new Promise(r => setTimeout(r, ms)), log = () => {} }) {
+function createClient({ config, store, fetchImpl = fetch, now = () => Date.now(), sleep = (ms) => new Promise(r => setTimeout(r, ms)), log = () => {}, shopIdProvider = null }) {
   let refreshing = null;
 
   async function accessToken() {
@@ -330,7 +381,10 @@ function createClient({ config, store, fetchImpl = fetch, now = () => Date.now()
     del: (p, query) => request('DELETE', p, { query, write: true }),
     request,
     accessToken,
-    shopId: () => config.shopId,
+    // ★ shop_id 动态取：若调用方给了 shopIdProvider（授权后自动发现并存盘的场景），
+    //   每次都问它，而不是把 config.shopId 烤死进闭包 —— 否则授权前它还是空的，
+    //   授权后即使发现了 shop_id，客户端也永远拿不到。
+    shopId: () => (typeof shopIdProvider === 'function' ? (shopIdProvider() || config.shopId) : config.shopId),
   };
 }
 
@@ -850,6 +904,8 @@ function validateVariationRows(combos, perRow) {
 
 export {
   etsyConfig,
+  userIdFromToken,
+  discoverShopId,
   toSubunit,
   fromSubunit,
   toFloatPrice,

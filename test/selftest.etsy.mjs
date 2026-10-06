@@ -691,6 +691,112 @@ console.log('\n【15】变体链路（用户勾选，程序只做传递与组合
   ok(!etsy.validateVariationRows(combos, noQty).ok, '某格空库存被拦');
 }
 
+// ========== 16. shop_id 自动发现（不让操作者手工查） ==========
+console.log('\n【16】shop_id 自动发现（Etsy 界面不显示这个数字）');
+{
+  // 从 token 前缀取 user_id —— 整条自动发现链路的起点
+  ok(etsy.userIdFromToken('12345678.jKBPLnOiYt7vpWlsny_lDKqINn4Ny_jwH89hA4IZgggyzqmV') === '12345678',
+    '★ 从 access token 解析出 user_id', '12345678');
+  ok(etsy.userIdFromToken('abc') === null, '无点号 → null');
+  ok(etsy.userIdFromToken('xyz.abc') === null, '前缀非纯数字 → null');
+  ok(etsy.userIdFromToken('') === null, '空 token → null');
+  ok(etsy.userIdFromToken('.abc') === null, '前缀为空 → null');
+
+  const mkClient = (fetchImpl) => etsy.createClient({
+    config: {
+      keystring: 'ks', sharedSecret: 'ss', apiKeyHeader: 'ks:ss', shopId: '',
+      redirectUri: 'https://x/cb', allowWrite: true,
+      baseUrl: 'https://api.test/v3', tokenUrl: 'https://api.test/tk',
+    },
+    store: {
+      data: { accessToken: '48201937.tok', accessTokenExpiresAt: Date.now() + 3600e3, refreshToken: 'R' },
+      read() { return this.data; }, write() {},
+    },
+    fetchImpl,
+  });
+
+  // 单店铺：自动选中并返回
+  const oneShop = async (url) => new Response(JSON.stringify({ count: 1, results: [
+    { shop_id: 48201937, shop_name: 'Aurenmorph', currency_code: 'USD' } ] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const found = await etsy.discoverShopId(mkClient(oneShop), '48201937.tok');
+  ok(found.shopId === '48201937', '★ 单店铺 → 自动得到 shop_id', found.shopId);
+  ok(found.shopName === 'Aurenmorph' && found.currencyCode === 'USD', '同时带出店铺名与货币');
+  ok(found.ambiguous === false, '单店铺不算歧义');
+  ok(found.userId === '48201937', '带出 user_id');
+
+  // 多店铺：必须标记歧义，不能擅自挑（可能把商品写进错误的店）
+  const manyShop = async () => new Response(JSON.stringify({ count: 2, results: [
+    { shop_id: 111, shop_name: 'ShopA', currency_code: 'USD' },
+    { shop_id: 222, shop_name: 'ShopB', currency_code: 'USD' } ] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const multi = await etsy.discoverShopId(mkClient(manyShop), '48201937.tok');
+  ok(multi.ambiguous === true, '★ 多店铺 → 标记歧义（绝不自动挑）');
+  ok(multi.allShops.length === 2, '列出全部店铺供人工选择', multi.allShops.map(s => s.shopName).join('/'));
+
+  // 一个店铺都没有 → 明确报错
+  const noShop = async () => new Response(JSON.stringify({ count: 0, results: [] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } });
+  let msg = '';
+  try { await etsy.discoverShopId(mkClient(noShop), '48201937.tok'); } catch (e) { msg = e.message; }
+  ok(/没有查到任何店铺/.test(msg), '零店铺 → 明确报错', msg.slice(0, 46));
+  ok(/48201937/.test(msg), '报错里带出 user_id（便于排查）');
+
+  // token 格式不对
+  msg = '';
+  try { await etsy.discoverShopId(mkClient(noShop), 'badtoken'); } catch (e) { msg = e.message; }
+  ok(/user_id/.test(msg), 'token 格式异常 → 提示重新授权', msg.slice(0, 40));
+
+  // ★ 客户端的 shopId 必须动态取：授权前为空、发现后立刻能拿到。
+  //   若把 config.shopId 烤死进闭包，授权成功后客户端仍然拿不到 shop_id —— 这是本设计最容易踩的坑。
+  let sid = '';
+  const dyn = etsy.createClient({
+    config: {
+      keystring: 'ks', sharedSecret: 'ss', apiKeyHeader: 'ks:ss', shopId: '',
+      redirectUri: 'https://x/cb', allowWrite: false,
+      baseUrl: 'https://api.test/v3', tokenUrl: 'https://api.test/tk',
+    },
+    store: {
+      data: { accessToken: '48201937.tok', accessTokenExpiresAt: Date.now() + 3600e3, refreshToken: 'R' },
+      read() { return this.data; }, write() {},
+    },
+    shopIdProvider: () => sid,
+    fetchImpl: oneShop,
+  });
+  ok(dyn.shopId() === '', '发现前 shopId 为空');
+  sid = (await etsy.discoverShopId(dyn, '48201937.tok')).shopId;
+  ok(dyn.shopId() === '48201937', '★ 发现后同一客户端立即能拿到（动态取生效）', dyn.shopId());
+}
+
+// ========== 17. 状态接口的 shop_id 来源标记 ==========
+console.log('\n【17】状态接口：shop_id 来源与多店提示');
+{
+  if (!fs.existsSync(path.resolve(ROOT, SERVER_TEST))) {
+    console.log('  （跳过：未生成 ' + SERVER_TEST + '）');
+  } else {
+    const s1 = await callApi('GET', '/api/etsy/status');
+    ok(s1.code === 200, 'status → 200');
+    ok('shopIdSource' in (s1.json || {}), '返回 shopIdSource（env / auto / 空）');
+    ok('needShopChoice' in (s1.json || {}), '返回 needShopChoice（多店待指定标记）');
+    ok('shopName' in (s1.json || {}), '返回 shopName');
+    // 未配置时不应再把 ETSY_SHOP_ID 列为缺失项
+    const s2 = await callApi('GET', '/api/etsy/auth');
+    ok(s2.code === 400, '未配凭证时 /auth 仍 400');
+    ok(!/ETSY_SHOP_ID/.test(s2.json && s2.json.note || ''),
+      '★ 报错不再要求填 ETSY_SHOP_ID（它已自动发现）', (s2.json && s2.json.note || '').slice(0, 60));
+    ok(/ETSY_KEYSTRING/.test(s2.json && s2.json.note || ''), '仍然点名真正缺的那个变量');
+    // preflight 的报错要指向「当前真正缺的那一样」：
+    //  -什么都没配 → 报「缺 .env 变量」（此时提授权是误导，授权页本身也跳不过去）
+    //  - 配好了但没 shop_id → 报「先授权，授权成功会自动识别 shop_id」
+    const s3 = await callApi('POST', '/api/etsy/preflight', {});
+    ok(s3.code === 400, 'preflight 未配置时 400', 'code=' + s3.code);
+    ok(s3.json && s3.json.error === 'etsy_not_configured',
+      '★ 完全未配置时 → 报缺 .env 变量（不是「去授权」，那会误导）', s3.json && s3.json.error);
+    ok(s3.json && /ETSY_KEYSTRING/.test(s3.json.note || ''), '报错点名缺哪个变量');
+    ok(s3.json && !/ETSY_SHOP_ID/.test(s3.json.note || ''), '不要求填 ETSY_SHOP_ID（已自动发现）');
+  }
+}
+
 console.log('\n' + '='.repeat(76));
 console.log(`结果：通过 ${pass} 项，失败 ${fail} 项`);
 console.log('='.repeat(76));

@@ -101,14 +101,44 @@ const ETSY_OAUTH_STATE_FILE = join(DATA_DIR, 'etsy-oauth-state.json');
 const etsyStore = etsy.createTokenStore(ETSY_TOKEN_FILE, { readFileSync, writeFileSync, mkdirSync, renameSync });
 const etsyLog = (...a) => console.log('[etsy]', ...a);
 
+// ★ 自动发现到的 shop_id 也落盘（data/ 已gitignore）。
+//   为什么不在 .env 里：Etsy 界面上任何地方都不显示数字 shop_id，让操作者手工找不现实。
+//   授权成功后从 token 前缀取 user_id → 查 /users/{user_id}/shops 反查出来，存这里。
+//   优先级：.env 的 ETSY_SHOP_ID（多店时手动指定） > 自动发现并落盘的值。
+const ETSY_SHOP_FILE = join(DATA_DIR, 'etsy-shop.json');
+function readDiscoveredShop() {
+  try {
+    const d = JSON.parse(readFileSync(ETSY_SHOP_FILE, 'utf8'));
+    return { shopId: String(d.shopId || ''), shopName: d.shopName || '', userId: String(d.userId || ''), at: Number(d.at || 0) };
+  } catch { return { shopId: '', shopName: '', userId: '', at: 0 }; }
+}
+function writeDiscoveredShop(rec) {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = ETSY_SHOP_FILE + '.tmp';
+    writeFileSync(tmp, JSON.stringify(rec, null, 2), 'utf8');
+    renameSync(tmp, ETSY_SHOP_FILE);
+    return true;
+  } catch (e) { etsyLog('shop_id 落盘失败：' + (e && e.message)); return false; }
+}
+
 const etsyClient = etsy.createClient({
   config: ETSY_CFG,
   store: etsyStore,
   log: etsyLog,
+  // shop_id 动态取：客户端不再缓存配置里的值，而是每次问这个函数。
+  // 这样授权后即使 .env 里没填 ETSY_SHOP_ID，后续调用也能自动用上。
+  shopIdProvider: () => ETSY_CFG.shopId || readDiscoveredShop().shopId,
 });
 
 function etsyConfigured() {
-  return Boolean(ETSY_CFG.apiKeyHeader && ETSY_CFG.shopId && ETSY_CFG.redirectUri);
+  // shop_id 不再是「配置好的前提」：没填也能授权成功，之后由 discoverShopId 补上。
+  // 只有 keystring + redirectUri 才是硬前提。
+  return Boolean(ETSY_CFG.apiKeyHeader && ETSY_CFG.redirectUri);
+}
+
+function etsyCurrentShopId() {
+  return ETSY_CFG.shopId || readDiscoveredShop().shopId || '';
 }
 
 // 前置数据缓存实例（模块级，跨请求复用；6 小时自动过期）
@@ -123,16 +153,23 @@ let _etsyPendingAuth = null; // { state, verifier, at }
 
 function etsyAuthState() {
   const t = etsyStore.read();
+  const shop = readDiscoveredShop();
+  const sid = etsyCurrentShopId();
   return {
     configured: etsyConfigured(),
     hasCredentials: Boolean(ETSY_CFG.apiKeyHeader),
-    hasShopId: Boolean(ETSY_CFG.shopId),
+    hasShopId: Boolean(sid),
+    // shop_id 是自动发现的，页面上要能区分「需要先授权」和「已就绪」
+    shopIdSource: ETSY_CFG.shopId ? 'env' : (shop.shopId ? 'auto' : ''),
     hasRedirectUri: Boolean(ETSY_CFG.redirectUri),
     redirectUri: ETSY_CFG.redirectUri,
     scope: ETSY_CFG.scope,
     allowWrite: ETSY_CFG.allowWrite,
     authorized: Boolean(t.accessToken || t.refreshToken),
-    shopId: ETSY_CFG.shopId,
+    shopId: sid,
+    shopName: shop.shopName || '',
+    // 已授权但还没拿到 shop_id（多店场景需要人确认），前端据此提示选店
+    needShopChoice: Boolean(t.refreshToken) && !sid,
     accessTokenExpiresAt: t.accessTokenExpiresAt || 0,
     refreshTokenExpiresAt: t.refreshTokenExpiresAt || 0,
     // 距refresh token 过期不足 30 天就提示店主重新授权，避免某天早上突然全链路401
@@ -805,15 +842,41 @@ async function handleApi(req, res) {
       const rec = etsy.normalizeTokenResponse(d);
       etsyStore.write(rec);
       etsyLog('★授权成功，已拿到 token（refresh token 已落盘 ' + ETSY_TOKEN_FILE + '）');
-      // 立刻验证一下店铺 ID 是否与配置一致：不一致说明授权到了别的店铺，是最容易被忽略的坑
+
+      // ★ 自动发现 shop_id：从 token 前缀取 user_id → 查该用户的店铺。
+      //   这样操作者完全不用手工找shop_id（Etsy 界面上任何地方都不显示它）。
+      //   .env 里已填 ETSY_SHOP_ID 时以配置为准（多店场景指定用哪个店）。
       let shopHint = '';
-      try {
-        const shop = await etsyClient.get(`/shops/${ETSY_CFG.shopId}`);
-        shopHint = '已确认连上店铺：' + (shop.shop_name || ('shop_id=' + ETSY_CFG.shopId));
-      } catch (e) {
-        shopHint = '⚠️ token 已拿到，但读取店铺失败：' + e.message;
+      if (ETSY_CFG.shopId) {
+        try {
+          const shop = await etsyClient.get(`/shops/${ETSY_CFG.shopId}`);
+          shopHint = '已连上你在 .env 里指定的店铺：' + (shop.shop_name || ('shop_id=' + ETSY_CFG.shopId));
+          writeDiscoveredShop({ shopId: String(ETSY_CFG.shopId), shopName: shop.shop_name || '', userId: etsy.userIdFromToken(rec.accessToken) || '', at: Date.now() });
+        } catch (e) {
+          shopHint = '⚠️ token 已拿到，但读取 .env 里指定的店铺失败：' + e.message;
+        }
+      } else {
+        try {
+          const found = await etsy.discoverShopId(etsyClient, rec.accessToken);
+          if (found.ambiguous) {
+            // 一个账号多个店：绝不自动挑一个（可能把商品写错店），明确列出让店主选
+            const list = found.allShops.map(s => s.shopName + '（' + s.shopId + '）').join('、');
+            shopHint = '该账号下有多个店铺：' + list + '。为避免写错店，请联系管理员在 .env 里用 ETSY_SHOP_ID 指定其中一个。';
+            etsyLog('⚠️ 多店铺账号，需人工指定：' + list);
+          } else {
+            writeDiscoveredShop({ shopId: found.shopId, shopName: found.shopName, userId: found.userId, at: Date.now() });
+            shopHint = '已自动识别店铺：' + found.shopName + '（shop_id=' + found.shopId + '）。' +
+              (found.currencyCode ? '货币=' + found.currencyCode + '。' : '') +
+              '这个数字已自动保存，不需要你手工填。';
+            etsyLog('★已自动发现 shop_id=' + found.shopId + '（' + found.shopName + '），已落盘 ' + ETSY_SHOP_FILE);
+          }
+        } catch (e) {
+          // 授权本身是成功的，只是自动发现失败——不能因此让店主以为授权失败了
+          shopHint = '授权成功，但自动识别店铺失败：' + e.message + '。请把 .env 里的 ETSY_SHOP_ID 填上（店铺网址最后那串数字）。';
+          etsyLog('⚠️ 自动发现 shop_id 失败：' + e.message);
+        }
       }
-      return redirectWithMsg(res, '授权成功', shopHint + '。现在可以回工作台「Etsy 商品页」建草稿了。');
+      return redirectWithMsg(res, '授权成功', shopHint + ' 现在可以回工作台「Etsy 商品」页建草稿了。');
     } catch (e) {
       etsyLog('换 token 失败：' + e.message);
       return redirectWithMsg(res, '授权失败', e.message);
@@ -822,8 +885,19 @@ async function handleApi(req, res) {
 
   // 前置数据：店铺分区 / 配送模板 / 处理档案 / 店铺信息 —— 这四个 ID 是建草稿的必填项
   if (p === '/api/etsy/preflight' && req.method === 'POST') {
+    // ⚠️ 检查顺序：先看shop_id（= 授权过没有），再看凭证配没配。
+    //   反过来的话，"还没授权"会被"凭证没配"盖掉，提示方向就错了 ——
+    //   正确引导是「先点授权」，因为授权成功会自动带出 shop_id。
+    const _sid = etsyCurrentShopId();
+    if (etsyAuthState().authorized && !_sid) {
+      return json(res, 400, { error: 'shop_id_unknown', note: '已授权但不知道该用哪个店铺（可能是多店铺账号）。请在 .env 里加 ETSY_SHOP_ID 指定一个店后重启。' });
+    }
     if (!etsyConfigured()) {
-      return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 ETSY_KEYSTRING / ETSY_SHARED_SECRET / ETSY_SHOP_ID / ETSY_REDIRECT_URI。' });
+      return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 ETSY_KEYSTRING / ETSY_SHARED_SECRET / ETSY_REDIRECT_URI（.env），无法读取店铺数据。' });
+    }
+    const sid = _sid;
+    if (!sid) {
+      return json(res, 400, { error: 'shop_id_unknown', note: '还不知道你的 shop_id。请先完成一次授权（页面点「连接 Etsy 店铺」），授权成功时会自动识别并保存。' });
     }
     try {
       const b = await readJson(req);
@@ -831,7 +905,7 @@ async function handleApi(req, res) {
       const d = await pre.load(Boolean(b.force));
       return json(res, 200, {
         ok: true,
-        shopId: ETSY_CFG.shopId,
+        shopId: sid,
         shop: d.shop && !d.shop.__err ? {
           shop_id: d.shop.shop_id, shop_name: d.shop.shop_name, currency_code: d.shop.currency_code,
           num_listings_active: d.shop.num_listings_active, shop_url: d.shop.url,
@@ -1283,15 +1357,18 @@ server.listen(PORT, HOST, () => {
   // 避免操作者重启后到页面里才发现白发一通请求。
   if (etsyConfigured()) {
     const st = etsyAuthState();
-    console.log(`  etsy: ON (shop ${ETSY_CFG.shopId}, 已授权=${st.authorized}, 写操作=${st.allowWrite ? '开' : '关（ETSY_ALLOW_WRITE 未设）'})`);
-    if (!st.authorized) console.log('⚠️ etsy: 凭证已配但尚未授权，请在页面点「连接 Etsy 店铺」完成一次授权。');
+    const sid = st.shopId;
+    console.log(`  etsy: ON (${sid ? 'shop ' + sid + (st.shopName ? ' · ' + st.shopName : '') + '（来源：' + (st.shopIdSource === 'env' ? '.env' : '自动发现') + '）' : 'shop 未知'}, 已授权=${st.authorized}, 写操作=${st.allowWrite ? '开' : '关（ETSY_ALLOW_WRITE 未设）'})`);
+    if (!st.authorized) console.log('⚠️ etsy: 凭证已配但尚未授权，请在页面点「连接 Etsy 店铺」完成一次授权（授权成功时会自动识别 shop_id，不用手工填）。');
+    if (st.authorized && !sid) console.log('⚠️ etsy: 已授权但还不知道 shop_id（可能是多店铺账号）。请在 .env 加 ETSY_SHOP_ID 指定用哪个店后重启。');
     if (!ETSY_CFG.allowWrite) console.log('ℹ️ etsy: 写操作已关闭（安全默认）。要建草稿请在 .env 加 ETSY_ALLOW_WRITE=1 后重启。');
   } else {
     const miss = [];
     if (!ETSY_CFG.apiKeyHeader) miss.push('ETSY_KEYSTRING + ETSY_SHARED_SECRET');
-    if (!ETSY_CFG.shopId) miss.push('ETSY_SHOP_ID');
     if (!ETSY_CFG.redirectUri) miss.push('ETSY_REDIRECT_URI');
+    // 不再把 ETSY_SHOP_ID 列进缺失项：它会在授权成功时自动发现
     console.log('  etsy: OFF（缺 ' + miss.join('、') + '；不影响公众号与 AI 功能）');
+    console.log('ℹ️ etsy: ETSY_SHOP_ID 无需填写，授权成功时会从 token 自动识别并存盘。');
   }
 });
 
