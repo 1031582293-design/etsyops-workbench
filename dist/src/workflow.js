@@ -43,7 +43,19 @@ export function renderWfCanvas() {
     </div>
     ${i < e.nodes.length - 1 ? '<div class="connector"><div class="flow-line"></div></div>' : ''}
   `).join('');
-  $('#wfCanvas').innerHTML = head + `<div class="flow">${flow}</div>`;
+  // 公众号工作流是「可执行」的：底部挂真实运行台
+  const runBar = e.id === 'wechat' ? `
+    <div class="wf-runbar" id="wfRunBar"></div>
+    <div class="wf-confirm" id="wfConfirm" style="display:none"></div>
+    <div class="wf-history" id="wfHistory" style="display:none"></div>` : '';
+  $('#wfCanvas').innerHTML = head + `<div class="flow">${flow}</div>` + runBar;
+  if (e.id === 'wechat') {
+    // 动态 import，避免非公众号工作流加载这段逻辑
+    import('./wechat-run.js').then(m => {
+      m.paintWechatRunBar();
+      m.loadRunHistory('wechat');
+    }).catch(err => console.error('[wechat-run] 加载失败', err));
+  }
   $('#runBtn').onclick = () => runWorkflow();
   $('#resetBtn').onclick = () => { renderWfCanvas(); renderWfDetail(); };
 }

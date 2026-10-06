@@ -120,7 +120,7 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build bcf207b</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build 2bec32f</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
@@ -192,7 +192,13 @@
           <div style="margin-top:12px;display:flex;gap:10px">
             <button class="btn primary" id="genTitleBtn">✨ 生成候选标题</button>
           </div>
-          <div id="titleList" style="margin-top:12px;display:flex;flex-direction:column;gap:8px"></div>
+          <div id="titleTopBox" style="display:none;margin-top:12px;padding:12px;border:1px solid var(--border-strong);border-radius:12px;background:rgba(255,255,255,.02)">
+            <div style="font-size:11px;color:var(--text-faint);margin-bottom:6px">★ 最推荐标题（可直接编辑）</div>
+            <input id="titleTopInput" style="width:100%;padding:8px 10px;font-size:15px;font-weight:500;border-radius:8px">
+            <div id="titleTopNote" style="font-size:11px;color:var(--text-faint);margin-top:5px"></div>
+          </div>
+          <div style="font-size:11px;color:var(--text-faint);margin-top:12px" id="titleAltLabel">其他候选（点击替换）</div>
+          <div id="titleList" style="margin-top:8px;display:flex;flex-direction:column;gap:8px"></div>
         </div>
 
         <div style="border:1px solid var(--border);border-radius:14px;padding:14px">
@@ -778,14 +784,36 @@ $('#genTitleBtn').onclick = async ()=>{
     const d = await apiCall('/api/ai/title', { timeout: 90000, label: '生成标题',
       body: { draft, requirement: ($('#titleReq').value||'').trim() } });
     if(!d.titles || !d.titles.length) throw new Error('生成标题失败：后端未返回候选标题');
+    // 布局：最推荐放主框（可直接重选），其余作为候选项列在下方
+    const top = d.top || d.titles[0];
+    const rest = d.titles.filter(t=>t!==top);
+    $('#titleTopBox').style.display = 'block';
+    $('#titleTopInput').value = top;
+    $('#titleTopNote').textContent = '最推荐（画布一键运行会直接采用它）· '+top.length+' 字';
+    $('#title').value = top;
     const list = $('#titleList'); list.innerHTML = '';
-    d.titles.forEach(t=>{
+    rest.forEach(t=>{
       const el = document.createElement('div');
-      el.className = 'tpl'; el.style.width = '100%'; el.textContent = t;
-      el.onclick = ()=>{ $('#title').value = t; renderPreview(); document.querySelectorAll('#titleList .tpl').forEach(x=>x.classList.remove('active')); el.classList.add('active'); toast('已选用：'+t); };
+      el.className = 'tpl'; el.style.width = '100%';
+      el.innerHTML = '<div>'+t.replace(/[<>]/g,'')+'</div><div style="font-size:11px;opacity:.6;margin-top:2px">'+t.length+' 字</div>';
+      el.onclick = ()=>{
+        $('#titleTopInput').value = t;
+        $('#titleTopNote').textContent = '已改为手动选择 · '+t.length+' 字';
+        $('#title').value = t;
+        renderPreview();
+        list.querySelectorAll('.tpl').forEach(x=>x.classList.remove('active'));
+        el.classList.add('active');
+        toast('已选用：'+t);
+      };
       list.appendChild(el);
     });
-    toast('已生成 '+d.titles.length+' 个候选标题，点选填入');
+    // 主框改动同步到正式标题
+    $('#titleTopInput').oninput = e=>{
+      $('#title').value = e.target.value;
+      $('#titleTopNote').textContent = '已手动编辑 · '+e.target.value.length+' 字';
+      renderPreview();
+    };
+    toast('已生成 '+d.titles.length+' 个标题，最推荐已填入主框，可直接改或点候选替换');
   }catch(e){ toast('生成标题失败：'+e.message); }
   finally{ btn.disabled = false; btn.textContent = '✨ 生成候选标题'; }
 };
