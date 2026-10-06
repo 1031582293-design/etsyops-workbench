@@ -39,6 +39,47 @@ async function j(url, opts = {}) {
   } finally { clearTimeout(t); }
 }
 
+/* ---------- 文档格式解析（按需加载）----------
+   ★ docx / pdf 必须真正抽出文字。
+   旧实现只返回一句占位说明「（DOCX 文件：已载入）」，
+   于是 AI 收到的「素材」只有文件名 —— 它便自由发挥，
+   生成稿与上传内容完全对不上，标题还会被写成「揭秘《测试.docx》惊人发现」。
+   这里复用工具页那套库（mammoth / pdfjs），并做缓存避免重复加载。*/
+const CDN = 'https://cdn.jsdelivr.net/npm';
+const _scriptCache = {};
+function loadScript(src){
+  if (_scriptCache[src]) return _scriptCache[src];
+  _scriptCache[src] = new Promise((res, rej)=>{
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = ()=>res();
+    s.onerror = ()=>{ delete _scriptCache[src]; rej(new Error('解析库加载失败（需联网）')); };
+    document.head.appendChild(s);
+  });
+  return _scriptCache[src];
+}
+async function docxToText(buf){
+  await loadScript(CDN + '/mammoth@1.6.0/mammoth.browser.min.js');
+  if(!window.mammoth) throw new Error('mammoth 未就绪');
+  const r = await window.mammoth.convertToHtml({ arrayBuffer: buf });
+  const doc = new DOMParser().parseFromString(r.value, 'text/html');
+  return (doc.body.innerText || doc.body.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+}
+async function pdfToText(buf){
+  await loadScript(CDN + '/pdfjs-dist@3.11.174/build/pdf.min.js');
+  const pdfjsLib = window.pdfjsLib;
+  if(!pdfjsLib) throw new Error('pdfjs 未就绪');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = CDN + '/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  let out = '';
+  for (let i = 1; i <= doc.numPages; i++){
+    const page = await doc.getPage(i);
+    const tc = await page.getTextContent();
+    out += tc.items.map(it => it.str).join(' ') + '\n\n';
+  }
+  return out.trim();
+}
+
 /* ---------- 状态 ---------- */
 const RUN = {
   active: false,
@@ -161,10 +202,13 @@ async function readOne(f) {
     const doc = new DOMParser().parseFromString(await read(), 'text/html');
     return doc.body.innerText || doc.body.textContent || '';
   }
-  // docx / pdf 先给原文占位，提示到工具页用专用解析
-  if (n.endsWith('.docx') || n.endsWith('.pdf')) {
-    return '【' + f.name + '】\n（' + n.split('.').pop().toUpperCase() + ' 文件：已载入。'
-      + '如需自动抽取文字，请在「打开专用工具」页上传同名文件，那里支持 docx/pdf 解析。）';
+  if (n.endsWith('.docx')) {
+    try { return await docxToText(await read('buf')); }
+    catch (e) { throw new Error('docx 解析失败：' + e.message); }
+  }
+  if (n.endsWith('.pdf')) {
+    try { return await pdfToText(await read('buf')); }
+    catch (e) { throw new Error('pdf 解析失败：' + e.message); }
   }
   return await read();
 }
@@ -174,6 +218,18 @@ async function addFiles(list) {
     try {
       const t = await readOne(f);
       if (!t || !t.trim()) { log('⚠ ' + f.name + ' 内容为空，已跳过'); continue; }
+      // 极短内容（<20 字）通常是解析失败、或文件本身没有正文。
+      // 必须拦下并明确告知，否则 AI 只看到一句占位符就会自由发挥。
+      if (t.length < 20){
+        log('⚠ ' + f.name + ' 只解析出 ' + t.length + ' 字（可能不是正文文件），已跳过');
+        continue;
+      }
+      // 极短内容（<20 字）通常是解析失败、或文件本身就没有正文。
+      // 这种必须拦下并明确告知，否则 AI 只看到一句占位符就会自由发挥。
+      if (t.length < 20){
+        log('⚠ ' + f.name + ' 只解析出 ' + t.length + ' 字（可能不是正文文件），已跳过');
+        continue;
+      }
       RUN.files.push({ name: f.name, text: t });
       log('① 载入 ' + f.name + '（' + t.length + ' 字）');
     } catch (e) { log('⚠ ' + f.name + ' 读取失败：' + e.message); }

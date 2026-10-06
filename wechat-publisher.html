@@ -411,6 +411,27 @@ function mdToHtml(src){
   return html;
 }
 
+/* ---------- 发布结果固定提示条 ----------
+   之前发布结果只显示在弹窗里，而弹窗可能被长稿顶到屏幕外 →
+   用户点了「没反应」。现在无论滚动到哪，屏幕顶部固定显示结果。*/
+function showPublishBanner(ok, html){
+  let el = $('#pubBanner');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'pubBanner';
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);top:14px;z-index:10001;'
+      + 'max-width:min(760px,92vw);padding:14px 18px;border-radius:12px;font-size:13.5px;line-height:1.7;'
+      + 'box-shadow:0 10px 34px rgba(0,0,0,.28);display:none;word-break:break-all';
+    document.body.appendChild(el);
+  }
+  el.innerHTML = html;
+  el.style.display = 'block';
+  el.style.background = ok ? 'rgba(7,193,96,.96)' : 'rgba(214,40,74,.96)';
+  el.style.color = '#fff';
+  clearTimeout(el.__t);
+  el.__t = setTimeout(()=>{ el.style.display='none'; }, 12000);
+}
+
 /* ---------- 预览渲染 ---------- */
 /* ---------- 最小可用预览（lite）----------
    目标：无论稿件多长都能秒出、且绝不让页面卡住。
@@ -1318,7 +1339,11 @@ function showResp(html, ok){
   box.innerHTML = html;
 }
 $('#publish').onclick=async()=>{
+  const _pb = $('#publish');
   if(!$('#title').value.trim() || !$('#src').value.trim()){ toast('请先填写标题与正文'); return; }
+  // 立刻给反馈，别让用户以为没点上
+  _pb.disabled = true; _pb.textContent = '⏳ 发布中…';
+  showPublishBanner(true, '<b>正在发布到草稿箱…</b><br>请稍候，通常 3~10 秒。');
   const payload = buildPayload('');
   const req = `POST ${API_BASE}/api/wechat/draft
 {
@@ -1339,13 +1364,20 @@ $('#publish').onclick=async()=>{
     let draftId, real=backend.configured;
     if(real){ draftId = await publishReal(); }
     else { await new Promise(r=>setTimeout(r,600)); draftId = 'DR' + Date.now().toString(36).toUpperCase(); }
+    showPublishBanner(true, real
+      ? '<b>✅ 已写入真实草稿箱</b><br>media_id：' + String(draftId) + '<br>标题：' + payload.title
+      : '<b>⚠ 未配置凭证，未写入</b><br>后端 .env 需要 WECHAT_APPID / WECHAT_APPSECRET');
     showResp(real
       ? '✅ <b>已写入真实草稿箱</b><br>草稿 media_id：<code style="color:#04121a">'+draftId+'</code><br>标题：'+payload.title+'<br><a href="https://mp.weixin.qq.com" target="_blank" rel="noopener">前往公众号后台「草稿箱」查看并群发 →</a>'
       : '⚠ <b>未配置凭证，未写入</b><br>请在后端 .env 配置 WECHAT_APPID / WECHAT_APPSECRET 后重试真实写入。', true);
     toast(real?'已真实发布到草稿箱':'未配置凭证，发布被阻止');
   }catch(e){
+    showPublishBanner(false, '<b>❌ 发布失败</b><br>' + e.message
+      + '<br><span style="opacity:.9">常见原因：IP 未加白名单(40164)、账号未认证(48001)、封面素材无效(40007)</span>');
     showResp('❌ <b>发布失败</b><br>'+e.message+'<br><span style="opacity:.8">常见原因：IP 未加白名单(40164)、账号未认证(48001)、封面素材无效(40007)。</span>', false);
-    toast('发布失败，查看详情');
+    toast('发布失败，查看顶部提示');
+  } finally {
+    _pb.disabled = false; _pb.textContent = '📥 发布到草稿箱';
   }
 };
 $('#copyHtml').onclick=()=>{
