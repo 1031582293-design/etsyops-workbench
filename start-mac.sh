@@ -1,23 +1,158 @@
 #!/bin/bash
-# EtsyOps 后端 + Cloudflare Tunnel 一键启动（Mac / Linux）
-# 用法：./start-mac.sh
-set -e
+# ============================================================
+#  EtsyOps 后端 + Cloudflare Tunnel 一键启动（macOS）
+#  用法：在终端里 cd 到本目录，然后执行  ./start-mac.sh
+#  说明：本脚本零依赖，只需 Node.js 与 cloudflared
+# ============================================================
+set -u
 cd "$(dirname "$0")"
 
-# 1) 后台启动 Node 后端（server.js 读 .env 的 WECHAT_APPID/SECRET/API_KEY）
-echo "[1/2] 启动 Node 后端 (server.js) …"
-nohup node server.js > /tmp/etsyops-backend.log 2>&1 &
-echo "     后端 PID: $!  日志: /tmp/etsyops-backend.log"
+PORT="${PORT:-3000}"
+LOG="backend.log"
+ENV_FILE=".env"
 
-# 2) 启动 Cloudflare Tunnel（把本地 3000 暴露为公网地址）
-#    tunnel-token.txt 由你自己从 Cloudflare Zero Trust 控制台复制而来（已被 .gitignore 忽略）
-if [ ! -f tunnel-token.txt ]; then
-  echo "❌ 未找到 tunnel-token.txt"
-  echo "   请先到 Cloudflare Zero Trust → Networks → Tunnels 创建 tunnel，"
-  echo "   把 --token 后面的长串存进本目录的 tunnel-token.txt，再重跑。"
-  kill "$!" 2>/dev/null || true
-  exit 1
+say(){ printf '%s\n' "$*"; }
+ok(){ printf '  [ok] %s\n' "$*"; }
+warn(){ printf '  [提示] %s\n' "$*"; }
+die(){ printf '  [错误] %s\n' "$*"; printf '\n启动中止。\n'; exit 1; }
+
+printf '\n========================================\n'
+printf ' EtsyOps 后端启动  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+printf '========================================\n'
+
+# ---------- [1/5] 检查 node ----------
+say ""
+say "[1/5] 检查 Node.js…"
+if ! command -v node >/dev/null 2>&1; then
+  die "没找到 node。
+  安装方法（推荐用 Homebrew）：打开终端执行
+    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"
+  装完再重新打开终端，跑本脚本。"
 fi
-echo "[2/2] 启动 Cloudflare Tunnel …"
-echo "     隧道起来后，Zero Trust 控制台会显示稳定地址（即 WECHAT_API_BASE）"
-cloudflared tunnel run --no-autoupdate --token "$(cat tunnel-token.txt)" --url http://localhost:3000
+ok "node $(node -v)"
+
+# ---------- [2/5] 拉取最新代码 ----------
+say ""
+say "[2/5] 更新代码（git pull）…"
+if [ -d .git ]; then
+  GIT_SSH_COMMAND="ssh -i $HOME/.ssh/etsyops_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes" \
+    git pull 2>/dev/null \
+  || git pull https://gitee.com/fu-po-fa-cai/etsyops-workbench.git main 2>/dev/null \
+  || warn "自动更新失败（可能是离线），使用本地已有代码继续"
+  ok "代码已是最新"
+else
+  warn "非 git 目录，跳过更新"
+fi
+
+# ---------- [3/5] 检查配置 ----------
+say ""
+say "[3/5] 检查配置…"
+if [ ! -f "$ENV_FILE" ]; then
+  die "没找到 $ENV_FILE 。
+  它是存微信/AI 凭证的纯文本文件。
+  最省事的做法：让操作者把 Windows 上 etsyops 目录里的 .env 复制到 Mac 的这个目录。
+  格式大致如下（把等号后面换成真实值）：
+    WECHAT_APPID=wx1234567890abcdef
+    WECHAT_APPSECRET=你的AppSecret
+    WECHAT_AUTHOR=梦琦Mengqi
+    AI_API_KEY=智谱或DeepSeek的key
+    AI_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+    AI_MODEL=glm-4-flash-250414
+    AI_IMAGE_MODEL=cogview-3-flash
+  注意：这文件含密钥，不要发到聊天或提交进git（.gitignore 已忽略它）。"
+fi
+MISS=""
+for k in WECHAT_APPID WECHAT_APPSECRET AI_API_KEY AI_BASE_URL AI_MODEL; do
+  grep -qE "^${k}=" "$ENV_FILE" || MISS="$MISS $k"
+done
+if [ -n "$MISS" ]; then
+  warn "$ENV_FILE 里缺少这些配置：$MISS"
+  warn "缺少 AI_* 会导致生稿/生图不可用；缺少 WECHAT_* 会导致无法写入公众号草稿箱。"
+else
+  ok "配置齐全（凭证内容不回显）"
+fi
+
+# ---------- [4/5] 停掉旧进程 + 启动后端 ----------
+say ""
+say "[4/5] 启动后端（端口 ${PORT}）…"
+# 结束本目录上旧的 server.js（先试 lsof，失败再用 pkill 兜底）
+if command -v lsof >/dev/null 2>&1; then
+  OLD=$(lsof -ti tcp:"$PORT" 2>/dev/null || true)
+  if [ -n "$OLD" ]; then
+    kill $OLD 2>/dev/null || true
+    sleep 1
+    kill -9 $OLD 2>/dev/null || true
+    ok "已关闭占用 $PORT 端口的旧进程"
+  fi
+fi
+pkill -f "node .*$(pwd)/server.js" 2>/dev/null || true
+
+printf '\n==== 启动 %s ====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG"
+PORT="$PORT" nohup node server.js >> "$LOG" 2>&1 &
+NEWPID=$!
+sleep 2
+
+if ! kill -0 "$NEWPID" 2>/dev/null; then
+  say ""
+  say "—— $LOG 最后 15 行 ——"
+  tail -n 15 "$LOG"
+  die "后端启动失败，进程已退出。上面是日志内容。"
+fi
+ok "后端已启动（PID ${NEWPID}），日志写入 $LOG"
+
+# 探活确认真的起来了
+for i in 1 2 3 4 5; do
+  if curl -s -m 3 "http://127.0.0.1:$PORT/api/ping" >/dev/null 2>&1; then
+    ok "自检通过：/api/ping 有响应"
+    break
+  fi
+  sleep 1
+  if [ "$i" = "5" ]; then
+    warn "5 秒内 /api/ping 没响应。后端可能仍在启动，请稍后开浏览器看右上角状态。"
+  fi
+done
+
+# ---------- [5/5] Cloudflare 隧道 ----------
+say ""
+say "[5/5] Cloudflare 隧道…"
+if ! command -v cloudflared >/dev/null 2>&1; then
+  warn "没找到 cloudflared（跳过隧道）。后端已在本机 $PORT 端口可用。"
+  warn "安装：brew install cloudflared"
+  printf '\n后端已启动。日志：%s\n按 Ctrl+C 不会停止后端；要停就执行：kill %s\n\n' "$LOG" "$NEWPID"
+  exit 0
+fi
+ok "cloudflared $(cloudflared --version 2>&1 | head -1)"
+
+if [ ! -f tunnel-token.txt ]; then
+  warn "没找到 tunnel-token.txt（跳过隧道）。"
+  warn "后端已在本机 $PORT 端口可用，可用 http://localhost:$PORT 本地调试。"
+  warn "要让公网 api.mailili-agency.com 指向这台Mac，需要这个 token 文件。"
+  printf '\n后端已启动。日志：%s\n要停掉后端：kill %s\n\n' "$LOG" "$NEWPID"
+  exit 0
+fi
+
+TOKEN=$(tr -d ' \t\n\r' < tunnel-token.txt)
+if [ -z "$TOKEN" ]; then
+  warn "tunnel-token.txt 是空的（跳过隧道）。"
+else
+  # 隧道同样放后台，日志写 tunnel.log
+  printf '\n==== 启动 %s ====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> tunnel.log
+  nohup cloudflared tunnel --no-autoupdate run --token "$TOKEN" --url "http://localhost:$PORT" >> tunnel.log 2>&1 &
+  TUNPID=$!
+  sleep 4
+  if kill -0 "$TUNPID" 2>/dev/null; then
+    ok "隧道已启动（PID ${TUNPID}），日志 tunnel.log"
+  else
+    warn "隧道进程已退出，请看 tunnel.log 最后几行。"
+    tail -n 10 tunnel.log 2>/dev/null | sed 's/^/    /'
+  fi
+fi
+
+printf '\n========================================\n'
+printf '全部完成。\n'
+printf '  后端 PID : %s\n' "$NEWPID"
+printf '  本机地址 : http://localhost:%s\n' "$PORT"
+printf '  后端日志 : %s\n' "$LOG"
+printf '\n  停止后端 : kill %s\n' "$NEWPID"
+printf '  查看日志 : tail -f %s\n' "$LOG"
+printf '========================================\n\n'
