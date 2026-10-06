@@ -83,14 +83,20 @@ if command -v lsof >/dev/null 2>&1; then
     sleep 1
     kill -9 $OLD 2>/dev/null || true
     ok "已关闭占用 $PORT 端口的旧进程"
+  else
+    ok "${PORT} 端口干净，无需清理"
   fi
 fi
-pkill -f "node .*$(pwd)/server.js" 2>/dev/null || true
+# ⚠️ 不要再用 pkill -f 匹配绝对路径来杀旧后端：
+#   模式 "node .*/abs/path/server.js" 会把**刚启动的新进程**也匹配上（命令行同样含该路径），
+#   容易把新后端误杀 → 表现为「日志显示启动成功，几秒后进程消失、隧道 connection refused」。
+# 只按端口清理，安全可靠。
 
 printf '\n==== 启动 %s ====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG"
 PORT="$PORT" nohup node server.js >> "$LOG" 2>&1 &
 NEWPID=$!
-sleep 2
+# 等 3 秒再确认存活：有些失败是「起来后立刻退出」，只等 2 秒可能漏判
+sleep 3
 
 if ! kill -0 "$NEWPID" 2>/dev/null; then
   say ""
@@ -135,6 +141,12 @@ TOKEN=$(tr -d ' \t\n\r' < tunnel-token.txt)
 if [ -z "$TOKEN" ]; then
   warn "tunnel-token.txt 是空的（跳过隧道）。"
 else
+  # 先清掉旧隧道，避免越积越多（实测会同时跑两三个，白占连接、日志互相污染）
+  if pgrep -f "cloudflared tunnel" >/dev/null 2>&1; then
+    pkill -f "cloudflared tunnel" 2>/dev/null || true
+    sleep 2
+    ok "已关闭旧隧道进程"
+  fi
   # 隧道同样放后台，日志写 tunnel.log
   printf '\n==== 启动 %s ====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> tunnel.log
   nohup cloudflared tunnel --no-autoupdate run --token "$TOKEN" --url "http://localhost:$PORT" >> tunnel.log 2>&1 &
