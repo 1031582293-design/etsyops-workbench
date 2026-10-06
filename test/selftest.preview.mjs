@@ -58,18 +58,19 @@ console.log('\n【4】进入排版步才渲染（按需）');
   ok(html.includes("if(n===4){"), 'goStep 第4 步有专门处理');
   const i = html.indexOf("if(n===4){");
   const seg = html.slice(i, i + 400);
-  ok(seg.includes('if(__previewStale){ renderPreview();'), '进入排版步且预览过期时自动渲染一次');
-  ok(html.includes('id="reRenderBtn"'), '有「立即刷新预览」按钮');
-  ok(html.includes("toast('预览已刷新（'"), '刷新后提示耗时（可自行判断快慢）');
-  ok(html.includes('长稿首次渲染约需 1~2 秒'), '提示条说明了长稿首次渲染的预期耗时');
+  ok(!seg.includes('renderPreview(') && seg.includes("tip.style.display = 'block'"), '进入排版步不自动渲染，只显示提示条');
+  ok(html.includes('id="reRenderBtn"'), '有「刷新预览」按钮');
+  ok(html.includes('id="reRenderLiteBtn"'), '有「极速预览（不含图）」按钮');
+  ok(html.includes("'预览已更新'") && html.includes("'极速预览已更新'"), '两种模式都提示耗时');
+  ok(html.includes('极速预览不加载任何图片'), '提示条说明了极速预览的取舍');
 }
 
 console.log('\n【5】输入预览加防抖');
 {
   ok(html.includes('let __previewTimer = null;'), '有防抖计时器');
   ok(html.includes('if(__previewTimer) clearTimeout(__previewTimer);'), '重复输入会重置计时');
-  ok(html.includes('__previewTimer = setTimeout(()=>{ __previewTimer = null; renderPreview(); }, 400);'),
-     '停止输入 400ms 后才渲染一次');
+  ok(html.includes('__previewTimer = setTimeout(()=>{ __previewTimer = null; safeRenderLite(); }, 400);'),
+     '停止输入 400ms 后才渲染（且用 lite 模式）');
 }
 
 console.log('\n【6】渲染完成后清理过期标记');
@@ -86,9 +87,9 @@ console.log('\n【7】生稿后仍不渲染（前一轮的修复不能被破坏�
 
 console.log('\n【8】排版相关交互仍能触发渲染（功能不被削弱）');
 {
-  ok(html.includes("t.classList.add('active'); state.tpl=t.dataset.tpl; applyTplStyle(); renderPreview();"), '切模板仍实时预览');
-  ok(html.includes("s.classList.add('active'); state.color=s.dataset.c; renderPreview();"), '切配色仍实时预览');
-  ok(html.includes("s.classList.add('active'); state.size=+s.dataset.s; renderPreview();"), '切字号仍实时预览');
+  ok(html.includes("state.tpl=t.dataset.tpl; applyTplStyle(); safeRender(true);"), '切模板仍实时预览（走安全渲染）');
+  ok(html.includes("state.color=s.dataset.c; safeRender(true);"), '切配色仍实时预览（走安全渲染）');
+  ok(html.includes("state.size=+s.dataset.s; safeRender(true);"), '切字号仍实时预览（走安全渲染）');
 }
 
 
@@ -111,11 +112,11 @@ console.log('='.repeat(72));
   ok2(h2.includes('加载超时'), '超时有明确提示文案');
   ok2(c2.includes("img.style.display = 'none'"), '加载中先隐藏 img，避免未就绪阻塞');
   // 执行顺序：生图回调里先 img.style.display='none'，再调 loadCoverSafe()（内部才赋 src）
-  const _cb = h2.slice(h2.indexOf("$('#genCoverBtn').onclick"), h2.indexOf("$('#genCoverBtn').onclick") + 1800);
-  const _hi = _cb.indexOf("img.style.display = 'none'");
-  const _lo = _cb.indexOf('loadCoverSafe(img, src)');
-  ok2(_hi > 0 && _lo > _hi, '先隐藏 img 再触发加载（避免未就绪阻塞）', 'hide@' + _hi + ' load@' + _lo);
-  ok2(h2.indexOf('function loadCoverSafe') < h2.indexOf("$('#genCoverBtn').onclick"), 'loadCoverSafe 定义在调用之前（函数声明提升亦可，但顺序更清晰）');
+  const _fn = h2.slice(h2.indexOf('function loadCoverSafe'), h2.indexOf('function loadCoverSafe') + 700);
+  const _onload = _fn.indexOf('img.onload');
+  const _src= _fn.indexOf('img.src = src');
+  ok2(_onload > 0 && _src > _onload, '先绑 onload/onerror 再赋 src（顺序正确）', 'onload@' + _onload + ' src@' + _src);
+  ok2(h2.indexOf('function loadCoverSafe') < h2.indexOf("$('#genCoverBtn').onclick"), 'loadCoverSafe 定义在调用之前');
   ok2(h2.includes('img.complete && img.naturalWidth > 0'), '处理缓存命中的情况');
   ok2(h2.includes("'/api/wechat/upload-url'"), '生图后自动上传给微信（后端抓图，绕开浏览器）');
   ok2(h2.includes('可直接「跳过，去排版」') || h2.includes('可直接'), '提示可直接进入排版');

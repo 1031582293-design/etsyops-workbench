@@ -28,7 +28,14 @@ let MOCK = { '#title': '', '#src': '' };
 // 用 getter，确保每次取值都读最新 MOCK（否则空稿用例会沿用上一段的值）
 globalThis.$ = (sel) => ({ get value() { return MOCK[sel] ?? ''; } });
 
-const autoCoverScene = eval('(' + grabFn('autoCoverScene') + ')');
+// autoCoverScene 依赖 pickKeywords 与 COVER_DICT，需一并抽出来注入作用域
+const _di = html.indexOf('const COVER_DICT');
+const _a0 = html.indexOf('[', _di);
+let _d = 0, _a1 = _a0;
+for (let k = _a0; k < html.length; k++) { if (html[k] === '[') _d++; else if (html[k] === ']') { _d--; if (_d === 0) { _a1 = k; break; } } }
+const COVER_DICT = eval(html.slice(_a0, _a1 + 1));
+const pickKeywords = eval('(' + grabFn('pickKeywords') + ')');
+const autoCoverScene = eval('(function(COVER_DICT, pickKeywords){ return ' + grabFn('autoCoverScene') + '; })(COVER_DICT, pickKeywords)');
 
 console.log('='.repeat(72));
 console.log('封面图自测：自动提炼 + 风格');
@@ -55,8 +62,10 @@ console.log('\n【2】空稿 / 纯标记 应返回空（提示用户先生稿）
   ok(autoCoverScene() === '', '空标题空正文 → 返回空串', JSON.stringify(autoCoverScene()));
   MOCK['#title'] = ''; MOCK['#src'] = '====BODY====\n====RISK====';
   ok(autoCoverScene() === '', '只有标记没有正文 → 返回空串', JSON.stringify(autoCoverScene()));
-  MOCK['#title'] = '只有标题'; MOCK['#src'] = '';
-  ok(autoCoverScene() === '只有标题', '只有标题也可用', JSON.stringify(autoCoverScene()));
+  // 「只有标题」这类无意义词返回空是正确的；换有题材意义的标题验证
+  MOCK['#title'] = '手作蜡烛教程'; MOCK['#src'] = '';
+  const r1 = autoCoverScene();
+  ok(r1.includes('手作') || r1.includes('蜡烛'), '只有标题也能提炼出题材词', JSON.stringify(r1));
 }
 
 console.log('\n【3】风格库（应内置 5 套，含 tail 描述且无文字类要求）');
