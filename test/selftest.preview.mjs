@@ -91,6 +91,43 @@ console.log('\n【8】排版相关交互仍能触发渲染（功能不被削弱�
   ok(html.includes("s.classList.add('active'); state.size=+s.dataset.s; renderPreview();"), '切字号仍实时预览');
 }
 
+
+/* ===== 追加：封面图安全加载（22:25 新增） ===== */
+console.log('\n' + '='.repeat(72));
+console.log('封面图加载安全 自测');
+console.log('='.repeat(72));
+{
+  const h2 = fs.readFileSync('wechat-publisher.html', 'utf8');
+  const c2 = h2.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  let p2 = 0, f2 = 0;
+  const ok2 = (c, m, x = '') => { if (c) { p2++; console.log('  ✓ ' + m + (x ? '  ' + x : '')); } else { f2++; console.log('  ✗ ' + m + '  ' + x); } };
+
+  ok2(h2.includes('function loadCoverSafe('), '有安全加载函数');
+  ok2(h2.includes('function finishCoverImg('), '有加载结果处理函数');
+  ok2(h2.includes('id="coverLoading"'), '有「加载中」提示容器');
+  ok2(h2.includes("img.onload = "), '先绑 onload 再设 src');
+  ok2(h2.includes("img.onerror = "), '绑了 onerror');
+  ok2(h2.includes('setTimeout(') && /loadCoverSafe|finishCoverImg/.test(h2), '有超时兜底');
+  ok2(h2.includes('加载超时'), '超时有明确提示文案');
+  ok2(c2.includes("img.style.display = 'none'"), '加载中先隐藏 img，避免未就绪阻塞');
+  // 执行顺序：生图回调里先 img.style.display='none'，再调 loadCoverSafe()（内部才赋 src）
+  const _cb = h2.slice(h2.indexOf("$('#genCoverBtn').onclick"), h2.indexOf("$('#genCoverBtn').onclick") + 1800);
+  const _hi = _cb.indexOf("img.style.display = 'none'");
+  const _lo = _cb.indexOf('loadCoverSafe(img, src)');
+  ok2(_hi > 0 && _lo > _hi, '先隐藏 img 再触发加载（避免未就绪阻塞）', 'hide@' + _hi + ' load@' + _lo);
+  ok2(h2.indexOf('function loadCoverSafe') < h2.indexOf("$('#genCoverBtn').onclick"), 'loadCoverSafe 定义在调用之前（函数声明提升亦可，但顺序更清晰）');
+  ok2(h2.includes('img.complete && img.naturalWidth > 0'), '处理缓存命中的情况');
+  ok2(h2.includes("'/api/wechat/upload-url'"), '生图后自动上传给微信（后端抓图，绕开浏览器）');
+  ok2(h2.includes('可直接「跳过，去排版」') || h2.includes('可直接'), '提示可直接进入排版');
+  // 关键：不允许「直接给 img.src 赋值后不做任何兜底」的老写法
+  ok2(!/\$\('#coverImg'\)\.src = src;/.test(c2), '不再裸赋值 coverImg.src');
+  // 失败时必须仍然能继续
+  ok2(h2.includes('不影响后续'), '加载失败也明确告知可继续');
+
+  pass += p2; fail += f2;
+  console.log('\n  本组：通过 ' + p2 + ' 项，失败 ' + f2 + ' 项');
+}
+
 console.log('\n' + '='.repeat(72));
 console.log('结果：通过 ' + pass + ' 项，失败 ' + fail + ' 项');
 console.log('='.repeat(72));

@@ -225,6 +225,9 @@
           </div>
           <div id="coverAutoNote" class="ph-sub" style="margin-top:10px"></div>
           <div id="coverResult" style="margin-top:12px;display:none">
+            <div id="coverLoading" style="display:none;padding:26px 12px;text-align:center;background:rgba(255,255,255,.03);border:1px dashed var(--border);border-radius:12px;font-size:13px;color:var(--text-faint)">
+              图片加载中…（外网图片，最多等 12 秒）
+            </div>
             <img id="coverImg" style="width:100%;border-radius:12px;display:block" alt="cover" />
             <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
               <button class="btn" id="useCoverBtn">✅ 用作封面（上传微信）</button>
@@ -967,6 +970,35 @@ $('#saveCoverStyleBtn').onclick = ()=>{
 };
 renderCoverStyleRow();
 
+// 安全加载封面图：先 onload/onerror，再设 src；并给超时兜底。
+// 这样即使外网图永远加载不出来，也只是「预览不出图」，而不是整页卡死。
+function loadCoverSafe(img, src, timeoutMs){
+  timeoutMs = timeoutMs || 12000;
+  let done = false;
+  const ok = ()=>{ if(done) return; done=true; finishCoverImg(true); };
+  const bad = (why)=>{ if(done) return; done=true; finishCoverImg(false, why); };
+  const timer = setTimeout(()=>{ if(!done) bad('加载超时（外网图片 12 秒未响应）'); }, timeoutMs);
+  img.onload = ()=>{ clearTimeout(timer); ok(); };
+  img.onerror = ()=>{ clearTimeout(timer); bad('图片加载失败（可能是外网防盗链或网络拦截）'); };
+  img.src = src;
+  if(img.complete && img.naturalWidth > 0) ok();   // 缓存命中的情况
+}
+function finishCoverImg(success, why){
+  const st = $('#coverLoading');
+  if(success){
+    const img = $('#coverImg'); if(img) img.style.display = 'block';
+    if(st) st.style.display = 'none';
+  } else {
+    const st3 = $('#coverLoading');
+    if(st3){
+      st3.style.display = 'block';
+      st3.innerHTML = '⚠️封面图' + (why || '未能加载') + '。<br>'
+        + '不影响后续——封面已经上传给微信，可直接点「跳过，去排版」；<br>'
+        + '若需要本地查看，可用下方「⬇ 下载」。';
+    }
+  }
+}
+
 $('#genCoverBtn').onclick = async ()=>{
   if(!aiState.ok){ toast('后端未配置 AI，暂不能生图'); return; }
   const scene = autoCoverScene();
@@ -986,10 +1018,35 @@ $('#genCoverBtn').onclick = async ()=>{
     if(!d.url && !d.b64) throw new Error('生图失败：后端未返回图片数据');
     __lastCoverUrl = d.url || ''; __lastCoverB64 = d.b64 || '';
     const src = d.url || ('data:image/png;base64,'+d.b64);
-    $('#coverImg').src = src; $('#dlCover').href = src;
+    // ★ 关键：绝不能把外网 URL 直接赋给 <img>.src 就完事。
+    // 智谱返回的是 maas-watermark-prod-new.cn-wlcb.ufileos.com 这类外网地址，
+    // 浏览器加载它可能长时间挂起（DNS/TLS/防盗链/CSP 任一环节），
+    // 而 <img> 未就绪会让Edge 判定页面无响应，连「跳过，去排版」都点不动。
+    // 做法：先显示骨架与「加载中」，异步加载 + 12秒超时兜底，失败也给得出提示与下载入口。
     $('#coverResult').style.display = 'block';
+    const img = $('#coverImg');
+    img.style.display = 'none';
+    const st2 = $('#coverLoading');
+    if(st2) st2.style.display = 'block';
+    const dl = $('#dlCover'); if(dl){ dl.href = src; dl.style.display='inline-block'; }
     state.cover = d.url || '';
-    toast('封面图已生成（' + st.name + '）');
+    loadCoverSafe(img, src);
+    toast('封面图已生成（' + st.name + '），正在加载预览…');
+    // 关键补充：封面真正被用到的时机是「上传给微信拿 media_id」，
+    // 而这一步是**后端**去抓图（不经过浏览器），所以外网图在浏览器加载不出来
+    // 也完全不影响发布。这里自动跑一次上传，省得用户还要点按钮。
+    if(d.url && !d.b64){
+      try{
+        const up = await apiCall('/api/wechat/upload-url', { timeout: 90000, label: '封面上传',
+          body: { url: d.url } });
+        if(up.media_id){
+          state.thumbMediaId = up.media_id;
+          const box = $('#coverUp'); box.style.display = 'block';
+          box.innerHTML = '✅ 已上传为封面素材，media_id：<code style="color:#04121a">'+up.media_id+'</code><br>发布时会自动使用此封面。';
+          toast('封面已自动上传，可直接「跳过，去排版」');
+        }
+      }catch(ue){ toast('封面已生成（预览可能受限），可手动点「用作封面」上传：' + ue.message); }
+    }
   }catch(e){ toast('生图失败：'+e.message); }
   finally{ btn.disabled = false; btn.textContent = '🎨 自动生成封面图'; }
 };
