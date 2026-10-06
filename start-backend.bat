@@ -42,12 +42,40 @@ echo   [ok] 日志已写入 backend.log，崩溃原因看这个文件
 
 :step3
 echo [3/3] Cloudflare Tunnel 检查...
-sc query cloudflared >nul 2>nul
-if %errorlevel%==0 (
-  echo   [ok] 已安装 cloudflared 系统服务，由系统常驻隧道（无需本脚本再启动）
-  net start cloudflared >nul 2>nul
+REM ★ sc query 只要「服务已注册」就返回 0，不管它当前是 RUNNING 还是 STOPPED。
+REM   原代码据此直接打印「[ok] 隧道已就绪」并跳走，但服务若是 STOPPED/FAILED，
+REM   隧道其实压根没跑 —— 外部表现是 Cloudflare Error 1033（Tunnel 无法解析主机），
+REM   而启动窗口里却显示一切正常，排查时完全看不出问题（2026-10-07 凌晨实际踩到）。
+REM   改为：先看 STATE，只有 RUNNING 才算就绪；否则显式启动并复查。
+sc query cloudflared 2>nul | findstr /C:"STATE" >nul 2>nul
+if errorlevel 1 goto noSvc
+
+sc query cloudflared 2>nul | findstr /C:"RUNNING" >nul 2>nul
+if not errorlevel 1 (
+  echo   [ok] cloudflared 服务正在运行，隧道就绪
   goto tunnelDone
 )
+
+echo   [提示] cloudflared 服务已安装但未运行，正在尝试启动...
+net start cloudflared
+if errorlevel 1 (
+  echo   [错误] 启动 cloudflared 服务失败。
+  echo          这个错误会导致外部访问报 Cloudflare Error 1033。
+  echo          请手动检查：服务管理器 - cloudflared - 查看错误信息，
+  echo          或在新的命令行窗口手动跑：sc start cloudflared
+  goto tunnelFail
+)
+REM 启动后再确认一次，不信「命令返回码为 0」
+timeout /t 2 >nul
+sc query cloudflared 2>nul | findstr /C:"RUNNING" >nul 2>nul
+if errorlevel 1 (
+  echo   [错误] 启动命令返回成功但服务仍未运行
+  goto tunnelFail
+)
+echo   [ok] cloudflared 服务已启动，隧道就绪
+goto tunnelDone
+
+:noSvc
 where cloudflared >nul 2>nul
 if errorlevel 1 goto noCloudflared
 if not exist tunnel-token.txt goto noToken
@@ -57,9 +85,20 @@ set /p TUNNEL_TOKEN=<tunnel-token.txt
 echo.
 echo 后端已启动。团队访问 https://etsyops-workbench.pages.dev 即可真实发布。
 echo 关闭这两个最小化窗口会停止服务。
-echo 出口 IP 白名单：浏览器打开隧道地址下的 /api/wechat/ip 拿到 IP，加进公众号后台白名单。
+echo [tip] IP whitelist: open tunnel-url/api/wechat/ip, add that IP to WeChat MP whitelist.
 pause
 exit /b 0
+
+:tunnelFail
+echo.
+echo [错误] 隧道未运行，外部访问会报 Error 1033。
+echo        后端本身已启动，但无法被外部访问。
+echo.
+echo        请在新的命令行窗口手动跑这两条，把输出截图发我：
+echo          sc query cloudflared
+echo          sc start cloudflared
+pause
+exit /b 1
 
 :noNode
 echo [错误] 未找到 node，请先安装 Node.js 并加入 PATH
