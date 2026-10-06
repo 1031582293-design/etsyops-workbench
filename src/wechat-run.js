@@ -94,6 +94,8 @@ const RUN = {
   thumbMediaId: '',
   configName: '默认配置',   // 运行时由syncConfigName() 更新
   pausedAt: -1,
+  coverImgResult: null,   // 生图原始返回，供失败后续跑复用
+  lastFailStep: -1,        // 最近失败的步骤，供「从这里续跑」
 };
 
 const STEP_DEFS = [
@@ -161,7 +163,8 @@ function paintRunBar() {
     </div>
     <div class="wf-rb-row2">
       <div class="wf-cfg">本次配置 <b>${RUN.configName}</b> <span class="wf-hint">（在专用工具页调整后保存）</span></div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${RUN.lastFailStep >= 0 ? `<button class="btn" id="wfResume">↻ 从「${(STEP_DEFS[RUN.lastFailStep]||{}).title || '失败步'}」续跑</button>` : ''}
         <button class="btn" id="wfReset">清空</button>
         <button class="btn primary" id="wfRun" ${RUN.active ? 'disabled' : ''}>${RUN.active ? '⏳ 运行中…' : '▶ 运行'}</button>
       </div>
@@ -185,6 +188,11 @@ function paintRunBar() {
   }
   const run = $('#wfRun');
   if (run) run.onclick = () => startRun();
+  const rsm = $('#wfResume');
+  if (rsm) rsm.onclick = () => {
+    const from = RUN.lastFailStep;
+    if (from >= 0){ log('↻ 从「' + (STEP_DEFS[from]||{}).title + '」继续'); startRun(from); }
+  };
   const rst = $('#wfReset');
   if (rst) rst.onclick = () => { RUN.files = []; RUN.logs = []; RUN.steps = []; RUN.runId = ''; paintRunBar(); paintSteps(); };
 }
@@ -365,6 +373,38 @@ function parseArticle(raw) {
   };
 }
 
+/* 把封面图上传到微信素材库，拿到 thumb_media_id。
+   两种入参形态都支持：
+     · {b64} → POST /api/wechat/upload（base64 直传）
+     · {url} → POST /api/wechat/upload-url（后端抓远程图再上传）
+   智谱生图默认返回 url，所以后者才是主路径。
+   失败会重试：智谱/微信都可能有速率限制或瞬时抖动（错误码 1302）。*/
+async function uploadCoverWithRetry(r, log, tries){
+  tries = tries || 3;
+  let lastErr = '';
+  for (let i = 0; i < tries; i++){
+    if (i > 0){
+      const wait = i * 8000;
+      log('· 封面上传重试（等待 ' + Math.round(wait/1000) + ' 秒后进行第 ' + (i+1) + ' 次）');
+      await new Promise(x => setTimeout(x, wait));
+    }
+    try {
+      const up = r.b64
+        ? await j(API() + '/api/wechat/upload', { timeout: 120000,
+            body: { filename: 'cover.png', data: r.b64 } })
+        : await j(API() + '/api/wechat/upload-url', { timeout: 120000,
+            body: { url: r.url } });
+      if (up && up.media_id) return up.media_id;
+      lastErr = '后端未返回 media_id';
+    } catch (e) {
+      lastErr = e.message || String(e);
+      log('· 封面上传失败（第 ' + (i+1) + '/' + tries + ' 次）：' + lastErr);
+    }
+  }
+  log('✗ 封面上传最终失败：' + lastErr);
+  return '';
+}
+
 /* ---------- 主流程 ---------- */
 export async function startRun(fromStep) {
   if (RUN.active) return;
@@ -392,20 +432,36 @@ export async function startRun(fromStep) {
         RUN.steps[i] = { key: 'title', title: '生成标题', state: 'ok', ms: Date.now() - s0, note: '采用最推荐' };
         log('③ 标题（自动采用最推荐）：' + RUN.title);
       } else if (i === 3) {
-        const scene = RUN.title || RUN.article.slice(0, 40);
-        const r = await j(API() + '/api/ai/image', { timeout: 120000,
-          body: { prompt: '公众号文章首图，横向构图。画面主题：' + scene + '。清新文艺 ins 风格，柔和自然光，低饱和色，留白构图。画面中不要出现任何文字、水印、logo。', size: '1440x720' } });
+        // 续跑时若已有图，直接复用（不必重新生图：省钱、也避开速率限制）
+        let r = RUN.coverImgResult;
+        if (!r){
+          const scene = RUN.title || RUN.article.slice(0, 40);
+          r = await j(API() + '/api/ai/image', { timeout: 120000,
+            body: { prompt: '公众号文章首图，横向构图。画面主题：' + scene
+              + '。清新文艺 ins 风格，柔和自然光，低饱和色，留白构图。画面中不要出现任何文字、水印、logo。', size: '1440x720' } });
+          RUN.coverImgResult = r;      // 存起来供失败续跑
+        } else {
+          log('· 复用上一次生成的封面图（未重新生图）');
+        }
         if (r.b64) { RUN.thumbB64 = r.b64; }
         else if (r.url) { RUN.thumbUrl = r.url; }
         else throw new Error('未返回图片数据');
-        if (r.b64) {
-          const up = await j(API() + '/api/wechat/upload', { timeout: 120000,
-            body: { filename: 'cover.png', data: r.b64 } });
-          RUN.thumbMediaId = up.media_id || '';
+
+        // ★ 关键修复：原来只在「有 b64」时才上传素材。
+        //   但智谱 cogview 返回的是**远程 url、b64 为空**，
+        //   于是 RUN.thumbMediaId 永远为空 → 必然抛「封面已生成但上传素材失败」。
+        //   现在两种形态都支持：有 b64 走 /upload，无 b64 有 url 走 /upload-url。
+        RUN.steps[i] = { key:'cover', title:'生成封面', state:'run', ms:0, note:'正在上传素材给微信…' };
+        paintSteps();
+        if (!RUN.thumbMediaId) {
+          RUN.thumbMediaId = await uploadCoverWithRetry(r, log);
         }
         RUN.steps[i] = { key: 'cover', title: '生成封面', state: RUN.thumbMediaId ? 'ok' : 'fail', ms: Date.now() - s0,
-          note: RUN.thumbMediaId ? '已上传素材' : '仅本地预览' };
-        if (!RUN.thumbMediaId) throw new Error('封面已生成但上传素材失败，写草稿箱需要封面');
+          note: RUN.thumbMediaId ? '已上传素材给微信' : '上传失败' };
+        if (!RUN.thumbMediaId) {
+          throw new Error('封面已生成，但上传微信素材失败。'
+            + '可点「重试封面」再试一次（智谱生图有速率限制，稍等十几秒通常就好了）');
+        }
       } else if (i === 4) {
         RUN.steps[i] = { key: 'layout', title: '公众号排版', state: 'ok', ms: Date.now() - s0, note: RUN.words + ' 字' };
         log('④ 排版完成（' + RUN.words + ' 字）');
@@ -441,6 +497,7 @@ export async function startRun(fromStep) {
     const d = STEP_DEFS[RUN.step];
     RUN.steps[RUN.step] = Object.assign({}, RUN.steps[RUN.step] || { key: d.key, title: d.title },
       { state: 'fail', note: e.message });
+    RUN.lastFailStep = RUN.step;
     paintRunBar(); paintSteps();
     log('✗ ' + d.title + ' 失败：' + e.message);
     await patchRun('failed');
