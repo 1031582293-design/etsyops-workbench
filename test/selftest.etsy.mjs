@@ -970,6 +970,42 @@ console.log('\n【21】连通性自检接口（排查「网络到底通不通」
   ok(r2.json && r2.json.pid === j.pid && r2.json.startedAt === j.startedAt,
     '同一进程内身份稳定（pid / startedAt 不变）');
 }
+// ========== 22. 远程日志读取（diag/logs） ==========
+// 动机：整晚排查都在做「让用户截图 → 把报错文字转述回来」，而故障往往在另一台机器上。
+// 隧道通之后开发者可以直接拉日志原文，不用再靠截图。
+{
+  const r = await callApi('GET', '/api/diag/logs?file=backend&lines=50');
+  ok(r.code === 200, 'diag/logs 返回 200（不需要凭证）', 'code=' + r.code);
+  ok(r.json && typeof r.json.content === 'string', '返回 content 字符串');
+  ok(r.json && r.json.file === 'backend.log', '回显文件名', r.json && r.json.file);
+  ok(r.json && /远端机器/.test(r.json.note || ''), 'note 说明来自哪台机器');
+
+  const t = await callApi('GET', '/api/diag/logs?file=tunnel&lines=30');
+  ok(t.code === 200, '可读 tunnel.log', 'code=' + t.code);
+  ok(t.json && t.json.file === 'tunnel.log', 'tunnel 文件名正确');
+
+  // ★ 安全边界：只接受白名单里的两个名字，绝不能变成任意文件读取器
+  for (const bad of ['.env', '../.env', '/etc/passwd', '../../etc/hosts']) {
+    const b = await callApi('GET', '/api/diag/logs?file=' + encodeURIComponent(bad));
+    ok(b.code === 400, '★ 拒绝读取任意路径：' + bad, 'code=' + b.code);
+    ok(b.json && b.json.error === 'bad_file', '  错误码明确');
+  }
+  // 目录穿越换个编码形式也要挡住
+  const enc = await callApi('GET', '/api/diag/logs?file=..%2F.env');
+  ok(enc.code === 400 || (enc.json && !/APPID|SECRET|KEYSTRING/.test(enc.json.content || '')),
+    '★ URL 编码后的穿越也被挡住', 'code=' + enc.code);
+
+  // token 片段必须被掩码 —— 这个接口本身不能成为泄露源
+  const leak = await callApi('GET', '/api/diag/logs?file=backend&lines=500');
+  ok(leak.json && !/(eyJ[A-Za-z0-9_-]{20,})/.test(leak.json.content || ''),
+    '★ 日志里的 token 片段已掩码（接口自身不成为泄露源）');
+
+  // lines 参数要被夹在安全区间
+  const big = await callApi('GET', '/api/diag/logs?file=backend&lines=99999');
+  ok(big.code === 200 && big.json.lines <= 500, 'lines 上限被夹住（防一次拉爆内存）', String(big.json && big.json.lines));
+  const small = await callApi('GET', '/api/diag/logs?file=backend&lines=1');
+  ok(small.code === 200 && small.json.lines >= 10, 'lines 下限被夹住', String(small.json && small.json.lines));
+}
 console.log('\n' + '='.repeat(76));
 console.log(`结果：通过 ${pass} 项，失败 ${fail} 项`);
 console.log('='.repeat(76));

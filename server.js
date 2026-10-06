@@ -445,7 +445,8 @@ async function handleApi(req, res) {
   // ★ connectivity 也要免 key：它是纯诊断接口（只发GET、不碰店铺数据），
   //   排查「授权失败」时往往还没配好凭证/没授权，那时正是最需要用它的时候。
   // whoami 与 connectivity 一样是纯诊断（不碰店铺数据），放在免 key 白名单里
-  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status', '/api/etsy/connectivity', '/api/etsy/whoami'];
+  // diag/logs 也是免key：排障时常常正好没配好凭证/没授权，那时最需要看日志
+  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status', '/api/etsy/connectivity', '/api/etsy/whoami', '/api/diag/logs'];
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status'
       && !ETSY_OPEN_PATHS.includes(p)) {
     const url = new URL(req.url, 'http://localhost');
@@ -847,6 +848,43 @@ async function handleApi(req, res) {
         : (reachable > 0
           ? '部分连通。授权只用到第一个目标；看它是否 reachable。'
           : '全部不通：这台机器连不上 Etsy。若你在用 VPN/代理，确认它已开启并接管了流量；若刚切换过网络，等它稳定后重试。'),
+    });
+  }
+
+  /* 诊断日志读取：运维时不该靠截图。
+   *
+   * 为什么加这个（2026-10-07 凌晨）：排查一整夜都在回复“截图→看到什么”，
+   * 而归因可能在另一台电脑上。当隧道走通后，开发者可以直接拉这个接口看到
+   *真实报错原文，不再需要用户截图转字。
+   *
+   * 安全边界：只返回自己产生的两个日志文件（backend.log / tunnel.log）的末尾N行，
+   * 不接受任何路径参数（否则能被用来读任意文件），不暴露日志中的密钥。
+   *不需要凭证（排查时常常正好没配好）。 */
+  if (p === '/api/diag/logs' && req.method === 'GET') {
+    const u = new URL(req.url, 'http://x');
+    const which = (u.searchParams.get('file') || 'backend').replace(/[^a-z]/g, '');
+    const lines = Math.max(10, Math.min(500, Number(u.searchParams.get('lines') || 120)));
+    // 固定白名单，绝不接受任意路径
+    const FILES = { backend: 'backend.log', tunnel: 'tunnel.log' };
+    const name = FILES[which];
+    if (!name) {
+      return json(res, 400, { error: 'bad_file', note: '只能读 backend 或 tunnel（?file=backend | ?file=tunnel）' });
+    }
+    const full = join(ROOT, name);
+    let content = '';
+    try {
+      const raw = readFileSync(full, 'utf8');
+      const arr = raw.split(/\r?\n/);
+      content = arr.slice(Math.max(0, arr.length - 1 - lines)).join('\n');
+    } catch {
+      content = `（${name}还不存在——后端可能从未在这个目录启动过，或路径不对）`;
+    }
+    return json(res, 200, {
+      ok: true, file: name, lines,
+      // ★ 掩掉可能出现在日志里的密钥片段：日志里曾打印过 scope 与授权 URL，
+      //   极端情况下 token 也可能被 dump 出来，接口本身不该成为泄露源。
+      content: content.replace(/(eyJ[A-Za-z0-9_-]{16,})/g, 'eyJ***(已掩码)'),
+      note: `这是远端机器 ${SERVER_ID.hostname} 上 ${name} 的末尾 ${lines} 行`,
     });
   }
 
