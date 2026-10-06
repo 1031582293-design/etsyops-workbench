@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { join, normalize, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
+import * as etsy from './etsy-api.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)));
 
@@ -82,6 +83,62 @@ function updateRun(id, patch) {
   arr[i] = Object.assign({}, arr[i], patch, { updatedAt: Date.now() });
   writeRuns(arr);
   return arr[i];
+}
+
+/* ===================== Etsy Open API v3（凭证留服务端） =====================
+   所有 Etsy 网络出口都在 etsy-api.js 里，本文件只负责：
+     1) 组装客户端（配置 + token 落盘 + 日志）
+     2) 把 /api/etsy/* 路由接出去
+   关键安全约定：
+     - shared secret / refresh token 永不出现在任何响应里；
+     - OAuth 回调（/api/etsy/callback）必须在 API_KEY 白名单里，
+       否则店主的浏览器从 Etsy 跳回来时没有 key，会被我们自己拦住 → 授权永远失败；
+     - 写操作额外受 ETSY_ALLOW_WRITE=1 开关限制（.env 控制），默认只读。*/
+
+const ETSY_CFG = etsy.etsyConfig(process.env);
+const ETSY_TOKEN_FILE = join(DATA_DIR, 'etsy-token.json');
+const ETSY_OAUTH_STATE_FILE = join(DATA_DIR, 'etsy-oauth-state.json');
+const etsyStore = etsy.createTokenStore(ETSY_TOKEN_FILE, { readFileSync, writeFileSync, mkdirSync, renameSync });
+const etsyLog = (...a) => console.log('[etsy]', ...a);
+
+const etsyClient = etsy.createClient({
+  config: ETSY_CFG,
+  store: etsyStore,
+  log: etsyLog,
+});
+
+function etsyConfigured() {
+  return Boolean(ETSY_CFG.apiKeyHeader && ETSY_CFG.shopId && ETSY_CFG.redirectUri);
+}
+
+// 前置数据缓存实例（模块级，跨请求复用；6 小时自动过期）
+const _etsyPreflight = etsy.createPreflight(etsyClient);
+function etsyPreflightFor(force) {
+  if (force) _etsyPreflight.invalidate();
+  return _etsyPreflight;
+}
+
+// 授权流程的临时状态（PKCE verifier + state）。生命周期只有一次授权，存内存即可（重启则需重新授权）。
+let _etsyPendingAuth = null; // { state, verifier, at }
+
+function etsyAuthState() {
+  const t = etsyStore.read();
+  return {
+    configured: etsyConfigured(),
+    hasCredentials: Boolean(ETSY_CFG.apiKeyHeader),
+    hasShopId: Boolean(ETSY_CFG.shopId),
+    hasRedirectUri: Boolean(ETSY_CFG.redirectUri),
+    redirectUri: ETSY_CFG.redirectUri,
+    scope: ETSY_CFG.scope,
+    allowWrite: ETSY_CFG.allowWrite,
+    authorized: Boolean(t.accessToken || t.refreshToken),
+    shopId: ETSY_CFG.shopId,
+    accessTokenExpiresAt: t.accessTokenExpiresAt || 0,
+    refreshTokenExpiresAt: t.refreshTokenExpiresAt || 0,
+    // 距refresh token 过期不足 30 天就提示店主重新授权，避免某天早上突然全链路401
+    refreshTokenExpiringSoon:
+      Boolean(t.refreshTokenExpiresAt) && t.refreshTokenExpiresAt - Date.now() < 30 * 24 * 3600 * 1000,
+  };
 }
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -324,7 +381,14 @@ async function handleApi(req, res) {
   // 前端 key 来自 Cloudflare 构建变量 WECHAT_API_KEY 或网址 ?apikey=；若后端设了而前端没带/带错会被统一拦截——下方给出明确区分的报错，避免与智谱 key 混淆。
   // 注意：/api/logs 不在下方白名单里 → 它属于「写操作级」保护，未设API_KEY 时也可读，
   // 一旦 .env 设了 API_KEY 则必须带 key，杜绝公网任何人读取后端日志。
-  if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status') {
+  // Etsy 的两个特殊放行：
+  //  - /api/etsy/callback：店主浏览器从 Etsy 跳回来时，地址栏里不可能带我们的 x-api-key，
+  //    若不放行 → 授权 100% 失败。它靠 state 校验防 CSRF，安全性由 state 承担。
+  //  - /api/etsy/status：前端首屏要靠它判断显示「未配置 / 未授权 / 已就绪」哪一屏，
+  //    它只返回布尔状态，不泄露任何密钥。
+  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/status'];
+  if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status'
+      && !ETSY_OPEN_PATHS.includes(p)) {
     const url = new URL(req.url, 'http://localhost');
     const provided = req.headers['x-api-key'] || url.searchParams.get('key');
     if (!provided) {
@@ -672,6 +736,302 @@ async function handleApi(req, res) {
     }
   }
 
+/* ===================== Etsy Open API v3 =====================
+     GET/POST  /api/etsy/status     配置与授权状态自检（不花API 额度）
+     GET       /api/etsy/auth       生成 PKCE 并302 跳 Etsy 授权页
+     GET       /api/etsy/callback   OAuth 回调（换 token；★必须在 API_KEY 白名单内）
+     POST      /api/etsy/preflight  拉店铺分区/配送模板/处理档案/店铺信息（缓存 6 小时）
+     GET       /api/etsy/taxonomy   按关键词搜类目，换真实 taxonomy_id
+     GET       /api/etsy/properties 查某类目下可选属性
+     POST      /api/etsy/validate   本地校验标题/标签/必填项（不花额度）
+     POST      /api/etsy/draft      建草稿 + 传图 + 属性 + 库存（★停在 draft）
+     POST      /api/etsy/publish    单独一步 state=active（★上架费在这一步才产生）
+     POST      /api/etsy/deactivate 下架止损（比删除温和）
+     GET       /api/etsy/inventory  读线上整表库存（改库存前必须先读）
+     POST      /api/etsy/inventory  整表覆盖式改库存（内部会 GET→合并→PUT）
+  */
+
+  // 授权状态自检：不消耗任何 Etsy 额度，前端首屏就调它决定显示哪一屏
+  if (p === '/api/etsy/status' && req.method === 'GET') {
+    return json(res, 200, Object.assign({ ok: true, serverVersion: SERVER_VERSION }, etsyAuthState()));
+  }
+
+  // 发起授权：生成 PKCE 对，302 跳 Etsy 授权页。
+  // 店主只需在浏览器点一次「同意」，90 天内不用再来。
+  if (p === '/api/etsy/auth' && req.method === 'GET') {
+    if (!ETSY_CFG.keystring) {
+      return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 ETSY_KEYSTRING / ETSY_SHARED_SECRET（请在 .env 填写后重启后端）。' });
+    }
+    if (!ETSY_CFG.redirectUri) {
+      return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 ETSY_REDIRECT_URI（必须是已在 Etsy App 里登记的 https 地址）。' });
+    }
+    try {
+      const state = etsy.b64url(etsy.randomVerifier(24));
+      const verifier = etsy.randomVerifier(64);
+      const codeChallenge = await etsy.pkceChallenge(verifier);
+      _etsyPendingAuth = { state, verifier, at: Date.now() };
+      etsyLog('已生成 PKCE，跳转授权页scope=' + ETSY_CFG.scope);
+      res.writeHead(302, {
+        Location: etsy.buildAuthorizeUrl(ETSY_CFG, { state, codeChallenge }),
+        'Cache-Control': 'no-store',
+      });
+      return res.end();
+    } catch (e) {
+      return json(res, 500, { error: 'etsy_auth_error', note: e.message });
+    }
+  }
+
+  // OAuth 回调：Etsy 带着 code 跳回来。必须免 API_KEY（浏览器从 Etsy 跳过来时没有我们的 key）。
+  if (p === '/api/etsy/callback' && req.method === 'GET') {
+    const u = new URL(req.url, 'http://localhost');
+    const code = u.searchParams.get('code') || '';
+    const state = u.searchParams.get('state') || '';
+    const deny = u.searchParams.get('error') || '';
+
+    if (deny) {
+      etsyLog('店主拒绝了授权：' + deny);
+      return redirectWithMsg(res, '授权被拒绝', '你在 Etsy 上点了「拒绝」，没有拿到访问权限。');
+    }
+    if (!code) return redirectWithMsg(res, '缺少授权码', 'Etsy 没有返回 code，请重新点一次授权。');
+
+    const pend = _etsyPendingAuth;
+    _etsyPendingAuth = null; // 一次性，无论成败都清掉
+    if (!pend || pend.state !== state) {
+      return redirectWithMsg(res, '授权校验失败', 'state 不匹配（可能是这次授权请求不是本后端发起的，或已超时）。请重新点一次授权。');
+    }
+
+    try {
+      const d = await etsy.exchangeCode(ETSY_CFG, { code, verifier: pend.verifier }, fetch);
+      const rec = etsy.normalizeTokenResponse(d);
+      etsyStore.write(rec);
+      etsyLog('★授权成功，已拿到 token（refresh token 已落盘 ' + ETSY_TOKEN_FILE + '）');
+      // 立刻验证一下店铺 ID 是否与配置一致：不一致说明授权到了别的店铺，是最容易被忽略的坑
+      let shopHint = '';
+      try {
+        const shop = await etsyClient.get(`/shops/${ETSY_CFG.shopId}`);
+        shopHint = '已确认连上店铺：' + (shop.shop_name || ('shop_id=' + ETSY_CFG.shopId));
+      } catch (e) {
+        shopHint = '⚠️ token 已拿到，但读取店铺失败：' + e.message;
+      }
+      return redirectWithMsg(res, '授权成功', shopHint + '。现在可以回工作台「Etsy 商品页」建草稿了。');
+    } catch (e) {
+      etsyLog('换 token 失败：' + e.message);
+      return redirectWithMsg(res, '授权失败', e.message);
+    }
+  }
+
+  // 前置数据：店铺分区 / 配送模板 / 处理档案 / 店铺信息 —— 这四个 ID 是建草稿的必填项
+  if (p === '/api/etsy/preflight' && req.method === 'POST') {
+    if (!etsyConfigured()) {
+      return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 ETSY_KEYSTRING / ETSY_SHARED_SECRET / ETSY_SHOP_ID / ETSY_REDIRECT_URI。' });
+    }
+    try {
+      const b = await readJson(req);
+      const pre = etsyPreflightFor(b.force);
+      const d = await pre.load(Boolean(b.force));
+      return json(res, 200, {
+        ok: true,
+        shopId: ETSY_CFG.shopId,
+        shop: d.shop && !d.shop.__err ? {
+          shop_id: d.shop.shop_id, shop_name: d.shop.shop_name, currency_code: d.shop.currency_code,
+          num_listings_active: d.shop.num_listings_active, shop_url: d.shop.url,
+        } : { error: d.shop && d.shop.__err },
+        sections: (d.sections.results || []).map(s => ({ id: s.shop_section_id, title: s.title, num: s.num_listings })),
+        shippingProfiles: (d.shipping.results || []).map(s => ({ id: s.shipping_profile_id, title: s.title, origin: s.origin_country_iso, delivery: s.delivery_time_min, maxDelivery: s.delivery_time_max })),
+        readinessStates: (d.readiness.results || []).map(s => ({ id: s.readiness_state_id, title: s.title, processing_min: s.processing_time_min, processing_max: s.processing_time_max, is_made_to_order: s.is_made_to_order })),
+        warnings: [
+          d.sections.__err && '店铺分区读取失败：' + d.sections.__err,
+          d.shipping.__err && '配送模板读取失败：' + d.shipping.__err,
+          d.readiness.__err && '处理档案读取失败：' + d.readiness.__err,
+        ].filter(Boolean),
+        note: '实物商品建草稿必须有 shipping_profile_id 与 readiness_state_id；类目 taxonomy_id 请用 /api/etsy/taxonomy 按关键词查。',
+      });
+    } catch (e) {
+      etsyLog('preflight 失败：' + e.message);
+      return json(res, 502, { error: 'etsy_error', note: e.message });
+    }
+  }
+
+  // 类目搜索：AI 给的类目名只是候选，必须换成真实 taxonomy_id 才能建草稿
+  if (p === '/api/etsy/taxonomy' && req.method === 'GET') {
+    const u = new URL(req.url, 'http://localhost');
+    try {
+      const r = await etsy.searchTaxonomy(etsyClient, u.searchParams.get('q') || '', 25);
+      return json(res, 200, { ok: true, count: r.length, results: r });
+    } catch (e) {
+      return json(res, 502, { error: 'etsy_error', note: e.message });
+    }
+  }
+
+  // 查某类目下的可选属性（做 Attributes 那步要用）
+  if (p === '/api/etsy/properties' && req.method === 'GET') {
+    const u = new URL(req.url, 'http://localhost');
+    const tid = u.searchParams.get('taxonomy_id') || '';
+    if (!tid) return json(res, 400, { error: 'bad_request', note: '缺少 taxonomy_id' });
+    try {
+      const r = await etsy.taxonomyProperties(etsyClient, tid);
+      return json(res, 200, { ok: true, taxonomy_id: Number(tid), properties: r });
+    } catch (e) {
+      return json(res, 502, { error: 'etsy_error', note: e.message });
+    }
+  }
+
+  // 本地校验：能在建草稿之前拦下的错误，绝不浪费 API 额度（SOP 第 19 节）
+  if (p === '/api/etsy/validate' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const v = etsy.validateDraftInput(b);
+      const t = etsy.validateTitle(b.title);
+      const g = etsy.validateTags(b.tags);
+      return json(res, 200, {
+        ok: true,
+        canDraft: v.ok,
+        errors: v.errors,
+        title: t,
+        tags: g,
+        // 程序只能标记机械性问题，不能替人判断材质/授权/图片真实性（SOP 第 19 节明确要求）
+        manualChecks: [
+          '材质与认证是否有事实依据（AI 不能猜）',
+          '商品是否符合 Etsy 创意标准（自己制作 / 设计 / 采购）',
+          '图片权利与生产合作方角色是否已核实',
+          '每款总价与利润是否已按成本核算',
+          '配送承诺与处理时间是否真的能做到',
+        ],
+      });
+    } catch (e) {
+      return json(res, 400, { error: 'bad_request', note: e.message });
+    }
+  }
+
+  // 建草稿：传图 + 属性 + 库存一次做完，但**停在 draft**。
+  // 草稿不上架、不计上架费，可以放心在后台反复看。
+  if (p === '/api/etsy/draft' && req.method === 'POST') {
+    if (!etsyConfigured()) return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 Etsy 凭证。' });
+    try {
+      const b = await readJson(req);
+      const v = etsy.validateDraftInput(b);
+      if (!v.ok) {
+        return json(res, 400, { error: 'validation_failed', note: '建草稿前校验没通过（已阻止请求，未消耗 Etsy 额度）：', errors: v.errors });
+      }
+      const imgCount = (b.images || []).length;
+      if (imgCount > 20) {
+        return json(res, 400, { error: 'too_many_images', note: `图片 ${imgCount} 张，超过 Etsy 上限 20 张。` });
+      }
+      const _td = Date.now();
+      etsyLog('开始建草稿：' + (b.title || '').slice(0, 40) + '… 图片 ' + imgCount + ' 张');
+      const r = await etsy.draftListing(etsyClient, b);
+      etsyLog('★草稿已建 listing_id=' + r.listing_id + '（state=' + r.state + '）耗时 ' + ((Date.now() - _td) / 1000).toFixed(1) + 's');
+      return json(res, 200, {
+        ok: true,
+        listing_id: r.listing_id,
+        state: r.state,
+        images: r.images,
+        properties: r.properties,
+        inventory: r.inventory,
+        note: '草稿已建立，尚未发布（Etsy 上架费 $0.20 只在发布时产生）。请到 Shop Manager → Listings 里核对一遍，确认无误再点「确认发布」。',
+      });
+    } catch (e) {
+      etsyLog('建草稿失败：' + e.message);
+      return json(res, 502, { error: 'etsy_error', note: e.message, status: e.status || 0, etsy: e.etsy || null, rateLimit: e.rateLimit || null });
+    }
+  }
+
+  // 发布：单独一步，人工点确认才走。这里才会产生上架费。
+  if (p === '/api/etsy/publish' && req.method === 'POST') {
+    if (!etsyConfigured()) {
+      return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 Etsy 凭证（ETSY_KEYSTRING / ETSY_SHARED_SECRET / ETSY_SHOP_ID / ETSY_REDIRECT_URI）。' });
+    }
+    try {
+      const b = await readJson(req);
+      const lid = Number(b.listing_id || 0);
+      if (!lid) return json(res, 400, { error: 'bad_request', note: '缺少 listing_id' });
+      const _tp = Date.now();
+      etsyLog('★发布 listing ' + lid + '（上架费 $0.20 在这一步产生）');
+      const r = await etsy.publishListing(etsyClient, lid);
+      etsyLog('发布完成 state=' + r.state + ' 耗时 ' + ((Date.now() - _tp) / 1000).toFixed(1) + 's');
+      return json(res, 200, { ok: true, listing_id: lid, state: r.state, url: 'https://www.etsy.com/listing/' + lid, note: '已发布。Etsy 最多需要 48 小时才把它收录进搜索，这期间去买家端页面自查一遍首图裁切、变体价格与库存。' });
+    } catch (e) {
+      return json(res, 502, { error: 'etsy_error', note: e.message, status: e.status || 0 });
+    }
+  }
+
+  // 下架止损：发现价差/错误库存/误导图片时，先下架再改，别让错误持续接单
+  if (p === '/api/etsy/deactivate' && req.method === 'POST') {
+    if (!etsyConfigured()) {
+      return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 Etsy 凭证（ETSY_KEYSTRING / ETSY_SHARED_SECRET / ETSY_SHOP_ID / ETSY_REDIRECT_URI）。' });
+    }
+    try {
+      const b = await readJson(req);
+      const lid = Number(b.listing_id || 0);
+      if (!lid) return json(res, 400, { error: 'bad_request', note: '缺少 listing_id' });
+      const r = await etsy.deactivateListing(etsyClient, lid, String(b.reason || '').slice(0, 200));
+      etsyLog('已下架 listing ' + lid);
+      return json(res, 200, { ok: true, listing_id: lid, state: r.state, note: '已下架。链接保留但不参与搜索，也不会继续接单。' });
+    } catch (e) {
+      return json(res, 502, { error: 'etsy_error', note: e.message });
+    }
+  }
+
+  // 读线上整表库存 —— 改库存前必须先读它（Etsy 的 PUT 是整表覆盖）
+  if (p === '/api/etsy/inventory' && req.method === 'GET') {
+    const u = new URL(req.url, 'http://localhost');
+    const lid = Number(u.searchParams.get('listing_id') || 0);
+    if (!lid) return json(res, 400, { error: 'bad_request', note: '缺少 listing_id' });
+    try {
+      const mv = Number(u.searchParams.get('max_variations_supported') || 3);
+      const d = await etsy.getInventory(etsyClient, lid, mv);
+      return json(res, 200, {
+        ok: true,
+        listing_id: lid,
+        products: (d.products || []).map(p => ({
+          sku: p.sku,
+          property_values: p.property_values,
+          offerings: (p.offerings || []).map(o => ({
+            offering_id: o.offering_id,
+            quantity: o.quantity,
+            is_enabled: o.is_enabled,
+            price: o.price ? o.price.amount / (o.price.divisor || 100) : null,
+          })),
+        })),
+        price_on_property: d.price_on_property || [],
+        quantity_on_property: d.quantity_on_property || [],
+        sku_on_property: d.sku_on_property || [],
+        note: '这是线上当前的完整库存表。修改时只会替换你指定的变体，其余行会原样保留 —— 但前提是不要跳过这一步直接盲改。',
+      });
+    } catch (e) {
+      return json(res, 502, { error: 'etsy_error', note: e.message });
+    }
+  }
+
+  // 改库存：内部强制「GET 整表 → 内存合并 → 整表 PUT」，杜绝只提交一行把其他商品误删
+  if (p === '/api/etsy/inventory' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const lid = Number(b.listing_id || 0);
+      if (!lid) return json(res, 400, { error: 'bad_request', note: '缺少 listing_id' });
+      if (!Array.isArray(b.patches) || !b.patches.length) {
+        return json(res, 400, { error: 'bad_request', note: '缺少 patches（要修改的变体数组）' });
+      }
+      const mv = Number(b.max_variations_supported || 3);
+      const cur = await etsy.getInventory(etsyClient, lid, mv);
+      const merged = etsy.mergeInventory(cur, b.patches);
+      const q = { max_variations_supported: String(mv) };
+      await etsyClient.put(`/listings/${lid}/inventory`, { json: merged.body, query: q });
+      etsyLog('库存已更新 listing ' + lid + '：改了 ' + merged.applied + ' 个变体，保留 ' + merged.untouched + ' 个');
+      return json(res, 200, {
+        ok: true, listing_id: lid,
+        applied: merged.applied, untouched: merged.untouched, total: merged.total,
+        note: `已整表提交：修改 ${merged.applied} 个变体，原样保留 ${merged.untouched} 个。`,
+      });
+    } catch (e) {
+      etsyLog('改库存失败：' + e.message);
+      return json(res, 502, { error: 'etsy_error', note: e.message, status: e.status || 0 });
+    }
+  }
+
+
+  // ★ Etsy 路由必须放在下面这个「公众号未配置」闸门**之前**：
+//   否则只配了 Etsy、没配公众号的部署会在这里被提前 400 拦掉，Etsy 功能整体不可用。
   if (!wechatConfigured()) {
     return json(res, 400, { error: 'not_configured', note: '服务端未配置公众号凭证（WECHAT_APPID / WECHAT_APPSECRET）。' });
   }
@@ -760,7 +1120,29 @@ async function handleApi(req, res) {
     }
   }
 
-  return json(res, 404, { error: 'not_found' });
+    return json(res, 404, { error: 'not_found' });
+}
+
+// OAuth 回调后的落地页：给店主一句人话，不丢一个裸 404
+function redirectWithMsg(res, title, msg) {
+  const html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title}</title>
+<style>body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f7f8fa;margin:0;padding:60px 20px;display:flex;justify-content:center}
+.card{max-width:520px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:36px}
+h1{font-size:20px;margin:0 0 14px}p{font-size:14px;line-height:1.7;color:#374151;margin:0 0 12px}
+.code{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;font-size:13px;color:#111827;word-break:break-all}
+a{display:inline-block;margin-top:18px;font-size:14px;color:#2563eb;text-decoration:none}</style></head>
+<body><div class="card"><h1>${title}</h1><p>${msg}</p>
+<p class="code">/api/etsy/callback</p>
+<a href="https://etsyops-workbench.pages.dev/">← 回到工作台</a></div></body></html>`;
+  const buf = Buffer.from(html, 'utf8');
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': buf.length,
+    'Cache-Control': 'no-store',
+  });
+  res.end(buf);
 }
 
 function json(res, code, obj) {
@@ -834,6 +1216,20 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`EtsyOps server running at http://${HOST}:${PORT} (wechat proxy: ${wechatConfigured() ? 'ON' : 'OFF'}, ai: ${aiConfigured() ? AI_MODEL : 'OFF'}, image: ${aiConfigured() ? AI_IMAGE_MODEL : 'OFF'})`);
+  // Etsy 侧的启动自检：把「缺哪个变量导致 Etsy 用不了」在启动时就打清楚，
+  // 避免操作者重启后到页面里才发现白发一通请求。
+  if (etsyConfigured()) {
+    const st = etsyAuthState();
+    console.log(`  etsy: ON (shop ${ETSY_CFG.shopId}, 已授权=${st.authorized}, 写操作=${st.allowWrite ? '开' : '关（ETSY_ALLOW_WRITE 未设）'})`);
+    if (!st.authorized) console.log('⚠️ etsy: 凭证已配但尚未授权，请在页面点「连接 Etsy 店铺」完成一次授权。');
+    if (!ETSY_CFG.allowWrite) console.log('ℹ️ etsy: 写操作已关闭（安全默认）。要建草稿请在 .env 加 ETSY_ALLOW_WRITE=1 后重启。');
+  } else {
+    const miss = [];
+    if (!ETSY_CFG.apiKeyHeader) miss.push('ETSY_KEYSTRING + ETSY_SHARED_SECRET');
+    if (!ETSY_CFG.shopId) miss.push('ETSY_SHOP_ID');
+    if (!ETSY_CFG.redirectUri) miss.push('ETSY_REDIRECT_URI');
+    console.log('  etsy: OFF（缺 ' + miss.join('、') + '；不影响公众号与 AI 功能）');
+  }
 });
 
 // 定期清理 10 分钟前受理但从未被查询的生稿任务，防止 Map 无限增长

@@ -21,6 +21,7 @@ export const EMPLOYEES = [
     id: 'lister', name: 'Listing 优化师', role: 'Listing Optimizer', cat: '电商', icon: '📝',
     color: 'linear-gradient(135deg,#22d3ee,#34d399)', status: 'run',
     tagline: '基于 SEO 与转化心理学重写标题、标签与描述，提升搜索曝光与下单率。',
+    tool: 'etsy-publisher.html',
     nodes: [
       { t: '关键词研究', skill: 'Keyword Miner', sop: '挖掘高转化长尾词并去重聚类', d: '按搜索量/竞争度筛选 13 个核心词。', out: '关键词矩阵' },
       { t: '标题生成', skill: 'Title Forge', sop: '遵循 Etsy 标题权重规则生成多版本', d: 'A/B 双标题供测试。', out: '标题方案 ×2' },
@@ -30,7 +31,7 @@ export const EMPLOYEES = [
     ],
     deliverables: [
       { t: 'Listing 优化稿', d: '标题+13标签+描述，预计曝光 +42%' },
-      { t: '首图拍摄脚本', d: '3 张场景图分镜' }
+      { t: '上架工具（已打通 Etsy API）', d: 'etsy-publisher.html · 本地校验→写入 Etsy 草稿→人工确认后发布' }
     ]
   },
   {

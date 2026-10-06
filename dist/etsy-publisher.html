@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>EtsyOps · Etsy 商品上架</title>
+<script src="./config.js"></script>
+<style>
+  :root{
+    --bg:#0b0e1a; --bg2:#0f1426; --panel:rgba(255,255,255,.045); --panel-2:rgba(255,255,255,.07);
+    --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.18);
+    --text:#eaf0ff; --text-dim:#aab3d0; --text-faint:#6b7596;
+    --grad:linear-gradient(135deg,#f1641e,#ffb86b); --accent:#ffb86b; --accent-2:#f1641e;
+    --good:#34d399; --warn:#ffb86b; --bad:#ff6b81; --etsy:#f1641e;
+    --radius:18px; --radius-sm:13px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:radial-gradient(1200px 700px at 12% -8%,rgba(241,100,30,.20),transparent 60%),
+      radial-gradient(1000px 600px at 100% 0%,rgba(255,184,107,.14),transparent 55%),var(--bg);
+    color:var(--text);min-height:100vh;padding:22px 26px 60px}
+  a{color:var(--accent)}
+  .topbar{display:flex;align-items:center;gap:14px;margin-bottom:20px;flex-wrap:wrap}
+  .logo{width:46px;height:46px;border-radius:13px;background:var(--grad);display:grid;place-items:center;font-size:22px}
+  .topbar h1{font-size:19px;margin:0;font-weight:800}
+  .topbar .sub{font-size:12.5px;color:var(--text-dim)}
+  .badge{font-size:11px;font-weight:700;color:#fff;background:var(--etsy);padding:4px 10px;border-radius:999px}
+  .topbar .spacer{flex:1}
+  .vtag{font-size:11px;color:var(--text-faint);border:1px solid var(--border);padding:4px 10px;border-radius:999px}
+
+  /* 状态屏 */
+  .gate{max-width:760px;margin:40px auto;background:var(--panel);border:1px solid var(--border);
+    border-radius:var(--radius);padding:34px}
+  .gate h2{margin:0 0 8px;font-size:20px}
+  .gate p{color:var(--text-dim);font-size:13.5px;line-height:1.75;margin:0 0 14px}
+  .gate ol{margin:0 0 18px;padding-left:22px;color:var(--text-dim);font-size:13.5px;line-height:2}
+  .gate code{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:2px 7px;font-size:12px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--accent)}
+  .gate .reasons{background:rgba(255,107,129,.08);border:1px solid rgba(255,107,129,.3);border-radius:12px;
+    padding:14px 16px;margin:14px 0;font-size:13px;line-height:1.9}
+  .gate .reasons b{color:var(--bad)}
+
+  /* stepper */
+  .stepper{display:flex;gap:10px;margin:0 0 20px;flex-wrap:wrap}
+  .step-chip{flex:1;min-width:170px;background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    padding:13px 15px;cursor:pointer;transition:.2s;display:flex;gap:12px;align-items:center}
+  .step-chip:hover{border-color:var(--border-strong)}
+  .step-chip.active{border-color:rgba(241,100,30,.55);background:rgba(241,100,30,.1)}
+  .step-chip .num{width:28px;height:28px;border-radius:9px;background:var(--panel-2);display:grid;place-items:center;
+    font-weight:800;font-size:13px;flex-shrink:0}
+  .step-chip.active .num{background:var(--etsy);color:#fff}
+  .step-chip .t{font-size:13.5px;font-weight:700}
+  .step-chip .d{font-size:11.5px;color:var(--text-faint);margin-top:2px}
+  .step-chip.done .num{background:var(--good);color:#04121a}
+
+  .layout{display:grid;grid-template-columns:1fr 380px;gap:20px;align-items:start}
+  @media(max-width:1020px){.layout{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:18px}
+  .panel h3{margin:0 0 4px;font-size:15px}
+  .panel .ph-sub{font-size:12px;color:var(--text-faint);margin-bottom:16px}
+
+  label.fld{display:block;font-size:12px;color:var(--text-dim);margin:14px 0 7px;font-weight:600}
+  label.fld .hint{font-weight:400;color:var(--text-faint);font-size:11px;margin-left:6px}
+  input[type=text],input[type=number],input[type=url],textarea,select{width:100%;background:var(--bg2);
+    border:1px solid var(--border);border-radius:11px;color:var(--text);font-size:13.5px;padding:11px 13px;
+    font-family:inherit;outline:none;transition:.18s}
+  input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+  textarea{min-height:150px;resize:vertical;line-height:1.65}
+  .counter{float:right;font-size:11px;color:var(--text-faint);font-weight:400}
+  .counter.over{color:var(--bad);font-weight:700}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  @media(max-width:640px){.row2,.row3{grid-template-columns:1fr}}
+
+  .btn{padding:11px 18px;border-radius:12px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);
+    font-size:13.5px;font-weight:700;cursor:pointer;transition:.18s;display:inline-flex;align-items:center;gap:8px}
+  .btn:hover{border-color:var(--border-strong)}
+  .btn.primary{background:var(--etsy);border:none;color:#fff;box-shadow:0 10px 26px rgba(241,100,30,.32)}
+  .btn.primary:hover{filter:brightness(1.07)}
+  .btn.ghost{background:transparent}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.sm{padding:7px 12px;font-size:12px;border-radius:9px}
+  .btnrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+
+  /* 状态条 */
+  .msg{padding:13px 16px;border-radius:12px;font-size:13px;line-height:1.75;margin:14px 0;display:none}
+  .msg.show{display:block}
+  .msg.ok{background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.32);color:#b6f2d8}
+  .msg.err{background:rgba(255,107,129,.1);border:1px solid rgba(255,107,129,.32);color:#ffc2cb}
+  .msg.warn{background:rgba(255,184,107,.1);border:1px solid rgba(255,184,107,.32);color:#ffdfb5}
+  .msg.info{background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.28);color:#b8ecf7}
+  .msg ul{margin:8px 0 0;padding-left:20px}
+  .msg li{margin:3px 0}
+
+  /* 图片上传 */
+  .drop{border:1.5px dashed var(--border-strong);border-radius:14px;padding:20px;text-align:center;
+    color:var(--text-dim);cursor:pointer;transition:.2s;background:rgba(255,255,255,.02)}
+  .drop:hover{border-color:var(--accent);background:rgba(255,184,107,.06)}
+  .thumbs{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}
+  .thumb{width:78px;height:78px;border-radius:10px;overflow:hidden;position:relative;border:1px solid var(--border)}
+  .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb .x{position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.7);
+    color:#fff;display:grid;place-items:center;font-size:13px;cursor:pointer;line-height:1}
+  .thumb .rk{position:absolute;bottom:2px;left:2px;font-size:10px;background:rgba(0,0,0,.75);color:#fff;
+    padding:1px 6px;border-radius:5px}
+  .thumb.first{border-color:var(--etsy);box-shadow:0 0 0 2px rgba(241,100,30,.4)}
+  .thumb.first .rk::after{content:" · 主图"}
+
+  /* 结果/侧栏 */
+  .side{position:sticky;top:18px}
+  .kv{width:100%;border-collapse:collapse;font-size:12.5px}
+  .kv td{padding:7px 0;border-bottom:1px solid var(--border)}
+  .kv td:first-child{color:var(--text-faint);width:44%}
+  .kv td:last-child{color:var(--text);word-break:break-all}
+  .kv code{background:var(--bg2);border-radius:5px;padding:1px 6px;font-size:11.5px}
+  .log{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:12px 14px;
+    font-size:11.5px;line-height:1.85;max-height:280px;overflow:auto;
+    font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--text-dim)}
+  .log div{white-space:pre-wrap;word-break:break-all}
+  .log .t{color:var(--text-faint)}
+  .log .e{color:var(--bad)}
+  .log .s{color:var(--good)}
+  .hidden{display:none!important}
+  .tax-list{max-height:260px;overflow:auto;margin-top:10px}
+  .tax-item{padding:9px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:7px;cursor:pointer;
+    font-size:12.5px;transition:.16s}
+  .tax-item:hover{border-color:var(--accent);background:rgba(255,184,107,.06)}
+  .tax-item .id{color:var(--text-faint);font-size:11px;margin-top:3px}
+  .listrow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 0;
+    border-bottom:1px solid var(--border);font-size:12.5px}
+  .listrow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pill{font-size:10.5px;padding:2px 8px;border-radius:999px;font-weight:700}
+  .pill.draft{background:rgba(255,184,107,.16);color:var(--warn)}
+  .pill.active{background:rgba(52,211,153,.16);color:var(--good)}
+  .pill.inactive{background:rgba(255,255,255,.08);color:var(--text-faint)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">E</div>
+  <div>
+    <h1>Etsy 商品上架</h1>
+    <div class="sub">商品资料 → 本地校验 → 写入 Etsy 草稿 → 人工确认后发布</div>
+  </div>
+  <span class="badge">Open API v3</span>
+  <div class="spacer"></div>
+  <span class="vtag" id="verTag">25809ca</span>
+  <a href="./index.html" class="btn sm ghost">← 回总览</a>
+</div>
+
+<!-- ============ 状态闸门：未配置 / 未授权时只显示这一屏 ============ -->
+<div class="gate hidden" id="gate">
+  <h2 id="gateTitle">连接 Etsy 店铺</h2>
+  <div id="gateBody"></div>
+</div>
+
+<!-- ============ 主体 ============ -->
+<div id="main" class="hidden">
+
+  <div class="stepper">
+    <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">店铺设置</div><div class="d">分区 / 配送 / 处理档案</div></div></div>
+    <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">类目与属性</div><div class="d">换真实 taxonomy_id</div></div></div>
+    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">商品资料</div><div class="d">标题 / 详情 / 标签</div></div></div>
+    <div class="step-chip" data-step="4"><div class="num">4</div><div><div class="t">图片与库存</div><div class="d">上传 / 变体</div></div></div>
+    <div class="step-chip" data-step="5"><div class="num">5</div><div><div class="t">写入与发布</div><div class="d">草稿 → 人工确认</div></div></div>
+  </div>
+
+  <div class="layout">
+    <div>
+      <!-- 步骤 1 -->
+      <section class="panel step" data-step="1">
+        <h3>店铺设置</h3>
+        <div class="ph-sub">这四个 ID 是建草稿的必填项。实物商品缺配送模板或处理档案，Etsy 会直接返回 400。</div>
+        <div id="msg1" class="msg"></div>
+        <button class="btn" id="btnPreflight">读取店铺配置</button>
+        <div id="preflightBox" class="hidden" style="margin-top:16px">
+          <table class="kv">
+            <tr><td>店铺</td><td id="pfShop">—</td></tr>
+            <tr><td>在售商品数</td><td id="pfActive">—</td></tr>
+            <tr><td>店铺分区</td><td id="pfSection">—</td></tr>
+            <tr><td>配送模板</td><td id="pfShip">—</td></tr>
+            <tr><td>处理档案</td><td id="pfReady">—</td></tr>
+          </table>
+          <div class="btnrow">
+            <button class="btn sm" data-goto="2">下一步：选类目 →</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 步骤 2 -->
+      <section class="panel step hidden" data-step="2">
+        <h3>类目与属性</h3>
+        <div class="ph-sub">AI 给的类目名只是候选。必须在这里搜出真实 taxonomy_id，否则建草稿会被拒。</div>
+        <label class="fld">类目关键词<span class="hint">用英文物品名搜，例如 ceramic horse / pottery figurine</span></label>
+        <div class="row2">
+          <input type="text" id="taxQ" placeholder="ceramic horse" />
+          <button class="btn" id="btnTax">搜索类目</button>
+        </div>
+        <div id="taxResults" class="tax-list"></div>
+
+        <label class="fld">已选类目</label>
+        <div class="msg info" id="taxPicked" style="display:none"></div>
+
+        <label class="fld" style="margin-top:18px">属性（Attributes）<span class="hint">选完类目后可查该类目下有哪些可选属性</span></label>
+        <div class="row2">
+          <input type="text" id="propQ" placeholder="属性关键词，可留空列出全部" />
+          <button class="btn" id="btnProp" disabled>查询属性</button>
+        </div>
+        <div id="propList" class="tax-list"></div>
+      </section>
+
+      <!-- 步骤 3 -->
+      <section class="panel step hidden" data-step="3">
+        <h3>商品资料</h3>
+        <div class="ph-sub">这一屏的内容全部来自你的事实资料卡。AI 不能猜材质、认证、价格与交期。</div>
+
+        <label class="fld">标题 Title <span class="counter" id="cntTitle">0 / 140</span></label>
+        <input type="text" id="fTitle" maxlength="200" placeholder="Ceramic Horse Figurine with Kiln Fired Glaze" />
+
+        <label class="fld">描述 Description <span class="hint">纯英文发布稿，不要粘贴 AI 的解释或「待确认」</span></label>
+        <textarea id="fDesc" placeholder="A small ceramic horse figurine with a kiln-fired glaze..."></textarea>
+
+        <label class="fld">标签 Tags <span class="hint">每行一个，最多 13 个，每个 ≤20 字符</span></label>
+        <textarea id="fTags" style="min-height:110px" placeholder="ceramic horse&#10;horse decor&#10;blue horse decor"></textarea>
+        <div class="msg" id="tagMsg"></div>
+
+        <div class="row2">
+          <div>
+            <label class="fld">价格 USD<span class="counter" id="cntPrice">→ 2999</span></label>
+            <input type="number" id="fPrice" step="0.01" min="0" placeholder="29.99" />
+          </div>
+          <div>
+            <label class="fld">数量</label>
+            <input type="number" id="fQty" step="1" min="0" placeholder="10" />
+          </div>
+        </div>
+
+        <div class="row3" style="margin-top:4px">
+          <div>
+            <label class="fld">谁制作 who_made</label>
+            <select id="fWho">
+              <option value="i_did">i_did（我做的）</option>
+              <option value="collective">collective（团队）</option>
+              <option value="someone_else">someone_else（他方制作）</option>
+            </select>
+          </div>
+          <div>
+            <label class="fld">何时制作 when_made</label>
+            <select id="fWhen">
+              <option value="made_to_order">made_to_order（接单制作）</option>
+              <option value="2020_2026">2020_2026</option>
+              <option value="2010_2019">2010_2019</option>
+              <option value="2008_2009">2008_2009</option>
+              <option value="2000_2007">2000_2007</option>
+              <option value="1970s">1970s</option>
+              <option value="1960s">1960s</option>
+              <option value="1950s">1950s</option>
+            </select>
+          </div>
+          <div>
+            <label class="fld">是否手工材料 is_supply</label>
+            <select id="fSupply">
+              <option value="false">false（成品）</option>
+              <option value="true">true（材料包/工具）</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row3" style="margin-top:4px">
+          <div>
+            <label class="fld">配送模板</label>
+            <select id="fShip"><option value="">先在步骤 1 读取</option></select>
+          </div>
+          <div>
+            <label class="fld">处理档案</label>
+            <select id="fReady"><option value="">先在步骤 1 读取</option></select>
+          </div>
+          <div>
+            <label class="fld">店铺分区<span class="hint">可留空</span></label>
+            <select id="fSection"><option value="">未分类</option></select>
+          </div>
+        </div>
+
+        <div class="row2" style="margin-top:4px">
+          <div>
+            <label class="fld">材质 Materials<span class="hint">逗号分隔，可留空</span></label>
+            <input type="text" id="fMat" placeholder="Ceramic" />
+          </div>
+          <div>
+            <label class="fld">退货政策 ID<span class="hint">可留空</span></label>
+            <input type="text" id="fReturn" placeholder="留空则用店铺默认" />
+          </div>
+        </div>
+
+        <div class="btnrow">
+          <button class="btn" id="btnValidate">本地校验（不消耗 Etsy 额度）</button>
+          <button class="btn" data-goto="4">下一步：图片与库存 →</button>
+        </div>
+        <div id="msg3" class="msg"></div>
+      </section>
+
+      <!-- 步骤 4 -->
+      <section class="panel step hidden" data-step="4">
+        <h3>图片与库存</h3>
+        <div class="ph-sub">第一张即主图，最多 20 张。Etsy 要求实物商品展示真实成品照片。</div>
+
+        <label class="fld">商品图片<span class="hint">第一张为主图，可点缩略图调整顺序</span></label>
+        <div class="drop" id="drop">点击选择图片，或把图片拖到这里<span style="display:block;font-size:11.5px;color:var(--text-faint);margin-top:6px">支持 JPG / PNG，建议短边≥2000px</span></div>
+        <input type="file" id="file" accept="image/*" multiple class="hidden" />
+        <div class="thumbs" id="thumbs"></div>
+        <div id="msgImg" class="msg"></div>
+
+        <label class="fld" style="margin-top:20px">变体<span class="hint">无变体就留空，留空则用上面的主价格与数量</span></label>
+        <div id="varBox"></div>
+        <button class="btn sm ghost" id="btnAddVar" style="margin-top:10px">+ 添加一个变体</button>
+        <div id="msgVar" class="msg"></div>
+
+        <div class="btnrow">
+          <button class="btn" data-goto="5">下一步：写入 Etsy →</button>
+        </div>
+      </section>
+
+      <!-- 步骤 5 -->
+      <section class="panel step hidden" data-step="5">
+        <h3>写入 Etsy 草稿</h3>
+        <div class="ph-sub">这一步只建草稿。Etsy 上架费 $0.20 只在真正发布时产生。</div>
+        <div id="msg5" class="msg"></div>
+        <div class="btnrow">
+          <button class="btn primary" id="btnDraft">写入 Etsy 草稿</button>
+          <button class="btn" id="btnPublish" disabled>确认发布（产生上架费）</button>
+          <button class="btn ghost" id="btnDeact" disabled>下架这个链接</button>
+        </div>
+        <div id="draftBox" class="hidden" style="margin-top:18px">
+          <table class="kv">
+            <tr><td>listing_id</td><td id="dId">—</td></tr>
+            <tr><td>状态</td><td id="dState">—</td></tr>
+            <tr><td>图片</td><td id="dImg">—</td></tr>
+            <tr><td>属性</td><td id="dProp">—</td></tr>
+            <tr><td>库存</td><td id="dInv">—</td></tr>
+          </table>
+          <div class="msg warn" id="dWarn" style="display:block"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- 侧栏 -->
+    <div class="side">
+      <div class="panel">
+        <h3>连接状态</h3>
+        <div class="ph-sub" id="connNote">—</div>
+        <table class="kv">
+          <tr><td>后端版本</td><td id="svVer">—</td></tr>
+          <tr><td>店铺 ID</td><td id="svShop">—</td></tr>
+          <tr><td>已授权</td><td id="svAuth">—</td></tr>
+          <tr><td>写操作</td><td id="svWrite">—</td></tr>
+          <tr><td>回调地址</td><td id="svCb">—</td></tr>
+        </table>
+      </div>
+
+      <div class="panel">
+        <h3>程序无法替你判断的事</h3>
+        <div class="ph-sub">SOP 第 19 节：校验通过不等于合规</div>
+        <div style="font-size:12.5px;line-height:2;color:var(--text-dim)">
+          <div>□ 材质与认证有事实依据</div>
+          <div>□ 商品符合 Etsy 创意标准</div>
+          <div>□ 图片权利与生产合作方角色已核实</div>
+          <div>□ 每款总价与利润已按成本核算</div>
+          <div>□ 配送承诺与处理时间真的能做到</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>运行日志</h3>
+        <div class="log" id="log"><div class="t">等待操作…</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+const API_BASE = (window.getApiBase && window.getApiBase()) || '';
+
+/* ---------- 基础设施：超时 + 可读报错（照搬公众号页已验证过的做法） ---------- */
+function fetchT(url, ms, opts){
+  const c = new AbortController();
+  const t = setTimeout(()=>c.abort(), ms);
+  return fetch(url, Object.assign({}, opts || {}, { signal: c.signal })).finally(()=>clearTimeout(t));
+}
+async function apiCall(path, opts){
+  opts = opts || {};
+  const ms = opts.timeout || 90000;
+  const label = opts.label || path;
+  const headers = Object.assign(window.apiAuthHeaders ? window.apiAuthHeaders() : {},
+    { 'Accept-Encoding': 'identity' }, opts.headers || {});
+  const r = await fetchT(API_BASE + path, ms, {
+    method: opts.method || (opts.body ? 'POST' : 'GET'),
+    headers, body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const ct = r.headers.get('content-type') || '';
+  let txt = '';
+  try { txt = await r.text(); }
+  catch(te){ throw new Error(label + '：响应体传输中断（HTTP ' + r.status + '）。' + (te && te.message)); }
+  if (ct.indexOf('application/json') < 0){
+    throw new Error(label + '：后端返回的不是 JSON（content-type=' + (ct||'空') + '）。\n开头内容：' + txt.slice(0,140).replace(/\s+/g,' '));
+  }
+  let d;
+  try { d = JSON.parse(txt || '{}'); }
+  catch(pe){ throw new Error(label + '：响应不是合法 JSON（HTTP ' + r.status + '，' + txt.length + ' 字节）：' + txt.slice(0,140)); }
+  if(!r.ok){
+    const extra = Array.isArray(d.errors) ? '\n· ' + d.errors.join('\n· ') : '';
+    throw new Error((d && (d.note || d.error)) || (label + ' 失败（HTTP ' + r.status + '）') + extra);
+  }
+  return d;
+}
+
+/* ---------- 日志 ---------- */
+const $log = document.getElementById('log');
+let logN = 0;
+function log(msg, cls){
+  logN++;
+  const d = document.createElement('div');
+  const t = new Date();
+  const ts = String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')+':'+String(t.getSeconds()).padStart(2,'0');
+  d.innerHTML = '<span class="t">[' + ts + ']</span> <span class="' + (cls||'') + '">' + msg + '</span>';
+  if (logN === 1) $log.innerHTML = '';
+  $log.appendChild(d);
+  $log.scrollTop = $log.scrollHeight;
+}
+function logErr(e){ log((e && e.message) || String(e), 'e'); }
+
+function showMsg(el, kind, html){
+  if (!el) return;
+  el.className = 'msg show ' + kind;
+  el.innerHTML = html;
+}
+
+/* ---------- 全局状态 ---------- */
+let STATUS = null;
+let PREF = null;
+let IMAGES = [];   // { filename, data(base64), rank }
+let VARS = [];     // { name, price, quantity, sku }
+let LAST_LISTING = 0;
+let CURRENT_STEP = 1;
+
+/* ---------- 状态闸门 ---------- */
+async function boot(){
+  try {
+    STATUS = await apiCall('/api/etsy/status', { timeout: 20000, label: '读取 Etsy 连接状态' });
+  } catch(e){
+    logErr(e);
+    gate('连不上后端', '<p>' + esc(e.message) + '</p><p>后端没起来，或地址不对。请确认后端进程在运行。</p>');
+    return;
+  }
+  renderStatus();
+  if (!STATUS.configured){
+    const miss = [];
+    if (!STATUS.hasCredentials) miss.push('<b>ETSY_KEYSTRING + ETSY_SHARED_SECRET</b>');
+    if (!STATUS.hasShopId) miss.push('<b>ETSY_SHOP_ID</b>');
+    if (!STATUS.hasRedirectUri) miss.push('<b>ETSY_REDIRECT_URI</b>');
+    gate('后端还没配置 Etsy 凭证',
+      '<p>服务端 .env 里缺这几项，所以 Etsy 相关接口现在是关闭的：</p>' +
+      '<div class="reasons">' + miss.map(m => '· ' + m).join('<br>') + '</div>' +
+      '<p>填完 .env 后<strong>重启后端</strong>，再刷新本页。公众号与 AI 功能不受影响。</p>');
+    return;
+  }
+  if (!STATUS.authorized){
+    gate('连接你的 Etsy 店铺',
+      '<p>凭证已配好，还差最后一步：在 Etsy 上授权这个工具访问你的店铺。整个过程 10 秒。</p>' +
+      '<ol>' +
+      '<li>点下面的按钮，会跳到 Etsy 官方授权页</li>' +
+      '<li>页面上会列出 ' + esc(STATUS.scope || '') + ' 这些权限</li>' +
+      '<li>点<strong>同意</strong>，浏览器自动跳回本工作台</li>' +
+      '</ol>' +
+      '<p style="font-size:12.5px;color:var(--text-faint)">授权有效期 90 天，到期前工作台会提醒重新授权。' +
+      '本次授权不会上架任何商品、不花钱。</p>' +
+      '<div class="btnrow"><a class="btn primary" href="' + API_BASE + '/api/etsy/auth">连接 Etsy 店铺</a>' +
+      '<button class="btn ghost" onclick="location.reload()">我已授权，重新检查</button></div>');
+    return;
+  }
+  document.getElementById('main').classList.remove('hidden');
+  log('已连接，shop_id=' + STATUS.shopId);
+  if (!STATUS.allowWrite){
+    showMsg(document.getElementById('msg5'), 'warn',
+      '<b>写操作当前关闭。</b>服务端 .env 里没有 <code>ETSY_ALLOW_WRITE=1</code>，' +
+      '所以只能读、不能写。这是安全默认——Etsy 没有沙箱，打开后每次调用都真实作用于店铺。' +
+      '需要写入时在 .env 加这一行并重启后端。');
+  }
+  if (STATUS.refreshTokenExpiringSoon){
+    showMsg(document.getElementById('msg1'), 'warn',
+      '<b>refresh token 即将过期（不足 30 天）。</b>请重新点一次「连接 Etsy 店铺」完成授权，否则某天会突然全链路 401。');
+  }
+  document.getElementById('connNote').textContent = '已授权，可读取店铺数据。';
+}
+
+function gate(title, html){
+  document.getElementById('gateTitle').textContent = title;
+  document.getElementById('gateBody').innerHTML = html;
+  document.getElementById('gate').classList.remove('hidden');
+  document.getElementById('main').classList.add('hidden');
+}
+
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function renderStatus(){
+  document.getElementById('svVer').textContent = STATUS.serverVersion || '—';
+  document.getElementById('svShop').textContent = STATUS.shopId || '未配置';
+  document.getElementById('svAuth').innerHTML = STATUS.authorized
+    ? '<span style="color:var(--good)">已授权</span>'
+    : '<span style="color:var(--bad)">未授权</span>';
+  document.getElementById('svWrite').innerHTML = STATUS.allowWrite
+    ? '<span style="color:var(--warn)">已开启（真实写入）</span>'
+    : '<span style="color:var(--good)">关闭（只读）</span>';
+  document.getElementById('svCb').innerHTML = '<code>' + esc(STATUS.redirectUri || '未配置') + '</code>';
+}
+
+/* ---------- 步骤切换 ---------- */
+function goto(n){
+  CURRENT_STEP = n;
+  document.querySelectorAll('.step').forEach(s => s.classList.toggle('hidden', Number(s.dataset.step) !== n));
+  document.querySelectorAll('.step-chip').forEach(c => c.classList.toggle('active', Number(c.dataset.step) === n));
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+document.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click', () => goto(Number(b.dataset.goto))));
+document.querySelectorAll('.step-chip').forEach(c => c.addEventListener('click', () => goto(Number(c.dataset.step))));
+
+/* ---------- 步骤 1：店铺设置 ---------- */
+document.getElementById('btnPreflight').addEventListener('click', async () => {
+  const btn = document.getElementById('btnPreflight');
+  const m = document.getElementById('msg1');
+  btn.disabled = true; btn.textContent = '读取中…';
+  log('读取店铺配置…');
+  try {
+    PREF = await apiCall('/api/etsy/preflight', { body: { force: true }, timeout: 60000 });
+    document.getElementById('preflightBox').classList.remove('hidden');
+    const s = PREF.shop || {};
+    document.getElementById('pfShop').textContent = (s.shop_name || '—') + '（' + (s.shop_id || PREF.shopId) + '）';
+    document.getElementById('pfActive').textContent = s.num_listings_active != null ? s.num_listings_active + ' 个在售' : '—';
+    document.getElementById('pfSection').textContent = (PREF.sections || []).length
+      ? PREF.sections.map(x => x.title + '（' + x.num + '）').join('、') : '（无分区，将放入未分类）';
+    document.getElementById('pfShip').textContent = (PREF.shippingProfiles || []).length
+      ? PREF.shippingProfiles.map(x => x.title + '（' + x.id + '）').join('、') : '⚠️ 还没有配送模板';
+    document.getElementById('pfReady').textContent = (PREF.readinessStates || []).length
+      ? PREF.readinessStates.map(x => x.title + '（' + x.id + '）').join('、') : '⚠️ 还没有处理档案';
+
+    fillSelect('fShip', PREF.shippingProfiles, '选择配送模板');
+    fillSelect('fReady', PREF.readinessStates, '选择处理档案');
+    const secSel = document.getElementById('fSection');
+    secSel.innerHTML = '<option value="">未分类</option>' +
+      (PREF.sections || []).map(x => '<option value="' + x.id + '">' + esc(x.title) + '</option>').join('');
+
+    const warn = (PREF.warnings || []);
+    const missing = [];
+    if (!(PREF.shippingProfiles || []).length) missing.push('配送模板（shipping profile）');
+    if (!(PREF.readinessStates || []).length) missing.push('处理档案（processing profile）');
+    if (missing.length || warn.length){
+      showMsg(m, 'warn',
+        '<b>建草稿前还缺：</b>' + missing.map(esc).join('、') +
+        (missing.length ? '<br>去 Shop Manager → Settings 里建好，实物商品必填这两项，缺了 Etsy 直接返回 400。' : '') +
+        (warn.length ? '<br><span style="color:var(--text-faint)">另：' + warn.map(esc).join('；') + '</span>' : ''));
+    } else {
+      showMsg(m, 'ok', '店铺配置已就绪，可以建草稿了。');
+    }
+    log('店铺配置读取完成：分区 ' + (PREF.sections||[]).length + ' / 配送 ' + (PREF.shippingProfiles||[]).length +
+        ' / 处理档案 ' + (PREF.readinessStates||[]).length, 's');
+  } catch(e){
+    showMsg(m, 'err', '<b>读取失败：</b>' + esc(e.message));
+    logErr(e);
+  } finally {
+    btn.disabled = false; btn.textContent = '重新读取店铺配置';
+  }
+});
+
+function fillSelect(id, arr, placeholder){
+  const el = document.getElementById(id);
+  el.innerHTML = '<option value="">' + placeholder + '</option>' +
+    (arr || []).map(x => '<option value="' + x.id + '">' + esc(x.title) + '（' + x.id + '）</option>').join('');
+}
+
+/* ---------- 步骤 2：类目 ---------- */
+let PICKED_TAX = null;
+document.getElementById('btnTax').addEventListener('click', async () => {
+  const q = document.getElementById('taxQ').value.trim();
+  const box = document.getElementById('taxResults');
+  if (!q){ box.innerHTML = '<div class="msg show warn">请先填类目关键词（用英文物品名）。</div>'; return; }
+  box.innerHTML = '<div class="msg show info">搜索中…</div>';
+  log('搜索类目：' + q);
+  try {
+    const d = await apiCall('/api/etsy/taxonomy?q=' + encodeURIComponent(q), { timeout: 40000 });
+    if (!d.results || !d.results.length){
+      box.innerHTML = '<div class="msg show warn">没搜到。换个更简短的英文词试试，比如 horse / figurine / ceramic。</div>';
+      return;
+    }
+    box.innerHTML = d.results.map(r =>
+      '<div class="tax-item" data-id="' + r.taxonomy_id + '" data-name="' + esc(r.full_path) + '">' +
+      '<div>' + esc(r.name) + (r.is_leaf ? '' : ' <span style="color:var(--text-faint);font-size:11px">（可继续往下细分）</span>') + '</div>' +
+      '<div class="id">taxonomy_id = ' + r.taxonomy_id + '</div></div>').join('');
+    box.querySelectorAll('.tax-item').forEach(it => it.addEventListener('click', () => {
+      PICKED_TAX = { id: Number(it.dataset.id), name: it.dataset.name };
+      const el = document.getElementById('taxPicked');
+      el.style.display = 'block';
+      el.innerHTML = '<b>已选类目：</b>' + esc(it.dataset.name) + '（taxonomy_id = ' + PICKED_TAX.id + '）';
+      document.getElementById('btnProp').disabled = false;
+      log('已选类目 ' + it.dataset.name + ' → ' + PICKED_TAX.id, 's');
+    }));
+  } catch(e){
+    box.innerHTML = '<div class="msg show err">' + esc(e.message) + '</div>';
+    logErr(e);
+  }
+});
+
+document.getElementById('btnProp').addEventListener('click', async () => {
+  if (!PICKED_TAX) return;
+  const box = document.getElementById('propList');
+  box.innerHTML = '<div class="msg show info">查询中…</div>';
+  try {
+    const d = await apiCall('/api/etsy/properties?taxonomy_id=' + PICKED_TAX.id, { timeout: 40000 });
+    if (!d.properties || !d.properties.length){ box.innerHTML = '<div class="msg show warn">该类目没有可选属性。</div>'; return; }
+    box.innerHTML = d.properties.map(p =>
+      '<div style="padding:9px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:7px;font-size:12.5px">' +
+      '<div>' + esc(p.name) + (p.is_required ? ' <span style="color:var(--bad)">必填</span>' : '') +
+      ' <span style="color:var(--text-faint);font-size:11px">property_id=' + p.property_id + '</span></div>' +
+      '<div style="color:var(--text-faint);font-size:11px;margin-top:4px">' +
+      (p.possible_values.length ? p.possible_values.slice(0,8).map(v => esc(v.name) + '(' + v.value_id + ')').join('、') : '（无预设值，可用自定义值）') +
+      '</div></div>').join('');
+    log('类目 ' + PICKED_TAX.id + ' 下有 ' + d.properties.length + ' 个属性', 's');
+  } catch(e){
+    box.innerHTML = '<div class="msg show err">' + esc(e.message) + '</div>';
+    logErr(e);
+  }
+});
+
+/* ---------- 步骤 3：商品资料 + 实时字符校验 ---------- */
+const fTitle = document.getElementById('fTitle');
+fTitle.addEventListener('input', () => {
+  const n = fTitle.value.length;
+  const c = document.getElementById('cntTitle');
+  c.textContent = n + ' / 140';
+  c.className = 'counter' + (n > 140 ? ' over' : '');
+});
+
+const fTags = document.getElementById('fTags');
+fTags.addEventListener('input', () => {
+  const arr = fTags.value.split('\n').map(s => s.trim()).filter(Boolean);
+  const bad = arr.filter(t => t.length > 20);
+  const dup = arr.filter((t, i) => arr.findIndex(x => x.toLowerCase() === t.toLowerCase()) !== i);
+  const m = document.getElementById('tagMsg');
+  if (arr.length > 13) showMsg(m, 'err', '<b>标签 ' + arr.length + ' 个，超过 Etsy 上限 13 个。</b>');
+  else if (bad.length) showMsg(m, 'err', '<b>超长标签：</b>' + bad.map(t => esc(t) + '（' + t.length + '字符）').join('、') + '。每个标签最多 20 字符，空格也算。');
+  else if (dup.length) showMsg(m, 'warn', '<b>重复标签：</b>' + dup.map(esc).join('、') + '。Etsy 会忽略重复项，白占位置。');
+  else if (arr.length < 13) showMsg(m, 'info', '当前 ' + arr.length + ' 个标签。SOP 建议备满 13 个（少于 13 个不违规，只是少了曝光入口）。');
+  else showMsg(m, 'ok', arr.length + ' 个标签，全部合规。');
+});
+
+const fPrice = document.getElementById('fPrice');
+fPrice.addEventListener('input', () => {
+  const v = parseFloat(fPrice.value);
+  document.getElementById('cntPrice').textContent = isNaN(v) ? '→ ?' : ('→ ' + Math.round(v * 100));
+});
+
+/* ---------- 本地校验 ---------- */
+function collectForm(){
+  return {
+    title: fTitle.value,
+    description: document.getElementById('fDesc').value,
+    tags: fTags.value.split('\n').map(s => s.trim()).filter(Boolean),
+    price: fPrice.value,
+    quantity: document.getElementById('fQty').value,
+    taxonomy_id: PICKED_TAX ? PICKED_TAX.id : '',
+    who_made: document.getElementById('fWho').value,
+    when_made: document.getElementById('fWhen').value,
+    is_supply: document.getElementById('fSupply').value === 'true',
+    shipping_profile_id: document.getElementById('fShip').value,
+    readiness_state_id: document.getElementById('fReady').value,
+    shop_section_id: document.getElementById('fSection').value,
+    return_policy_id: document.getElementById('fReturn').value,
+    materials: document.getElementById('fMat').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+  };
+}
+
+document.getElementById('btnValidate').addEventListener('click', async () => {
+  const m = document.getElementById('msg3');
+  try {
+    const d = await apiCall('/api/etsy/validate', { body: collectForm(), timeout: 30000 });
+    if (d.canDraft){
+      showMsg(m, 'ok', '<b>机械性校验通过。</b>但这只说明字段格式没问题，' +
+        '不代表内容合规——右侧那 5 项仍需人工确认。<br><span style="color:var(--text-faint)">' +
+        d.manualChecks.map(esc).join('；') + '</span>');
+      log('本地校验通过', 's');
+    } else {
+      showMsg(m, 'err', '<b>校验没通过（这些不修好，建草稿一定被 Etsy 拒）：</b><ul>' +
+        d.errors.map(e => '<li>' + esc(e) + '</li>').join('') + '</ul>');
+      log('本地校验失败：' + d.errors.length + ' 项', 'e');
+    }
+  } catch(e){ showMsg(m, 'err', esc(e.message)); logErr(e); }
+});
+
+/* ---------- 步骤 4：图片 ---------- */
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('file');
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.style.borderColor = 'var(--accent)'; });
+drop.addEventListener('dragleave', () => { drop.style.borderColor = ''; });
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.style.borderColor = '';
+  addFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', () => addFiles(fileInput.files));
+
+function addFiles(files){
+  const m = document.getElementById('msgImg');
+  const arr = Array.from(files || []);
+  if (!arr.length) return;
+  if (IMAGES.length + arr.length > 20){
+    showMsg(m, 'err', '图片最多 20 张，当前已有 ' + IMAGES.length + ' 张。');
+    return;
+  }
+  Promise.all(arr.map(f => new Promise(res => {
+    const r = new FileReader();
+    r.onload = () => res({ filename: f.name, data: String(r.result).split(',')[1] });
+    r.onerror = () => res(null);
+    r.readAsDataURL(f);
+  }))).then(list => {
+    list.filter(Boolean).forEach(o => IMAGES.push(o));
+    renderThumbs();
+    log('已加载 ' + list.filter(Boolean).length + ' 张图片，共 ' + IMAGES.length + ' 张');
+  });
+}
+
+function renderThumbs(){
+  const box = document.getElementById('thumbs');
+  box.innerHTML = IMAGES.map((im, i) =>
+    '<div class="thumb' + (i === 0 ? ' first' : '') + '" data-i="' + i + '" draggable="true">' +
+    '<img src="data:image/jpeg;base64,' + im.data + '" alt="" />' +
+    '<span class="x" data-x="' + i + '">×</span>' +
+    '<span class="rk">#' + (i + 1) + '</span></div>').join('');
+  box.querySelectorAll('[data-x]').forEach(x => x.addEventListener('click', ev => {
+    ev.stopPropagation();
+    IMAGES.splice(Number(x.dataset.x), 1);
+    renderThumbs();
+  }));
+  box.querySelectorAll('.thumb').forEach(t => {
+    t.addEventListener('click', () => {
+      const i = Number(t.dataset.i);
+      if (i === 0) return;
+      const tmp = IMAGES[0]; IMAGES[0] = IMAGES[i]; IMAGES[i] = tmp;
+      renderThumbs();
+      log('主图已换为原第 ' + (i + 1) + ' 张');
+    });
+  });
+  if (IMAGES.length) showMsg(document.getElementById('msgImg'), 'info',
+    IMAGES.length + ' 张图片，第 1 张为主图。Etsy 要求实物商品展示真实成品照片，渲染图不能替代实拍。');
+}
+
+/* ---------- 步骤 4：变体 ---------- */
+document.getElementById('btnAddVar').addEventListener('click', () => {
+  if (VARS.length >= 3){
+    showMsg(document.getElementById('msgVar'), 'err', 'Etsy 最多支持 3 个变体维度。');
+    return;
+  }
+  VARS.push({ name: '', price: fPrice.value, quantity: document.getElementById('fQty').value, sku: '' });
+  renderVars();
+});
+function renderVars(){
+  const box = document.getElementById('varBox');
+  if (!VARS.length){ box.innerHTML = '<div style="font-size:12.5px;color:var(--text-faint);padding:8px 0">暂无变体，将使用上面的主价格与数量。</div>'; return; }
+  box.innerHTML = VARS.map((v, i) =>
+    '<div class="row3" style="margin-bottom:9px">' +
+    '<input type="text" data-i="' + i + '" data-f="name" value="' + esc(v.name) + '" placeholder="款式名，如 Blue & Blue" />' +
+    '<input type="number" data-i="' + i + '" data-f="price" step="0.01" min="0" value="' + esc(v.price) + '" placeholder="该款总价" />' +
+    '<input type="number" data-i="' + i + '" data-f="quantity" step="1" min="0" value="' + esc(v.quantity) + '" placeholder="库存" />' +
+    '</div>').join('');
+  box.querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
+    VARS[Number(inp.dataset.i)][inp.dataset.f] = inp.value;
+  }));
+  showMsg(document.getElementById('msgVar'), 'warn',
+    '<b>变体价格必须填该款总价。</b>Etsy 的 price 是「这个变体卖多少钱」，不是「比主商品贵多少」。' +
+    '填成加价会导致买家按错的价格下单。');
+}
+
+/* ---------- 步骤 5：写入草稿 / 发布 ---------- */
+document.getElementById('btnDraft').addEventListener('click', async () => {
+  const m = document.getElementById('msg5');
+  const btn = document.getElementById('btnDraft');
+  if (IMAGES.length === 0){
+    showMsg(m, 'err', '至少要上传 1 张图片。Etsy 要求所有上架商品至少有 1 张图。');
+    return;
+  }
+  btn.disabled = true; btn.textContent = '写入中，请勿关闭…';
+  log('开始建草稿：' + (fTitle.value || '').slice(0, 40));
+  const t0 = Date.now();
+  try {
+    const body = collectForm();
+    body.images = IMAGES.map((im, i) => ({ filename: im.filename, data: im.data, rank: i + 1 }));
+    if (VARS.length){
+      // ⚠️ 这里生成的是「一个变体属性」，property_id 由后端在拿到类目属性后确认。
+      // 前端只把款式名带过去，真正的 property_id / value_id 需要后端查属性表。
+      // 为避免猜错属性 ID 导致 Etsy 400，本版先不自动写变体，改为明确提示人工在后台补。
+      showMsg(m, 'warn',
+        '<b>检测到你填了 ' + VARS.length + ' 个变体，但本版不会自动写入变体。</b><br>' +
+        '原因：Etsy 的变体必须绑定真实的 property_id 与 value_id，' +
+        '这些 ID 依赖具体类目，不能靠猜。草稿建成后请到 Shop Manager → Listings 里手动加变体，' +
+        '价格与库存按你上面填的值填。<br>（避免写出价格错误或属性错位的在售商品，比慢一点更安全。）');
+    }
+    const d = await apiCall('/api/etsy/draft', { body, timeout: 180000 });
+    LAST_LISTING = d.listing_id;
+    document.getElementById('draftBox').classList.remove('hidden');
+    document.getElementById('dId').textContent = d.listing_id;
+    document.getElementById('dState').innerHTML = '<span class="pill draft">' + esc(d.state) + '</span>';
+    const okImg = (d.images || []).filter(x => x.ok).length;
+    document.getElementById('dImg').textContent = okImg + ' / ' + (d.images || []).length + ' 成功';
+    document.getElementById('dProp').textContent = (d.properties || []).length
+      ? (d.properties || []).filter(x => x.ok).length + ' / ' + d.properties.length + ' 成功' : '未填写';
+    document.getElementById('dInv').textContent = d.inventory ? '已写入' : '未写变体';
+    document.getElementById('dWarn').innerHTML =
+      '<b>草稿已建立，还没有发布。</b>Etsy 上架费 $0.20 只在发布时产生。<br>' +
+      '请先到 Shop Manager → Listings 里核对：首图裁切、标题、描述、变体价格、库存、处理时间。<br>' +
+      '确认无误后再回到这里点「确认发布」。<br>' +
+      '<span style="color:var(--text-faint)">耗时 ' + ((Date.now() - t0) / 1000).toFixed(1) + 's。' +
+      '若图片或属性有失败项，可删掉这个草稿重新写入。</span>';
+    document.getElementById('btnPublish').disabled = false;
+    document.getElementById('btnDeact').disabled = false;
+    showMsg(m, 'ok', '<b>草稿写入成功。</b>listing_id = ' + d.listing_id + '（耗时 ' +
+      ((Date.now() - t0) / 1000).toFixed(1) + 's）。' + esc(d.note));
+    log('★草稿已建 listing_id=' + d.listing_id + '，图片 ' + okImg + ' 张，耗时 ' +
+        ((Date.now() - t0) / 1000).toFixed(1) + 's', 's');
+  } catch(e){
+    showMsg(m, 'err', esc(e.message));
+    logErr(e);
+  } finally {
+    btn.disabled = false; btn.textContent = '写入 Etsy 草稿';
+  }
+});
+
+document.getElementById('btnPublish').addEventListener('click', async () => {
+  if (!LAST_LISTING) return;
+  if (!confirm('确认发布 listing ' + LAST_LISTING + '？\n\n' +
+      '这一步会产生 $0.20 上架费，商品会开始接单。\n' +
+      '请确认你已经在 Shop Manager 里核对过草稿内容。')) return;
+  const btn = document.getElementById('btnPublish');
+  const m = document.getElementById('msg5');
+  btn.disabled = true; btn.textContent = '发布中…';
+  try {
+    const d = await apiCall('/api/etsy/publish', { body: { listing_id: LAST_LISTING }, timeout: 60000 });
+    document.getElementById('dState').innerHTML = '<span class="pill active">' + esc(d.state) + '</span>';
+    showMsg(m, 'ok', '<b>已发布。</b>' + esc(d.note) +
+      '<br><a href="' + d.url + '" target="_blank" rel="noopener">' + d.url + '</a>');
+    log('★已发布 listing ' + LAST_LISTING, 's');
+    btn.textContent = '已发布';
+  } catch(e){
+    showMsg(m, 'err', esc(e.message));
+    logErr(e);
+    btn.disabled = false; btn.textContent = '确认发布（产生上架费）';
+  }
+});
+
+document.getElementById('btnDeact').addEventListener('click', async () => {
+  if (!LAST_LISTING) return;
+  const reason = prompt('下架原因（可选，会记录在 Etsy 后台）：', '信息需要修正');
+  if (reason === null) return;
+  try {
+    const d = await apiCall('/api/etsy/deactivate',
+      { body: { listing_id: LAST_LISTING, reason }, timeout: 60000 });
+    document.getElementById('dState').innerHTML = '<span class="pill inactive">' + esc(d.state) + '</span>';
+    showMsg(document.getElementById('msg5'), 'ok', esc(d.note));
+    log('已下架 listing ' + LAST_LISTING, 's');
+  } catch(e){
+    showMsg(document.getElementById('msg5'), 'err', esc(e.message));
+    logErr(e);
+  }
+});
+
+/* 粘贴 JSON 直接填充（配合 AI 生成的结构化输出） */
+window.fillFromJson = function(obj){
+  if (!obj) return;
+  if (obj.title) fTitle.value = obj.title, fTitle.dispatchEvent(new Event('input'));
+  if (obj.description_en) document.getElementById('fDesc').value = obj.description_en;
+  if (obj.description) document.getElementById('fDesc').value = obj.description;
+  if (obj.tags) fTags.value = (Array.isArray(obj.tags) ? obj.tags : String(obj.tags).split(/[,\n]/)).join('\n'),
+    fTags.dispatchEvent(new Event('input'));
+  if (obj.price) fPrice.value = obj.price, fPrice.dispatchEvent(new Event('input'));
+  if (obj.quantity) document.getElementById('fQty').value = obj.quantity;
+  if (obj.materials) document.getElementById('fMat').value = (Array.isArray(obj.materials) ? obj.materials : [obj.materials]).join(', ');
+  if (obj.taxonomy_id) PICKED_TAX = { id: Number(obj.taxonomy_id), name: obj.category_suggestion || '（由 JSON 填入）' },
+    (function(){ var el = document.getElementById('taxPicked'); el.style.display = 'block';
+      el.innerHTML = '<b>已选类目：</b>' + esc(PICKED_TAX.name) + '（taxonomy_id = ' + PICKED_TAX.id + '）';
+      document.getElementById('btnProp').disabled = false; })();
+  log('已用 JSON 填充表单', 's');
+};
+
+boot();
+</script>
+</body>
+</html>
