@@ -423,7 +423,8 @@ async function handleApi(req, res) {
   //    若不放行 → 授权 100% 失败。它靠 state 校验防 CSRF，安全性由 state 承担。
   //  - /api/etsy/status：前端首屏要靠它判断显示「未配置 / 未授权 / 已就绪」哪一屏，
   //    它只返回布尔状态，不泄露任何密钥。
-  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/status'];
+  //★ 回调的两个变体路径都要免 key（见下方路由注释），否则店主从 Etsy 跳回来时带不了 key
+  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status'];
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status'
       && !ETSY_OPEN_PATHS.includes(p)) {
     const url = new URL(req.url, 'http://localhost');
@@ -819,7 +820,14 @@ async function handleApi(req, res) {
   }
 
   // OAuth 回调：Etsy 带着 code 跳回来。必须免 API_KEY（浏览器从 Etsy 跳过来时没有我们的 key）。
-  if (p === '/api/etsy/callback' && req.method === 'GET') {
+  //
+  // ★ 两个路径都接受，别再让操作者为路径写法对不上而返工：
+  //   /api/etsy/callback          —— 代码里的规范路径
+  //   /api/etsy/oauth/callback    —— 早期指引里给出、已登记进 Etsy App 的那个（多一层 /oauth）
+  // 曾在 .env.example 与店主指引里写成后者，而代码只认前者，导致点「同意」后
+  // Etsy 跳回来拿到 404 {"error":"not_found"}、授权彻底失败。
+  // 两个都放行是修复这类问题的最短路径：不必再去 Etsy 后台改已登记的 redirect_uri。
+  if ((p === '/api/etsy/callback' || p === '/api/etsy/oauth/callback') && req.method === 'GET') {
     const u = new URL(req.url, 'http://localhost');
     const code = u.searchParams.get('code') || '';
     const state = u.searchParams.get('state') || '';
@@ -879,7 +887,14 @@ async function handleApi(req, res) {
       return redirectWithMsg(res, '授权成功', shopHint + ' 现在可以回工作台「Etsy 商品」页建草稿了。');
     } catch (e) {
       etsyLog('换 token 失败：' + e.message);
-      return redirectWithMsg(res, '授权失败', e.message);
+      // redirect_uri 不一致是授权环节最常见的一类失败，且报错原文很不直观，
+      // 这里把「该改哪里」直接写清楚，省得去猜。
+      const hint = /redirect_uri/i.test(e.message)
+        ? '<br><br><b>这通常是因为 redirect_uri 对不上：</b>请确认 .env 里的 ETSY_REDIRECT_URI' +
+          '与 Etsy App 设置里登记的 Callback URL <b>一字不差</b>（包括结尾有没有斜杠）。' +
+          '改完 .env 需要重启后端，然后重新点一次授权。'
+        : '';
+      return redirectWithMsg(res, '授权失败', e.message + hint);
     }
   }
 

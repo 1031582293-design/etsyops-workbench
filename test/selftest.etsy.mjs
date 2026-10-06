@@ -797,6 +797,44 @@ console.log('\n【17】状态接口：shop_id 来源与多店提示');
   }
 }
 
+// ========== 18. 回调路径兼容（真实事故：not_found 导致授权 100% 失败） ==========
+// 背景：早期指引与 .env.example 把 redirect_uri 写成 /api/etsy/oauth/callback，
+// 而代码只注册了 /api/etsy/callback → 店主点「同意」后跳回来拿到 404 not_found。
+// 这两条断言守着「两个路径都必须能进回调」，防止将来某次重构又只留一个。
+console.log('\n【18】回调路径兼容（防止 not_found 让授权失败）');
+{
+  if (!fs.existsSync(path.resolve(ROOT, SERVER_TEST))) {
+    console.log('  （跳过：未生成 ' + SERVER_TEST + '）');
+  } else {
+    // 免 key 白名单里必须同时含两个路径
+    const st = await callApi('GET', '/api/etsy/status');
+    ok(st.code === 200, 'status 正常（基线）');
+
+    // 两个回调路径都必须被路由接住。
+    // 未配置 keystring + state 不匹配时，回调走的是 HTML 落地页（200），
+    // 而不是落到 handleApi 末尾那个 404 {"error":"not_found"} —— 区分点就在这。
+    for (const pth of ['/api/etsy/callback', '/api/etsy/oauth/callback']) {
+      const r = await callApi('GET', pth + '?code=dummy&state=dummy');
+      ok(r.code === 200 && /text\/html/.test(r.headers && r.headers['Content-Type'] || ''),
+        '★ ' + pth + ' 进回调逻辑（200 HTML 落地页）',
+        'code=' + r.code + ' ct=' + (r.headers && r.headers['Content-Type']));
+      ok(!(r.json && r.json.error === 'not_found'), pth + ' 不再返回 not_found');
+      // state 校验是 CSRF 防护：dummy state 必须被拒，且落地页里应能看到失败原因
+      ok(/授权校验失败|state/i.test(r.text), pth + ' 校验 state（CSRF 防护生效）');
+    }
+
+    // 对照组：随便编一个不存在的 Etsy 路径，确认它**不会**被当成回调处理。
+    // 注意本测试环境没配 WECHAT_APPID/Etsy 凭证，所以会被更早的「公众号未配置」闸门
+    // 拦成400（生产环境有公众号配置时才是 404 not_found）。两种都算「没进回调」，
+    // 关键是它不能像回调那样返回 200 HTML。
+    const nf = await callApi('GET', '/api/etsy/definitely-not-a-route');
+    const leaked = nf.code === 200 && /text\/html/.test(nf.headers && nf.headers['Content-Type'] || '');
+    ok(!leaked, '★ 不存在的路径不会进回调逻辑（放行范围没扩大）',
+      'code=' + nf.code + ' error=' + (nf.json && nf.json.error));
+    ok(nf.json && nf.json.error !== 'not_configured_callback', '无关路径无回调标记');
+  }
+}
+
 console.log('\n' + '='.repeat(76));
 console.log(`结果：通过 ${pass} 项，失败 ${fail} 项`);
 console.log('='.repeat(76));

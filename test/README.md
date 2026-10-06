@@ -63,7 +63,7 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 - 同步模式仍可用（旧前端兼容）
 - **等 35 秒验证清理定时器不报 ReferenceError**（捕获作用域错误这类只在运行期暴露的 bug）
 
-**Etsy selftest.etsy.mjs（188 项）**
+**Etsy selftest.etsy.mjs（197 项）**
 按「最容易造成真实损失」排序，重点覆盖：
 - **金额 subunit**：$29.99→2999、$0.29→29、负数与非数字被拒
 - **★ inventory 价格格式不对称**：读回是 Money 对象 `{amount, divisor}`，
@@ -86,6 +86,10 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 - **shop_id 自动发现**：从 access token 前缀取 user_id → 查`/users/{user_id}/shops`
   反查 shop_id；**多店铺时拒绝自动挑选**（可能把商品写进错误的店），单店铺自动采用；
   客户端的 shopId 必须**动态取**（授权前为空、发现后立刻可用）
+- **★ 回调路径兼容**：`/api/etsy/callback` 与 `/api/etsy/oauth/callback` **两个路径
+  都必须进回调逻辑**（曾因指引里写了后者、代码只注册前者，导致点「同意」后拿到
+  404 not_found、授权 100% 失败）；state校验（CSRF 防护）仍生效；
+  另有一条对照组断言确保无关路径不会被误当成回调
 - **路由降级**：未配置凭证时各接口返回 400 并点名缺哪个变量；报错**不再要求填
   ETSY_SHOP_ID**（已自动发现）；`validate` 永远可用；带变体时返回组合行给前端渲染
 
