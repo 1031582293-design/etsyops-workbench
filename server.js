@@ -4,7 +4,7 @@
 // 无需 npm install，npm start 即可监听 process.env.PORT || 3000。
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { join, normalize, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
@@ -37,6 +37,52 @@ loadDotEnv();
 // 崩溃兜底：单个请求的未捕获异常/未处理拒绝不应搞死整个进程（否则隧道转发不到本地 → 前端报“无法连接后端”）
 process.on('uncaughtException', (e) => console.error('[uncaughtException]', e && e.stack || e));
 process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e && e.stack || e));
+
+/* ---------- 运行记录存储层 ----------
+   目标：工作流画布的「运行历史」要落库。
+   当前用 JSON 文件（零依赖、够用、可直接 human-readable 排查）；
+   接口设计成 CRUD 形状，将来要换 SQLite 只需替换本层实现，上层调用不用改。
+   数据落在 server.js 同级的 data/ 目录下。*/
+const DATA_DIR = join(ROOT, 'data');
+const RUNS_FILE = join(DATA_DIR, 'runs.json');
+const RUNS_MAX = 500;                 // 最多保留 500 条，超出丢最旧的
+
+function readRuns() {
+  try {
+    const txt = readFileSync(RUNS_FILE, 'utf8');
+    const arr = JSON.parse(txt);
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+function writeRuns(arr) {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const keep = arr.slice(-RUNS_MAX);
+    // 原子写：先写临时文件再 rename，避免进程被杀时留下半截 JSON
+    const tmp = RUNS_FILE + '.tmp';
+    writeFileSync(tmp, JSON.stringify(keep, null, 2), 'utf8');
+    renameSync(tmp, RUNS_FILE);
+  } catch (e) {
+    console.error('[runs] 写入失败：', e && e.message);
+  }
+}
+// 追加一条记录。
+// ⚠️ 必须**同步落盘**再返回：画布点「运行」后会立刻 PATCH 上报第一步进度，
+// 若这里只写内存并防抖延迟，PATCH 会查不到刚建的记录 → 404。
+function appendRun(rec) {
+  const arr = readRuns();
+  arr.push(rec);
+  writeRuns(arr);
+  return rec;
+}
+function updateRun(id, patch) {
+  const arr = readRuns();
+  const i = arr.findIndex(r => r.id === id);
+  if (i < 0) return null;
+  arr[i] = Object.assign({}, arr[i], patch, { updatedAt: Date.now() });
+  writeRuns(arr);
+  return arr[i];
+}
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -404,6 +450,100 @@ async function handleApi(req, res) {
     }
   }
 
+  /* ---------- 运行记录（工作流画布的运行历史）----------
+     POST /api/runs        新建一条运行记录（画布点「运行」时调用）
+     PATCH /api/runs?id=   更新某条记录（每完成一步就上报一次进度）
+     GET  /api/runs        读取历史（倒序，最多 limit 条）
+     DELETE /api/runs?id=  删除单条；不带 id 则清空
+     这些接口只存元数据（步骤名/耗时/字数/状态），不存稿件正文，避免文件无限膨胀。*/
+  if (p === '/api/runs' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const rec = {
+        id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        employee: String(b.employee || '').slice(0, 60),
+        runName: String(b.runName || '').slice(0, 120),
+        configName: String(b.configName || '').slice(0, 60),
+        files: Array.isArray(b.files) ? b.files.slice(0, 20).map(f => String(f).slice(0, 120)) : [],
+        status: 'running',           // running | paused | done | failed
+        steps: Array.isArray(b.steps) ? b.steps.slice(0, 20).map(st => ({
+          key: String(st.key || '').slice(0, 30),
+          title: String(st.title || '').slice(0, 60),
+          ms: Number(st.ms) || 0,
+          state: String(st.state || 'done').slice(0, 12),   // ok | fail | skip
+          note: String(st.note || '').slice(0, 200),
+        })) : [],
+        words: 0,
+        draftMediaId: String(b.draftMediaId || '').slice(0, 80),
+        error: '',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      appendRun(rec);
+      console.log('[runs] 新建运行记录 ' + rec.id + ' · ' + (rec.employee || '-') + ' · ' + (rec.runName || '-'));
+      return json(res, 200, rec);
+    } catch (e) {
+      console.error('[runs] 新建失败：', e && e.message);
+      return json(res, 500, { error: 'runs_create_failed', note: e.message });
+    }
+  }
+
+  if (p === '/api/runs' && req.method === 'PATCH') {
+    try {
+      const _u = new URL(req.url, 'http://localhost');
+      const id = _u.searchParams.get('id') || '';
+      const b = await readJson(req);
+      const patch = {};
+      if (b.status !== undefined) patch.status = String(b.status).slice(0, 12);
+      if (b.steps !== undefined) patch.steps = Array.isArray(b.steps) ? b.steps.slice(0, 20).map(st => ({
+        key: String(st.key || '').slice(0, 30),
+        title: String(st.title || '').slice(0, 60),
+        ms: Number(st.ms) || 0,
+        state: String(st.state || 'done').slice(0, 12),
+        note: String(st.note || '').slice(0, 200),
+      })) : [];
+      if (b.words !== undefined) patch.words = Number(b.words) || 0;
+      if (b.draftMediaId !== undefined) patch.draftMediaId = String(b.draftMediaId).slice(0, 80);
+      if (b.error !== undefined) patch.error = String(b.error).slice(0, 300);
+      const out = updateRun(id, patch);
+      if (!out) return json(res, 404, { error: 'run_not_found', note: '运行记录不存在（可能已被清理）' });
+      return json(res, 200, out);
+    } catch (e) {
+      console.error('[runs] 更新失败：', e && e.message);
+      return json(res, 500, { error: 'runs_update_failed', note: e.message });
+    }
+  }
+
+  if (p === '/api/runs' && req.method === 'GET') {
+    try {
+      const _u = new URL(req.url, 'http://localhost');
+      const limit = Math.min(parseInt(_u.searchParams.get('limit') || '30', 10) || 30, RUNS_MAX);
+      const emp = _u.searchParams.get('employee') || '';
+      let arr = readRuns().slice().reverse();
+      if (emp) arr = arr.filter(r => r.employee === emp);
+      return json(res, 200, { total: arr.length, runs: arr.slice(0, limit) });
+    } catch (e) {
+      return json(res, 500, { error: 'runs_read_failed', note: e.message });
+    }
+  }
+
+  if (p === '/api/runs' && req.method === 'DELETE') {
+    try {
+      const _u = new URL(req.url, 'http://localhost');
+      const id = _u.searchParams.get('id');
+      if (id) {
+        const arr = readRuns();
+        const kept = arr.filter(r => r.id !== id);
+        writeRuns(kept);
+        return json(res, 200, { ok: true, deleted: arr.length - kept.length });
+      }
+      writeRuns([]);
+      return json(res, 200, { ok: true, deleted: 'all' });
+    } catch (e) {
+      return json(res, 500, { error: 'runs_delete_failed', note: e.message });
+    }
+  }
+
   // AI 生稿：按前端传来的生稿要求（prompt）把素材稿（manuscript）生成为公众号文案
   if (p === '/api/ai/generate' && req.method === 'POST') {
     if (!aiConfigured()) {
@@ -496,9 +636,15 @@ async function handleApi(req, res) {
       const systemPrompt = '你是资深公众号编辑，擅长写高点击率的标题。请基于文章给出候选标题：风格贴合公众号调性，简洁有吸引力，避免标题党与绝对化承诺。';
       const userPrompt = `【文章正文/素材】\n${draft}\n\n【标题要求】\n${requirement || '吸引点击、符合公众号调性、10~24 字、给出 5 个候选'}\n\n请直接输出 5 个候选标题，每行一个，不要编号以外的解释文字。`;
       const content = await aiGenerate(systemPrompt, userPrompt);
-      const titles = content.split('\n').map(s => s.replace(/^\s*\d+[.、)]\s*|\*\*/g, '').trim()).filter(Boolean).slice(0, 8);
+      const titles = content.split('\n')
+        .map(s => s.replace(/^\s*\d+[.、)]\s*|\*\*/g, '').replace(/[「」【】"']/g, '').trim())
+        .filter(Boolean).slice(0, 8);
       if (!titles.length) throw new Error('AI 未返回有效标题：' + content.slice(0, 200));
-      return json(res, 200, { titles });
+      // 第 1 个视为「最推荐」：画布一键执行时直接采用它；
+      // 工具页则把它放主框（可重选），其余作为候选项。
+      // 同时把字数带上，便于前端做长度体检。
+      const items = titles.map((t, i) => ({ t, i, len: t.length, top: i === 0 }));
+      return json(res, 200, { titles, items, top: titles[0] });
     } catch (e) {
       return json(res, 502, { error: 'ai_error', note: e.message });
     }

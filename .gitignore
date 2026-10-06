@@ -29,3 +29,7 @@ backend.log
 
 # 自测生成物（勿提交）
 server.test.js
+
+# 运行记录落库
+data/
+server.test.js
