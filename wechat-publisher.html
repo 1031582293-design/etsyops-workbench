@@ -243,6 +243,11 @@
       <div class="panel" id="panel2">
         <h3>④ 公众号排版</h3>
         <div class="ph-sub">选择版式模板与主题色，右侧实时预览手机效果。</div>
+        <div id="previewTip" class="ok-box" style="display:none;margin:10px 0;font-size:12px">
+          内容已更新，右侧预览尚未刷新。
+          <button class="btn primary" id="reRenderBtn" style="margin-left:8px;padding:4px 12px;font-size:12px">立即刷新预览</button>
+          <span style="opacity:.6;margin-left:6px">（长稿首次渲染约需 1~2 秒）</span>
+        </div>
         <label class="fld" style="margin-top:0">版式模板</label>
         <div class="tpls" id="tpls">
           <div class="tpl active" data-tpl="default">默认舒适</div>
@@ -296,7 +301,7 @@
         <div class="phone-bar"><i></i><i></i><i></i></div>
         <div class="wx-top"><span class="back">‹</span><span>公众号文章预览</span><span style="font-size:12px;font-weight:400;opacity:.8">···</span></div>
         <div class="article" id="article">
-          <img class="cover" id="prevCover" src="https://picsum.photos/seed/etsyops/760/420" alt="cover" />
+          <img class="cover" id="prevCover" alt="cover" />
           <h1 id="prevTitle">给文章起个标题…</h1>
           <div class="byline"><span class="avatar">💚</span><span id="prevAuthor"></span><span id="prevDate"></span></div>
           <div id="prevBody"><p style="color:#bbb">正文预览会随左侧编辑实时更新。支持标题、加粗、引用、列表、分割线等公众号常见版式。</p></div>
@@ -403,6 +408,26 @@ function mdToHtml(src){
 }
 
 /* ---------- 预览渲染 ---------- */
+// 内联 SVG 占位封面：data URI，零网络请求、零延迟
+const PLACEHOLDER_COVER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="760" height="420" viewBox="0 0 760 420">'
+  + '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
+  + '<stop offset="0" stop-color="#e8eef7"/><stop offset="1" stop-color="#dbe4f0"/>'
+  + '</linearGradient></defs>'
+  + '<rect width="760" height="420" fill="url(#g)"/>'
+  + '<text x="380" y="205" font-size="26" fill="#9aa7b8" text-anchor="middle" font-family="sans-serif">封面预览</text>'
+  + '<text x="380" y="240" font-size="15" fill="#b6c0cd" text-anchor="middle" font-family="sans-serif">在下一步生成，或上传封面图</text>'
+  + '</svg>');
+
+/* 预览过期标记：改标题后不立即重排，提示用户进排版步再看。
+   预览真正渲染的时机 = 进入第 4 步「公众号排版」+ 用户手动点「刷新预览」。*/
+let __previewStale = false;
+function markPreviewStale(){
+  __previewStale = true;
+  const tip = $('#previewTip');
+  if(tip) tip.style.display = 'block';
+}
+
 function renderPreview(){
   const theme = state.color;
   const art = $('#article');
@@ -415,11 +440,17 @@ function renderPreview(){
   $('#prevTitle').textContent = $('#title').value || '给文章起个标题…';
   $('#prevAuthor').textContent = $('#author').value || '';
   const cover = state.cover || $('#cover').value;
-  $('#prevCover').src = cover || 'https://picsum.photos/seed/etsyops/760/420';
+  // ★ 用内联 SVG 占位，绝不请求 picsum.photos。
+  //   实测该域名返回 302 需跟随重定向，每次渲染要多等 1~3 秒且会重新请求，
+  //   而 Edge 在图片未就绪时会阻塞主线程 → 点一次候选标题就「未响应」。
+  if(cover) { if($('#prevCover').getAttribute('src') !== cover) $('#prevCover').src = cover; }
+  else { if(!$('#prevCover').getAttribute('src')) $('#prevCover').src = PLACEHOLDER_COVER; }
   const raw = $('#src').value.trim();
   $('#prevBody').innerHTML = raw ? mdToHtml(raw) : '<p style="color:#bbb">正文预览会随左侧编辑实时更新。</p>';
   const d = new Date();
   $('#prevDate').textContent = (d.getMonth()+1)+'月'+d.getDate()+'日';
+  __previewStale = false;
+  const _t = $('#previewTip'); if(_t) _t.style.display = 'none';
 }
 
 /* 当模板需要不同视觉（文艺/极简）时在 h2 上叠加风格 */
@@ -439,7 +470,11 @@ function goStep(n){
   document.querySelectorAll('.step-chip').forEach(c=>c.classList.toggle('active', +c.dataset.step===n));
   ['panel1','panelAI','panelCover','panel2','panel3'].forEach((p,idx)=>{ $('#'+p).style.display = (idx+1)===n ? '' : 'none'; });
   window.scrollTo({top:0,behavior:'smooth'});
-  if(n===4) applyTplStyle();
+  if(n===4){
+    applyTplStyle();
+    // 进入排版步才做一次预览渲染（此前把渲染放在生稿/选标题等高频动作上，长稿必卡）
+    if(__previewStale){ renderPreview(); __previewStale = false; const t=$('#previewTip'); if(t) t.style.display='none'; }
+  }
 }
 document.querySelectorAll('.step-chip').forEach(c=>c.onclick=()=>{ const n=+c.dataset.step; if(n>1 && !validateManuscript()){ toast('请先把素材缩减到 5 万字以内，再进入下一步'); return; } goStep(n); });
 
@@ -559,7 +594,15 @@ function renderFileTags(){
   });
 }
 
-['title','src','author','cover','digest'].forEach(id=> $('#'+id).addEventListener('input', ()=>{ if(id==='src') validateManuscript(); renderPreview(); }));
+// 输入时预览做防抖（400ms）：长稿每敲一个字就整篇重排会卡死主线程。
+// 停止输入 400ms 后才渲染一次。
+let __previewTimer = null;
+['title','src','author','cover','digest'].forEach(id=> $('#'+id).addEventListener('input', ()=>{
+  if(id==='src') validateManuscript();
+  markPreviewStale();
+  if(__previewTimer) clearTimeout(__previewTimer);
+  __previewTimer = setTimeout(()=>{ __previewTimer = null; renderPreview(); }, 400);
+}));
 $('#src').addEventListener('input', validateManuscript);
 $('#toStep3').onclick=()=>goStep(5);
 
@@ -773,6 +816,15 @@ $('#genBtn').onclick = async ()=>{
   }
 };
 $('#skipGen').onclick = ()=>goStep(4);
+// 「立即刷新预览」
+$('#reRenderBtn').onclick = ()=>{
+  const t = Date.now();
+  renderPreview();
+  __previewStale = false;
+  $('#previewTip').style.display = 'none';
+  toast('预览已刷新（' + (Date.now()-t) + 'ms）');
+};
+$('#skipGen').onclick = ()=>goStep(4);
 
 /* ---------- STEP 3 · AI 生成标题 + 封面图 ---------- */
 $('#genTitleBtn').onclick = async ()=>{
@@ -800,10 +852,12 @@ $('#genTitleBtn').onclick = async ()=>{
         $('#titleTopInput').value = t;
         $('#titleTopNote').textContent = '已改为手动选择 · '+t.length+' 字';
         $('#title').value = t;
-        renderPreview();
+        // 不立即重渲染：点标题只改标题，右侧预览等进入「公众号排版」步时再刷新。
+        // 实测点一次候选就「未响应」——每改一次都同步重排整篇长稿代价太高。
+        markPreviewStale();
         list.querySelectorAll('.tpl').forEach(x=>x.classList.remove('active'));
         el.classList.add('active');
-        toast('已选用：'+t);
+        toast('已选用：' + t);
       };
       list.appendChild(el);
     });
@@ -811,7 +865,7 @@ $('#genTitleBtn').onclick = async ()=>{
     $('#titleTopInput').oninput = e=>{
       $('#title').value = e.target.value;
       $('#titleTopNote').textContent = '已手动编辑 · '+e.target.value.length+' 字';
-      renderPreview();
+      markPreviewStale();
     };
     toast('已生成 '+d.titles.length+' 个标题，最推荐已填入主框，可直接改或点候选替换');
   }catch(e){ toast('生成标题失败：'+e.message); }
