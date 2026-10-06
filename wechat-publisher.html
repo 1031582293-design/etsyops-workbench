@@ -689,7 +689,8 @@ function renderFileTags(){
 // 输入时预览做防抖（400ms）：长稿每敲一个字就整篇重排会卡死主线程。
 // 停止输入 400ms 后才渲染一次。
 let __previewTimer = null;
-['title','src','author','cover','digest'].forEach(id=> $('#'+id).addEventListener('input', ()=>{
+['title','src','author','cover','digest','aiPrompt'].forEach(id=> $('#'+id).addEventListener('input', ()=>{
+  if(id==='aiPrompt') sharePrompt($('#aiPrompt').value);
   if(id==='src') validateManuscript();
   markPreviewStale();
   if(__previewTimer) clearTimeout(__previewTimer);
@@ -764,6 +765,7 @@ function refreshStyleSel(sel){
 $('#styleSel').onchange = ()=>{
   const s = loadStyles()[$('#styleSel').value];
   $('#aiPrompt').value = s || DEFAULT_PROMPT;
+  sharePrompt($('#aiPrompt').value);
 };
 $('#saveStyle').onclick = ()=>{
   const name = (window.prompt('风格名称（如：风格1 · 干货教程）')||'').trim();
@@ -771,6 +773,7 @@ $('#saveStyle').onclick = ()=>{
   const styles = loadStyles();
   styles[name] = $('#aiPrompt').value;
   localStorage.setItem(STYLE_KEY, JSON.stringify(styles));
+  sharePrompt(styles[name]);
   refreshStyleSel(name);
   toast('已保存风格「'+name+'」');
 };
@@ -781,6 +784,17 @@ $('#delStyle').onclick = ()=>{
   const styles = loadStyles(); delete styles[name];
   localStorage.setItem(STYLE_KEY, JSON.stringify(styles));
   refreshStyleSel('');
+/*把当前生稿要求同步到共享 key，供工作流画布读取。
+   画布在另一个页面（index.html），读不到本页变量，
+   只能靠 localStorage 约定。这也是「画布报缺少 prompt」的根因：
+   画布里写的 window.getSavedPrompt 根本不存在，就永远拿到空串。*/
+const PROMPT_SHARE_KEY = 'wx_ai_current_prompt';
+function sharePrompt(v){ try{ localStorage.setItem(PROMPT_SHARE_KEY, v || ''); }catch(e){} }
+function readSharedPrompt(){ try{ return (localStorage.getItem(PROMPT_SHARE_KEY) || '').trim(); }catch(e){ return ''; } }
+window.getSavedPrompt = readSharedPrompt;
+window.sharePrompt = sharePrompt;
+window.DEFAULT_AI_PROMPT = DEFAULT_PROMPT;
+  sharePrompt(DEFAULT_PROMPT);
   $('#aiPrompt').value = DEFAULT_PROMPT;
   toast('已删除');
 };

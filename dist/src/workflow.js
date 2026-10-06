@@ -28,7 +28,7 @@ export function renderWfCanvas() {
     <div><h2>${e.name}</h2><div class="tag">${e.tagline}</div></div>
     <div class="wf-actions">
       <button class="btn" id="resetBtn">↺ 重置</button>
-      <button class="btn primary" id="runBtn">▶ 运行工作流</button>
+      <button class="btn primary" id="runBtn">${e.id === 'wechat' ? '⚡ 去运行台' : '▶ 演示工作流'}</button>
     </div>
   </div>`;
   const flow = e.nodes.map((n, i) => `
@@ -76,9 +76,42 @@ export function renderWfDetail() {
     </div>`;
 }
 
+function toastTip(msg){
+  let el = document.getElementById('wfTip');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'wfTip';
+    el.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:28px;'
+      + 'background:rgba(20,24,34,.94);color:#fff;padding:10px 18px;border-radius:10px;'
+      + 'font-size:13px;z-index:9999;box-shadow:0 8px 24px rgba(0,0,0,.35);max-width:80vw;text-align:center';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(el.__t);
+  el.__t = setTimeout(()=>{ el.style.display = 'none'; }, 4000);
+}
+
 export function runWorkflow() {
+  const e0 = EMPLOYEES.find(x => x.id === currentEmp);
+
+  // ★ 公众号工作流下方挂的是「真实运行台」（会真调后端、落库、记日志），
+  //   所以这里的假动画必须让路——否则用户看到「点了运行，节点全变绿」
+  //   却什么都没发生，完全是误导。
+  if (e0 && e0.id === 'wechat') {
+    const bar = $('#wfRunBar');
+    if (bar) {
+      bar.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const run = $('#wfRun');
+      if (run) { run.focus(); run.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+    }
+    toastTip('下方是真实运行台：先拖入文稿，再点「▶ 运行」才会真正执行');
+    return;
+  }
+
+  // 演示模式（仅用于尚未接入真实后端的展示型工作流）
   const runBtn = $('#runBtn');
-  runBtn.disabled = true; runBtn.textContent = '⏳ 运行中…';
+  runBtn.disabled = true; runBtn.textContent = '⏳ 演示动画中…';
   const e = EMPLOYEES.find(x => x.id === currentEmp);
   const nodes = $$('.node');
   const tags = $$('.status-tag');
@@ -99,7 +132,7 @@ export function runWorkflow() {
     setTimeout(step, 950);
   }
   function finish() {
-    runBtn.disabled = false; runBtn.textContent = '▶ 重新运行';
+    runBtn.disabled = false; runBtn.textContent = '▶ 重新演示';
     deliverBox.innerHTML = e.deliverables.map(d => `
       <div class="deliver-item"><div class="di">✓</div><div><div class="dt">${d.t}</div><div class="dd">${d.d}</div></div></div>`).join('');
   }

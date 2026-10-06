@@ -9,6 +9,14 @@ import { $, $$ } from './dom.js';
 
 const API = () => (window.getApiBase ? window.getApiBase() : '');
 
+/* 生稿要求的内置兜底。
+   正常路径是读localStorage 里工具页共享的值（key: wx_ai_current_prompt）；
+   但用户可能从没打开过工具页，这时用这份内置的，保证画布也能直接跑。*/
+const DEFAULT_GEN_PROMPT = `请基于素材生成一篇可读的公众号文章。
+要求：1) 开头直接切��主题，不要客套；2) 结构清晰，段落分明；
+3) 保留素材里的真实信息，不编造数据；4) 语言口语化、有节奏感；
+5) 不要输出写作说明，只输出文章正文。`;
+
 async function j(url, opts = {}) {
   const c = new AbortController();
   const t = setTimeout(() => c.abort(), opts.timeout || 30000);
@@ -43,7 +51,7 @@ const RUN = {
   article: '',
   title: '',
   thumbMediaId: '',
-  configName: '默认配置',
+  configName: '默认配置',   // 运行时由syncConfigName() 更新
   pausedAt: -1,
 };
 
@@ -57,6 +65,18 @@ const STEP_DEFS = [
 ];
 
 /* ---------- UI 渲染 ---------- */
+/* 从 localStorage 读当前生效的生稿要求名（工具页保存风格时写入）。
+   找不到就显示「默认配置」——此时用内置兜底 prompt，功能完全可用。*/
+function syncConfigName(){
+  let name = '';
+  try{
+    const cur = (localStorage.getItem('wx_ai_current_prompt') || '').trim();
+    const styles = JSON.parse(localStorage.getItem('wx_ai_styles_v1') || '{}');
+    for (const k in styles) { if (styles[k] && styles[k] === cur) { name = k; break; } }
+  }catch(e){}
+  RUN.configName = name || '默认配置';
+}
+
 function log(msg) {
   const ts = new Date().toTimeString().slice(0, 8);
   RUN.logs.push(ts + ' ' + msg);
@@ -86,6 +106,7 @@ function paintSteps() {
 function paintRunBar() {
   const bar = $('#wfRunBar');
   if (!bar) return;
+  syncConfigName();
   const done = RUN.steps.filter(s => s.state === 'ok').length;
   const cur = STEP_DEFS[RUN.step] || null;
   bar.innerHTML = `
@@ -235,7 +256,18 @@ export function paintWechatRunBar() { paintRunBar(); paintSteps(); }
 
 /* ---------- 生稿（提交 + 分片轮询，与工具页同一套逻辑） ---------- */
 async function doGenerate() {
-  const prompt = (window.getSavedPrompt && window.getSavedPrompt()) || '';
+  // ★ prompt 必须有兜底。原来的写法
+  //   (window.getSavedPrompt && window.getSavedPrompt()) || ''
+  // 有两个问题：① 画布是 index.html，工具页是 wechat-publisher.html，
+  // 跨页面读不到 window 上的函数；② 即使读到，也可能为空 → 后端报「缺少 prompt」。
+  // 现在：先读 localStorage 共享值 → 再退到内置默认要求 → 最后才报错。
+  let prompt = '';
+  try{ prompt = (localStorage.getItem('wx_ai_current_prompt') || '').trim(); }catch(e){}
+  if(!prompt){
+    prompt = DEFAULT_GEN_PROMPT;
+    log('未读到已保存的生稿要求，改用内置默认要求');
+  }
+  if(!prompt) throw new Error('生稿要求为空：请先到专用工具页设置并保存');
   const sub = await j(API() + '/api/ai/generate', { timeout: 30000,
     body: { manuscript: RUN.files.map(f => f.text).join('\n\n---\n\n').slice(0, 15000), prompt, async: true } });
   if (!sub.jobId) throw new Error('后端未返回任务号');
