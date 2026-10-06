@@ -78,13 +78,31 @@ function toSubunit(price, divisor = 100) {
   return { amount: Math.round(n * divisor), divisor };
 }
 
-/** { amount: 2999, divisor: 100 } → 29.99。仅用于回显与校验，绝不发给 Etsy。 */
+/** { amount: 2999, divisor: 100, currency_code: 'USD' } → 29.99。仅用于回显与校验，绝不发给 Etsy。 */
 function fromSubunit(money) {
   if (!money || typeof money !== 'object') return null;
   const d = Number(money.divisor || 100);
   const a = Number(money.amount || 0);
   if (!d) return null;
   return Math.round((a / d) * 100) / 100;
+}
+
+/**
+ * 把「可能是 Money 对象、也可能是裸数字」的价格统一成浮点。
+ *
+ * ★ 这是 inventory 读写格式不对称的桥：
+ *   - Etsy **读回** inventory 时，offerings[].price 是 Money 对象 {amount, divisor}；
+ *   - Etsy **写入** inventory 时，offerings[].price 要浮点（官方原文 "assign a float
+ *     equal to amount divided by divisor" / "set your price as a float value"）。
+ *   整表覆盖时必须先把读回来的对象归一化成浮点，否则未修改的行会带着对象格式写回去。
+ *   （对比：createDraftListing 的表单里 price 是 subunit 整数，与这里规则相反，
+ *    两处不要互相照抄。）
+ */
+function toFloatPrice(v) {
+  if (v === null || v === undefined) return v;
+  if (typeof v === 'object') return fromSubunit(v);   // Money → 浮点
+  const n = Number(v);
+  return Number.isFinite(n) ? n : v;
 }
 
 /** 建授权跳转 URL。state 由调用方生成并落盘，回调时比对，防 CSRF。 */
@@ -578,7 +596,13 @@ function buildInventoryBody(inp) {
         values: pv.values || [],
       })),
       offerings: [{
-        price: toSubunit(p.price).amount, // offerings 的 price 同样是 subunit 整数
+        // ★ 这里必须传**浮点美元**，不是 subunit 整数。这是与 createDraftListing 的关键差异，
+        //   写错就是 100 倍价格事故（$29.99 传成 29 → 变成 $0.29；传成 2999 → 变成 $2999）。
+        //   依据：官方 updateListingInventory 描述 "assign a float equal to amount divided
+        //   by divisor"，官方 Listings 教程 uploadListingInventory 示例明确写
+        //   "set your price as a float value"。Money 结构只用于**读取**（响应里 price 是
+        //   {amount, divisor} 对象），写入时用 amount/divisor 的商。
+        price: Number(p.price),
         quantity: Number(p.quantity || 0),
         is_enabled: p.is_enabled === false ? false : true,
         readiness_state_id: Number(p.readiness_state_id || inp.readiness_state_id),
@@ -618,6 +642,16 @@ function mergeInventory(currentBody, patches) {
   const currentKeys = new Set(currentBody.products.map(p => productKey(p.property_values)));
   const out = currentBody.products.map(p => JSON.parse(JSON.stringify(p)));
 
+  // ★ 所有行都要先把price 从 Money 对象归一化成浮点，**包括这次不打算改的行**。
+  //   原因：这是整表 PUT，未命中的行也会被原样提交回去。若不归一化，那些行会带着
+  //   {amount, divisor} 对象格式发出去 Etsy，写入格式错误。
+  //   换句话说：这里不能"只改我要改的"，必须"把整张表转成可提交的形状"。
+  for (const p of out) {
+    for (const off of (p.offerings || [])) {
+      if (off && off.price !== undefined) off.price = toFloatPrice(off.price);
+    }
+  }
+
   let applied = 0;
   for (const patch of patches) {
     const k = productKey(patch.property_values);
@@ -628,7 +662,7 @@ function mergeInventory(currentBody, patches) {
     const target = out[idx];
     // 保留原有 offering 的 id / sku，只改明确指定的字段
     const off = target.offerings && target.offerings[0] ? target.offerings[0] : {};
-    if (patch.price !== undefined && patch.price !== null) off.price = toSubunit(patch.price).amount;
+    if (patch.price !== undefined && patch.price !== null) off.price = Number(patch.price);
     if (patch.quantity !== undefined && patch.quantity !== null) off.quantity = Number(patch.quantity);
     if (patch.sku !== undefined) target.sku = String(patch.sku);
     if (patch.is_enabled !== undefined) off.is_enabled = Boolean(patch.is_enabled);
@@ -666,10 +700,159 @@ async function getInventory(client, listingId, maxVariations = 3) {
   return client.get(`/listings/${listingId}/inventory`, { max_variations_supported: String(maxVariations) });
 }
 
+// ---------------------------------------------------------------- 变体：由「用户选择」生成组合
+
+/* 变体为什么这样设计（这是本文件最容易被误改的地方，改之前先读完）：
+ *
+ * Etsy 的变体不能靠"告诉它我有几个颜色选项"。必须给出**每个维度的property_id
+ * 和每个选项的 value_id**，而这些 ID 由 Etsy 按类目决定 —— 换个类目就全变了，
+ * 猜不出来、编不出来。
+ *
+ * 所以链路设计成「人做选择，程序做传递」：
+ *   1. 程序查该类目的全部属性 → 拿到真实的 property_id / value_id；
+ *   2. **用户在页面上勾选**（不是手输ID，ID 由查询结果一路带着走）；
+ *   3. 程序按勾选结果展开组合矩阵（笛卡尔积）；
+ *   4. 用户逐格填价格库存；
+ *   5. 提交前本地校验，通过才整表 PUT。
+ *
+ * 这样"ID 从哪来"始终可追溯到某次真实查询，全链路没有一处是猜的。
+ */
+
+/** 校验用户的变体选择是否符合 Etsy 规则，并算出组合数。 */
+function validateVariationPlan(plan) {
+  const errs = [];
+  const notes = [];
+  const dims = Array.isArray(plan && plan.dimensions) ? plan.dimensions : [];
+
+  if (!dims.length) {
+    return { ok: false, empty: true, errors: [], notes: ['未选择任何变体维度（这属于正常情况：单规格商品本就不需要变体）'], combinationCount: 0 };
+  }
+  if (dims.length > 3) {
+    errs.push(`选了 ${dims.length} 个变体维度，Etsy 最多支持 3 个`);
+  }
+  dims.forEach((d) => {
+    if (!d.property_id) errs.push(`维度「${d.name || '未命名'}」缺少 property_id`);
+    if (!Array.isArray(d.values) || !d.values.length) {
+      errs.push(`维度「${d.name || '未命名'}」没有勾选任何值`);
+    } else {
+      const bad = d.values.filter(v => !v.value_id);
+      if (bad.length) errs.push(`维度「${d.name || '未命名'}」有 ${bad.length} 个选项缺少 value_id`);
+      const dup = new Set();
+      const dups = d.values.filter(v => {
+        const k = String(v.value_id);
+        if (dup.has(k)) return true;
+        dup.add(k);
+        return false;
+      });
+      if (dups.length) errs.push(`维度「${d.name}」选了重复的值：${dups.map(v => v.value || v.value_id).join('、')}`);
+    }
+    // scale_id 只在尺寸等带单位的属性上出现（如 US numeric），必须原样带上
+    if (d.scale_id === undefined || d.scale_id === null || d.scale_id === '') {
+      notes.push(`维度「${d.name || '未命名'}」没有 scale_id；若该属性带单位（如鞋码尺寸），Etsy 要求提供`);
+    }
+  });
+
+  // 组合数 = 各维度值数之积。
+  // ⚠️ 初始值必须是 **1**，不能是 0：这是乘法累乘，0 × 任何数都等于 0，
+  //   用 0 开头会让 combinationCount 恒为 0（页面据此显示的组合行数也会是错的）。
+  //   同时必须显式传初始值，否则 reduce 会拿第一个 dimension 对象当初始值去乘 → NaN。
+  const combinationCount = dims.reduce((n, d) => n * ((d.values || []).length || 0), 1);
+  if (combinationCount > 1) {
+    if (combinationCount > 50) {
+      // 官方：3 变体时上限 2500，任一 *_on_property 填满时 400。但几百个组合已无人能核对
+      notes.push(`组合数 ${combinationCount} 较多，发布前请务必逐格核对价格与库存`);
+    }
+    notes.push(`共${combinationCount} 个组合，每个组合都是独立的库存行，各自有价格与 SKU`);
+  }
+
+  return { ok: errs.length === 0, errors: errs, notes, combinationCount, dimensionCount: dims.length };
+}
+
+/** 按勾选的维度展开笛卡尔积，生成待填写的组合行（不提交）。 */
+function expandVariationCombinations(dims) {
+  let combos = [[]];
+  for (const d of dims || []) {
+    const vals = (d.values || []).filter(v => v && v.value_id);
+    const next = [];
+    for (const c of combos) {
+      for (const v of vals) {
+        next.push(c.concat([{
+          property_id: Number(d.property_id),
+          property_name: d.name || '',
+          // scale_id 只在确实存在时带上；带上 null 会被 Etsy 判为格式错误
+          scale_id: (d.scale_id === undefined || d.scale_id === null || d.scale_id === '') ? null : Number(d.scale_id),
+          value_ids: [Number(v.value_id)],
+          values: [v.value || ''],
+        }]));
+      }
+    }
+    combos = next;
+  }
+  return combos;
+}
+
+/* 把组合行 + 用户填的价格库存，组装成 PUT /inventory 的请求体。
+   price 是浮点（不是 subunit），见 buildInventoryBody 上方注释。 */
+function buildVariationBody(combos, perRow, opts = {}) {
+  const priceOn = (opts.price_on_property || []).map(Number);
+  const qtyOn = (opts.quantity_on_property || []).map(Number);
+  const skuOn = (opts.sku_on_property || []).map(Number);
+  const readyOn = (opts.readiness_state_on_property || []).map(Number);
+
+  return {
+    products: combos.map((pv, i) => {
+      const r = perRow[i] || {};
+      return {
+        sku: String(r.sku || ''),
+        property_values: pv,
+        offerings: [{
+          price: Number(r.price),          // 浮点美元
+          quantity: Number(r.quantity || 0),
+          is_enabled: r.is_enabled === false ? false : true,
+          readiness_state_id: Number(r.readiness_state_id || opts.readiness_state_id || 0),
+        }],
+      };
+    }),
+    price_on_property: priceOn,
+    quantity_on_property: qtyOn,
+    sku_on_property: skuOn,
+    readiness_state_on_property: readyOn,
+  };
+}
+
+/** 提交前的最后一道校验：组合行逐格检查，绝不把空价格发出去。 */
+function validateVariationRows(combos, perRow) {
+  const errs = [];
+  if (!Array.isArray(perRow) || perRow.length !== combos.length) {
+    errs.push(`填写的行数（${(perRow || []).length}）与组合数（${combos.length}）不一致`);
+    return { ok: false, errors: errs };
+  }
+  const label = (i) => combos[i].map(pv => (pv.values || [])[0]).join(' + ');
+  perRow.forEach((r, i) => {
+    const p = r.price;
+    if (p === undefined || p === null || p === '' || Number.isNaN(Number(p))) {
+      errs.push(`「${label(i)}」没有填价格`);
+    } else if (Number(p) < 0) {
+      errs.push(`「${label(i)}」价格是负数`);
+    }
+    const q = r.quantity;
+    if (q === undefined || q === null || q === '') {
+      errs.push(`「${label(i)}」没有填库存`);
+    } else if (Number(q) < 0) {
+      errs.push(`「${label(i)}」库存是负数`);
+    }
+    if (Number(p) > 0 && Number(q) === 0) {
+      // 不阻断，但提示：零库存的组合买家能选但买不到
+    }
+  });
+  return { ok: errs.length === 0, errors: errs };
+}
+
 export {
   etsyConfig,
   toSubunit,
   fromSubunit,
+  toFloatPrice,
   b64url,
   randomVerifier,
   pkceChallenge,
@@ -688,6 +871,10 @@ export {
   validateDraftInput,
   buildDraftForm,
   buildInventoryBody,
+  validateVariationPlan,
+  expandVariationCombinations,
+  buildVariationBody,
+  validateVariationRows,
   draftListing,
   productKey,
   mergeInventory,

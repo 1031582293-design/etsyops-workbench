@@ -63,13 +63,20 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 - 同步模式仍可用（旧前端兼容）
 - **等 35 秒验证清理定时器不报 ReferenceError**（捕获作用域错误这类只在运行期暴露的 bug）
 
-**Etsy selftest.etsy.mjs（117 项）**
+**Etsy selftest.etsy.mjs（161 项）**
 按「最容易造成真实损失」排序，重点覆盖：
 - **金额 subunit**：$29.99→2999、$0.29→29、负数与非数字被拒
+- **★ inventory 价格格式不对称**：读回是 Money 对象 `{amount, divisor}`，
+  写入要**浮点**（官方原文 "assign a float equal to amount divided by divisor" /
+  "set your price as a float value"）。整表 PUT 前必须把**所有行**（含未修改的）
+  归一化成浮点，否则对象格式被原样写回
 - **标题/标签规则**：140 字符边界、`% : & +` 各限一次、标签 20 字符边界、
   **14 个标签自动截到 13**（超了会被 Etsy 整单拒绝）
 - **库存整表合并**：只改一行时其余行/sku/offering_id 全部保留、
   不存在的变体拒绝提交（防误删在售商品）
+- **变体链路**：组合数是乘法累乘（初始值必须为 1，用 0 会恒等于 0）、
+  笛卡尔积展开、scale_id 按维度带对、**缺 value_id / property_id 一律拒绝**
+  （这是「不许猜 ID」的强制点）、逐格校验且报错指名是哪个组合
 - **写操作安全开关**：`ETSY_ALLOW_WRITE` 关闭时**根本不发请求**
 - **token生命周期**：到期自动刷新、**refresh token 轮换后覆盖落盘**、
   并发只刷一次、401 强制刷新重试
@@ -77,7 +84,7 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 - **报错可读**：错误里带 Etsy 原文；非 JSON 响应（Cloudflare 502 HTML）也不崩
 - **授权 URL**：S256 + state 齐全，且不泄漏 verifier
 - **路由降级**：未配置凭证时各接口返回 400 并点名缺哪个变量；
-  `validate` 永远可用（不依赖凭证）
+  `validate` 永远可用（不依赖凭证）；带变体时返回展开好的组合行给前端渲染
 
 **前端 selftest.frontend.mjs（22 项）**
 - `apiCall` 强制带 `Accept-Encoding: identity`、正确拼 URL、带 `AbortSignal`
@@ -101,6 +108,26 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 | `expires_in \|\| 3600` | `expires_in=0` 被误判成还有 1 小时有效，白发一次 401 | 改用 `??`，并测 0/ 30 / 缺失 三种情况 |
 | Etsy 路由写在「公众号未配置」闸门之后 | 只配 Etsy 不配公众号时 Etsy 整体不可用 | 路由已移到闸门前，注释标注原因 |
 | `tags`/`materials` 以数组进 URLSearchParams | 依赖隐式 toString，后续改动易踩坑 | 显式 `join(',')`，并断言类型为 string |
+| **inventory 的 price 用了 subunit** | 与 createDraftListing 规则相反，$29.99 会变成 $29 —— **100 倍价格事故** | 改为浮点；新增 `toFloatPrice()` 统一读写不对称；专门测「读是对象、写是浮点」 |
+| **整表 PUT 时只归一化了被修改行的价格** | 未命中的行会带着 Money 对象格式写回 Etsy，写入格式错误 | 归一化提到 patch 循环**之前**，对所有行执行 |
+| **组合数用 `reduce(..., 0)`** | 乘法累乘初始值 0 → 任何数乘 0 都等于 0，组合数恒为 0（页面据此显示的行数全错） | 初始值改1，并测 1/2/3 维度共 10 项断言 |
+
+## 关于 inventory 价格格式（最容易改错的一处）
+
+Etsy 有**两套相反的价格规则**，同一份代码里并存：
+
+| 接口 | price格式 | 例子 |
+|---|---|---|
+| `POST /listings`（建草稿表单） | **subunit 整数** | $29.99 → `2999` |
+| `PUT /inventory`（变体价格） | **浮点** | $29.99 → `29.99` |
+
+而 `GET /inventory` **读回来**的 price 又是 `Money` 对象 `{amount: 2999, divisor: 100}`。
+
+官方依据（用官方 MCP 的 `get_endpoint` / `get_guide` 直接查证）：
+- `updateListingInventory` 描述：*"assign a float equal to amount divided by divisor"*
+- Listings 教程 `uploadListingInventory` 示例：*"set your price as a float value"*
+
+所以整表覆盖时的正确顺序是：`GET` → **所有行** price 从 Money 对象归一化成浮点 → 改目标行 → `PUT`。两处不要互相照抄。
 
 ## 注意
 

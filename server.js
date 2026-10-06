@@ -743,7 +743,7 @@ async function handleApi(req, res) {
      POST      /api/etsy/preflight  拉店铺分区/配送模板/处理档案/店铺信息（缓存 6 小时）
      GET       /api/etsy/taxonomy   按关键词搜类目，换真实 taxonomy_id
      GET       /api/etsy/properties 查某类目下可选属性
-     POST      /api/etsy/validate   本地校验标题/标签/必填项（不花额度）
+     POST      /api/etsy/validate   本地校验标题/标签/必填项/变体（不花额度；变体时返回展开好的组合行）
      POST      /api/etsy/draft      建草稿 + 传图 + 属性 + 库存（★停在 draft）
      POST      /api/etsy/publish    单独一步 state=active（★上架费在这一步才产生）
      POST      /api/etsy/deactivate 下架止损（比删除温和）
@@ -883,12 +883,33 @@ async function handleApi(req, res) {
       const v = etsy.validateDraftInput(b);
       const t = etsy.validateTitle(b.title);
       const g = etsy.validateTags(b.tags);
+      // 变体计划（若前端选了变体）：算组合数、列问题、**把展开好的组合行返回给前端**，
+      // 前端据此渲染每格的价格/库存输入框。整个过程不请求 Etsy、不消耗额度。
+      const plan = etsy.validateVariationPlan({ dimensions: b.variation_dimensions });
+      let variation = null;
+      if (!plan.empty) {
+        const combos = plan.ok ? etsy.expandVariationCombinations(b.variation_dimensions) : [];
+        const rows = Array.isArray(b.variation_rows) ? b.variation_rows : [];
+        const rowCheck = plan.ok ? etsy.validateVariationRows(combos, rows) : { ok: true, errors: [] };
+        variation = Object.assign({}, plan, {
+          combinations: combos.map(c => ({
+            label: c.map(pv => (pv.values || [])[0]).join(' + '),
+            property_values: c,
+          })),
+          rowErrors: rowCheck.errors,
+          // 价格变化的属性要记进 price_on_property，否则 Etsy 不会按变体分别定价
+          price_on_property: (b.price_on_property || []).map(Number),
+          quantity_on_property: (b.quantity_on_property || []).map(Number),
+          sku_on_property: (b.sku_on_property || []).map(Number),
+        });
+      }
       return json(res, 200, {
         ok: true,
-        canDraft: v.ok,
-        errors: v.errors,
+        canDraft: v.ok && (variation ? variation.ok && variation.rowErrors.length === 0 : true),
+        errors: v.errors.concat(variation ? variation.errors.concat(variation.rowErrors) : []),
         title: t,
         tags: g,
+        variation,
         // 程序只能标记机械性问题，不能替人判断材质/授权/图片真实性（SOP 第 19 节明确要求）
         manualChecks: [
           '材质与认证是否有事实依据（AI 不能猜）',
@@ -917,6 +938,47 @@ async function handleApi(req, res) {
       if (imgCount > 20) {
         return json(res, 400, { error: 'too_many_images', note: `图片 ${imgCount} 张，超过 Etsy 上限 20 张。` });
       }
+
+      // 变体：如果前端选了维度，在提交前再校验一次（不信任前端结果），
+      //并把「组合矩阵 + 每行价格库存」组装成 products 交给 draftListing。
+      //⚠️ 这一步是「用户勾选 → 程序传递」的关键：property_id / value_id 全部来自
+      //    /api/etsy/properties 的真实查询结果，全程没有猜测成分。
+      let variationSummary = null;
+      if (Array.isArray(b.variation_dimensions) && b.variation_dimensions.length) {
+        const plan = etsy.validateVariationPlan({ dimensions: b.variation_dimensions });
+        if (!plan.ok) {
+          return json(res, 400, {
+            error: 'variation_invalid',
+            note: '变体设置有问题（已阻止请求，未消耗 Etsy 额度）：',
+            errors: plan.errors,
+          });
+        }
+        const combos = etsy.expandVariationCombinations(b.variation_dimensions);
+        const rows = Array.isArray(b.variation_rows) ? b.variation_rows : [];
+        const rowCheck = etsy.validateVariationRows(combos, rows);
+        if (!rowCheck.ok) {
+          return json(res, 400, {
+            error: 'variation_rows_invalid',
+            note: '变体的价格或库存没填完整（已阻止请求，未消耗 Etsy 额度）：',
+            errors: rowCheck.errors,
+          });
+        }
+        const mv = combos[0].length;
+        b.max_variations_supported = mv;
+        // 3 个变体维度时必须显式带 max_variations_supported=3，否则 Etsy 返回 409
+        b.products = etsy.buildVariationBody(combos, rows, {
+          readiness_state_id: b.readiness_state_id,
+          price_on_property: b.price_on_property,
+          quantity_on_property: b.quantity_on_property,
+          sku_on_property: b.sku_on_property,
+        }).products;
+        variationSummary = {
+          dimensionCount: mv, combinationCount: combos.length,
+          labels: combos.map(c => c.map(pv => (pv.values || [])[0]).join(' + ')),
+        };
+        etsyLog('变体：' + mv + ' 个维度 × ' + combos.length + ' 个组合');
+      }
+
       const _td = Date.now();
       etsyLog('开始建草稿：' + (b.title || '').slice(0, 40) + '… 图片 ' + imgCount + ' 张');
       const r = await etsy.draftListing(etsyClient, b);
@@ -928,6 +990,7 @@ async function handleApi(req, res) {
         images: r.images,
         properties: r.properties,
         inventory: r.inventory,
+        variation: variationSummary,
         note: '草稿已建立，尚未发布（Etsy 上架费 $0.20 只在发布时产生）。请到 Shop Manager → Listings 里核对一遍，确认无误再点「确认发布」。',
       });
     } catch (e) {

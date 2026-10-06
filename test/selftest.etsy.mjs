@@ -225,8 +225,67 @@ console.log('\n【6】库存整表合并（Etsy PUT /inventory 是整表覆盖�
   const r3 = etsy.mergeInventory(current, [
     { property_values: [{ property_id: 200, value_ids: [1] }], price: '24.99' },
   ]);
-  ok(r3.body.products[0].offerings[0].price === 2499, '价格也用 subunit 写入', String(r3.body.products[0].offerings[0].price));
+  // ★ 关键修正：inventory 写入的价格是**浮点**，不是 subunit 整数。
+  //   官方 updateListingInventory 描述 "assign a float equal to amount divided by divisor"，
+  //   官方 Listings 教程示例写 "set your price as a float value"。
+  //   读回时 price 是 Money 对象 {amount, divisor}，整表 PUT 前必须归一化成浮点，
+  //   否则未修改的行会带着对象格式写回去。
+  ok(r3.body.products[0].offerings[0].price === 24.99, '★ 写入价格是浮点 24.99（不是 2499）',
+    String(r3.body.products[0].offerings[0].price));
   ok(r3.body.products[0].offerings[0].quantity === 10, '只改价格不动数量');
+  ok(typeof r3.body.products[0].offerings[0].price === 'number', 'price 是 number 不是对象/字符串');
+}
+
+// ========== 6b. inventory 价格格式：读写不对称（官方规范硬约束） ==========
+console.log('\n【6b】inventory 价格格式：读是 Money 对象，写是浮点');
+{
+  // Etsy 读回的形状
+  const fromEtsy = {
+    products: [
+      { sku: 'A', property_values: [{ property_id: 200, value_ids: [1], values: ['Red'] }],
+        offerings: [{ offering_id: 111, price: { amount: 2999, divisor: 100, currency_code: 'USD' }, quantity: 10, is_enabled: true }] },
+      { sku: 'B', property_values: [{ property_id: 200, value_ids: [2], values: ['Blue'] }],
+        offerings: [{ offering_id: 222, price: { amount: 4500, divisor: 100, currency_code: 'USD' }, quantity: 8, is_enabled: true }] },
+    ],
+    price_on_property: [200], quantity_on_property: [], sku_on_property: [],
+  };
+  ok(etsy.toFloatPrice({ amount: 2999, divisor: 100 }) === 29.99, 'Money 对象 → 浮点 29.99');
+  ok(etsy.toFloatPrice({ amount: 4500, divisor: 100 }) === 45, 'Money 对象 → 浮点 45');
+  ok(etsy.toFloatPrice(29.99) === 29.99, '已是数字则原样返回');
+  ok(etsy.toFloatPrice('30') === 30, '数字字符串 → 数字');
+
+  // 只改 B 的库存，A 未被命中 → A 的 price 必须也被归一化成浮点
+  const r = etsy.mergeInventory(fromEtsy, [
+    { property_values: [{ property_id: 200, value_ids: [2] }], quantity: 2 },
+  ]);
+  const prices = r.body.products.map(p => p.offerings[0].price);
+  ok(prices.every(p => typeof p === 'number'), '★ 未命中的行也被归一化成浮点（不会被带着对象写回）',
+    JSON.stringify(prices));
+  ok(prices[0] === 29.99 && prices[1] === 45, '两行价格都正确还原', prices.join(', '));
+
+  // 建草稿表单的价格规则相反（subunit 整数），必须两者不互相污染
+  const form = etsy.buildDraftForm({
+    title: 'T', description: 'D', tags: ['a'], price: '29.99', quantity: '1',
+    taxonomy_id: '1', who_made: 'i_did', when_made: 'made_to_order', is_supply: false,
+    shipping_profile_id: '1', readiness_state_id: '2',
+  });
+  ok(form.price === '2999', '★ createDraftListing 仍是 subunit 整数 2999（与 inventory 规则相反）', form.price);
+
+  const invBody = etsy.buildInventoryBody({
+    readiness_state_id: 222,
+    products: [{ sku: 'X', property_values: [{ property_id: 200, value_ids: [1], values: ['Red'] }],
+      price: '29.99', quantity: 5 }],
+  });
+  ok(invBody.products[0].offerings[0].price === 29.99, '★ buildInventoryBody 是浮点 29.99', String(invBody.products[0].offerings[0].price));
+
+  // 100 倍事故的两个方向都要挡住
+  const bad1 = etsy.buildInventoryBody({ readiness_state_id: 1,
+    products: [{ sku: 'X', property_values: [], price: 2999, quantity: 1 }] });
+  ok(bad1.products[0].offerings[0].price === 2999, '若真传入 2999 就是 $2999 —— 正是靠人/前端不传错来防');
+  const bad2 = etsy.buildDraftForm({ title: 'T', description: 'D', tags: ['a'], price: 29.99,
+    quantity: '1', taxonomy_id: '1', who_made: 'i_did', when_made: 'made_to_order',
+    is_supply: false, shipping_profile_id: '1', readiness_state_id: '2' });
+  ok(bad2.price !== '29.99', '★ 草稿表单绝不会把裸小数发出去', bad2.price);
 }
 
 // ========== 7. 写操作安全开关 ==========
@@ -507,6 +566,53 @@ console.log('\n【14】后端路由（真实 handleApi，未配置时的降级�
     ok(r3.json && Array.isArray(r3.json.manualChecks) && r3.json.manualChecks.length >= 5,
       '★ 同时返回「程序无法替你判断的事」（SOP 第 19 节要求）');
 
+    // 变体：validate 接口要能把展开好的组合行返回给前端
+    const vdims = [
+      { property_id: 200, name: 'Primary color', values: [
+        { value_id: 49928889192, value: 'Black' }, { value_id: 49928889193, value: 'Blue' } ] },
+      { property_id: 52047899318, name: 'Size', scale_id: 30, values: [{ value_id: 108450111040, value: 'Medium' }] },
+    ];
+    const rv = await callApi('POST', '/api/etsy/validate', {
+      title: 'Ceramic Horse Figurine', description: 'desc',
+      tags: Array.from({ length: 13 }, (_, i) => 'tag ' + i),
+      price: '29.99', quantity: '10', taxonomy_id: '496',
+      who_made: 'i_did', when_made: 'made_to_order', is_supply: false,
+      shipping_profile_id: '111', readiness_state_id: '222',
+      variation_dimensions: vdims,
+    });
+    ok(rv.code === 200, '带变体的 validate → 200');
+    ok(rv.json && rv.json.variation && rv.json.variation.combinationCount === 2,
+      '★ 返回组合数 2', rv.json && rv.json.variation && String(rv.json.variation.combinationCount));
+    ok(rv.json && rv.json.variation.combinations.map(c => c.label).join(' / ') === 'Black + Medium / Blue + Medium',
+      '★ 返回带 label 的组合行（前端据此渲染输入框）',
+      rv.json && rv.json.variation && rv.json.variation.combinations.map(c => c.label).join(' / '));
+    ok(rv.json && rv.json.canDraft === false, '变体未填价格 → canDraft=false（拦住空价格在售）');
+
+    // 填全价格库存后应放行
+    const rv2 = await callApi('POST', '/api/etsy/validate', {
+      title: 'Ceramic Horse Figurine', description: 'desc',
+      tags: Array.from({ length: 13 }, (_, i) => 'tag ' + i),
+      price: '29.99', quantity: '10', taxonomy_id: '496',
+      who_made: 'i_did', when_made: 'made_to_order', is_supply: false,
+      shipping_profile_id: '111', readiness_state_id: '222',
+      variation_dimensions: vdims,
+      variation_rows: [{ price: '29.99', quantity: '10', sku: 'A' }, { price: '32.00', quantity: '5', sku: 'B' }],
+      price_on_property: [200],
+    });
+    ok(rv2.json && rv2.json.canDraft === true, '★ 变体填全后 canDraft=true');
+    ok(rv2.json && rv2.json.variation.price_on_property.join(',') === '200', 'price_on_property 透传');
+
+    // 不选变体时（单规格商品）variation 为 null，canDraft 不受影响
+    const rv3 = await callApi('POST', '/api/etsy/validate', {
+      title: 'Ceramic Horse Figurine', description: 'desc',
+      tags: Array.from({ length: 13 }, (_, i) => 'tag ' + i),
+      price: '29.99', quantity: '10', taxonomy_id: '496',
+      who_made: 'i_did', when_made: 'made_to_order', is_supply: false,
+      shipping_profile_id: '111', readiness_state_id: '222',
+    });
+    ok(rv3.json && rv3.json.variation === null, '不选变体 → variation=null（单规格正常路径）');
+    ok(rv3.json && rv3.json.canDraft === true, '单规格商品 canDraft=true');
+
     const r4 = await callApi('POST', '/api/etsy/draft', { title: 'x' });
     ok(r4.code === 400, '未配置时 /draft 报 400', 'code=' + r4.code);
     ok(r4.json && r4.json.error === 'etsy_not_configured', '错误码明确');
@@ -514,6 +620,75 @@ console.log('\n【14】后端路由（真实 handleApi，未配置时的降级�
     const r5 = await callApi('POST', '/api/etsy/publish', { listing_id: 1 });
     ok(r5.code === 400, 'publish 缺凭证时 400');
   }
+}
+
+// ========== 15. 变体：勾选 → 组合展开 → 组装 → 校验 ==========
+console.log('\n【15】变体链路（用户勾选，程序只做传递与组合展开）');
+{
+  const dims = [
+    { property_id: 200, name: 'Primary color', values: [
+      { value_id: 49928889192, value: 'Black' }, { value_id: 49928889193, value: 'Blue' },
+      { value_id: 49928889194, value: 'Green' } ] },
+    { property_id: 52047899318, name: 'Size', scale_id: 30, values: [
+      { value_id: 108450111039, value: 'Small' }, { value_id: 108450111040, value: 'Medium' } ] },
+  ];
+
+  // 组合数是乘法累乘：初始值必须为 1，曾错用 0 导致恒为 0（自测抓出）
+  ok(etsy.validateVariationPlan({ dimensions: dims }).combinationCount === 6, '3 值 × 2 值 = 6 组合',
+    String(etsy.validateVariationPlan({ dimensions: dims }).combinationCount));
+  ok(etsy.validateVariationPlan({ dimensions: [dims[0]] }).combinationCount === 3, '单维度 3 值 = 3 组合');
+  ok(etsy.validateVariationPlan({ dimensions: [dims[0], dims[1], dims[0]] }).combinationCount === 18, '三维度 3×2×3 = 18 组合');
+
+  // 组合展开：笛卡尔积，且 scale_id 按维度带对
+  const combos = etsy.expandVariationCombinations(dims);
+  ok(combos.length === 6, '展开 6 行');
+  ok(eq(combos[0].map(x => x.values[0]), ['Black', 'Small']), '首行 = Black + Small');
+  ok(eq(combos[5].map(x => x.values[0]), ['Green', 'Medium']), '末行 = Green + Medium');
+  ok(eq(combos[0].map(x => x.scale_id), [null, 30]), 'scale_id 按维度带对（颜色为null、尺寸为 30）');
+  ok(combos[0].every(pv => Array.isArray(pv.value_ids) && pv.value_ids.length === 1), '每个维度带一个 value_id');
+  // 无 scale_id 的维度不能硬塞 null 进 Etsy（官方对 scale_id 的存在性有要求）
+  ok(etsy.expandVariationCombinations([dims[0]])[0][0].scale_id === null, '无单位属性的 scale_id 为 null');
+
+  // 维度上限
+  const four = etsy.validateVariationPlan({ dimensions: [dims[0], dims[1], dims[0], dims[1]] });
+  ok(!four.ok && /最多支持 3/.test(four.errors.join()), '4 个维度被拦（Etsy 最多 3）');
+  // ID 缺失必须拦——这正是「不许猜 ID」的强制点
+  const noId = etsy.validateVariationPlan({ dimensions: [{ property_id: 200, name: 'Color', values: [{ value: 'Black' }] }] });
+  ok(!noId.ok && /value_id/.test(noId.errors.join()), '缺 value_id 被拦（不允许猜 ID）');
+  const noProp = etsy.validateVariationPlan({ dimensions: [{ name: 'Color', values: [{ value_id: 1 }] }] });
+  ok(!noProp.ok && /property_id/.test(noProp.errors.join()), '缺 property_id 被拦');
+  const dup = etsy.validateVariationPlan({ dimensions: [{ property_id: 200, name: 'Color', values: [{ value_id: 1, value: 'A' }, { value_id: 1, value: 'A' }] }] });
+  ok(!dup.ok && /重复/.test(dup.errors.join()), '同维度重复值被拦');
+  const emptyVal = etsy.validateVariationPlan({ dimensions: [{ property_id: 200, name: 'Color', values: [] }] });
+  ok(!emptyVal.ok, '维度没勾选任何值被拦');
+  // 空选择是正常情况（单规格商品），不是错误
+  const none = etsy.validateVariationPlan({ dimensions: [] });
+  ok(none.empty === true, '空选择标记为 empty（单规格商品的正常路径）');
+
+  // 组装请求体：price 必须是浮点
+  const rows = combos.map((c, i) => ({ price: i === 0 ? 29.99 : 32.00, quantity: i + 5, sku: 'HS-' + i }));
+  const body = etsy.buildVariationBody(combos, rows, {
+    readiness_state_id: 222, price_on_property: [200], sku_on_property: [200],
+  });
+  ok(body.products.length === 6, '请求体 6 行');
+  ok(typeof body.products[0].offerings[0].price === 'number' && body.products[0].offerings[0].price === 29.99,
+    '★ price 是浮点 29.99（inventory 不是 subunit）', String(body.products[0].offerings[0].price));
+  ok(body.price_on_property.join(',') === '200', 'price_on_property 已带');
+  ok(body.sku_on_property.join(',') === '200', 'sku_on_property 已带');
+  ok(body.products.every(p => p.offerings[0].readiness_state_id === 222), '处理档案已带');
+
+  // 逐格校验：任何一格漏填都必须拦住，绝不把空价格发成在售商品
+  ok(etsy.validateVariationRows(combos, rows).ok, '全部填好 → 通过');
+  const missCnt = etsy.validateVariationRows(combos, [{ price: 29, quantity: 1 }]);
+  ok(!missCnt.ok && /行数/.test(missCnt.errors.join()), '行数与组合数不符被拦', missCnt.errors[0]);
+  const blankPrice = combos.map((c, i) => ({ price: i === 0 ? '' : 29, quantity: 1 }));
+  const bp = etsy.validateVariationRows(combos, blankPrice);
+  ok(!bp.ok && /没有填价格/.test(bp.errors.join()), '某格空价格被拦，且指名是哪个组合', bp.errors[0]);
+  const neg = combos.map(() => ({ price: -1, quantity: -5 }));
+  const ng = etsy.validateVariationRows(combos, neg);
+  ok(!ng.ok && ng.errors.length === 12, '12 个负数问题全部报出（6 行 × 价+量）', String(ng.errors.length));
+  const noQty = combos.map(() => ({ price: 29, quantity: '' }));
+  ok(!etsy.validateVariationRows(combos, noQty).ok, '某格空库存被拦');
 }
 
 console.log('\n' + '='.repeat(76));
