@@ -42,44 +42,63 @@ echo   [ok] 日志已写入 backend.log，崩溃原因看这个文件
 
 :step3
 echo [3/3] Cloudflare Tunnel 检查...
-REM ★ sc query 只要「服务已注册」就返回 0，不管它当前是 RUNNING 还是 STOPPED。
-REM   原代码据此直接打印「[ok] 隧道已就绪」并跳走，但服务若是 STOPPED/FAILED，
-REM   隧道其实压根没跑 —— 外部表现是 Cloudflare Error 1033（Tunnel 无法解析主机），
-REM   而启动窗口里却显示一切正常，排查时完全看不出问题（2026-10-07 凌晨实际踩到）。
-REM   改为：先看 STATE，只有 RUNNING 才算就绪；否则显式启动并复查。
-sc query cloudflared 2>nul | findstr /C:"STATE" >nul 2>nul
-if errorlevel 1 goto noSvc
+REM ============================================================
+REM  设计原则：直接起隧道优先，系统服务只作回退。
+REM
+REM  为什么不用服务当首选（2026-10-07 凌晨的实际教训）：
+REM    服务这条路会静默失败 —— sc query 只要服务已注册就返回 0，
+REM    不管它是 RUNNING 还是 STOPPED；net start 的错误又被吞掉。
+REM    结果是「启动窗口显示一切正常，外部访问全是 Error 1033」。
+REM    实测操作者电脑上服务处于「已禁用」状态（sc start 返回 1058），
+REM    而服务化在这里带来的复杂度远大于收益。
+REM    直接起隧道只要一个 token + 一个 exe，状态一目了然。
+REM ============================================================
 
-sc query cloudflared 2>nul | findstr /C:"RUNNING" >nul 2>nul
-if not errorlevel 1 (
-  echo   [ok] cloudflared 服务正在运行，隧道就绪
-  goto tunnelDone
-)
+REM ---- 第1 步：找到可用的 cloudflared 可执行文件 ----
+set "CF_EXE="
+where cloudflared >nul 2>nul && set "CF_EXE=cloudflared"
+if not defined CF_EXE if exist "%ProgramFiles%\cloudflared\cloudflared.exe" set "CF_EXE=%ProgramFiles%\cloudflared\cloudflared.exe"
+if not defined CF_EXE if exist "%ProgramFiles(x86)%\cloudflared\cloudflared.exe" set "CF_EXE=%ProgramFiles(x86)%\cloudflared\cloudflared.exe"
+if not defined CF_EXE goto noCloudflared
 
-echo   [提示] cloudflared 服务已安装但未运行，正在尝试启动...
-net start cloudflared
-if errorlevel 1 (
-  echo   [错误] 启动 cloudflared 服务失败。
-  echo          这个错误会导致外部访问报 Cloudflare Error 1033。
-  echo          请手动检查：服务管理器 - cloudflared - 查看错误信息，
-  echo          或在新的命令行窗口手动跑：sc start cloudflared
-  goto tunnelFail
-)
-REM 启动后再确认一次，不信「命令返回码为 0」
-timeout /t 2 >nul
-sc query cloudflared 2>nul | findstr /C:"RUNNING" >nul 2>nul
-if errorlevel 1 (
-  echo   [错误] 启动命令返回成功但服务仍未运行
-  goto tunnelFail
-)
-echo   [ok] cloudflared 服务已启动，隧道就绪
-goto tunnelDone
-
-:noSvc
-where cloudflared >nul 2>nul
-if errorlevel 1 goto noCloudflared
+REM ---- 第 2 步：拿 token ----
 if not exist tunnel-token.txt goto noToken
 set /p TUNNEL_TOKEN=<tunnel-token.txt
+REM 去掉可能存在的首尾空格与 CRLF —— token 末尾多一个换行就会鉴权失败，
+REM 这是「明明复制对了却提示 token 无效」最常见的原因。
+for /f "tokens=* delims= " %%A in ("%TUNNEL_TOKEN%") do set "TUNNEL_TOKEN=%%A"
+set "TUNNEL_TOKEN=%TUNNEL_TOKEN: =%"
+if not defined TUNNEL_TOKEN goto noToken
+
+REM ---- 第 3 步：先杀掉残留的旧隧道，避免多实例抢同一域名 ----
+REM 同一个 Cloudflare 域名挂了多个 connector 时，Cloudflare 会轮询转发，
+REM 于是同一个 URL 有时是新代码有时是旧代码，表现为「刚修好的问题又复现」。
+taskkill /fi "WINDOWTITLE eq EtsyOps-Tunnel" /f /t >nul 2>nul
+
+REM ---- 第 4 步：启动隧道 ----
+echo   [提示] 正在启动隧道（窗口标题：EtsyOps-Tunnel）...
+REM 输出重定向到 tunnel.log：连接失败的真实原因（token 无效/网络不通）会落盘，
+REM 不用守着窗口截图。窗口标题保持 EtsyOps-Tunnel，taskkill 与 /min 才有效。
+echo.>> tunnel.log
+echo ==== 启动 %date% %time% ====>> tunnel.log
+start "EtsyOps-Tunnel" /min cmd /c ""%CF_EXE%" tunnel --no-autoupdate run --token %TUNNEL_TOKEN% --url http://localhost:3000 >> tunnel.log 2>&1"
+
+REM ---- 第 5 步：验证它真的起来了 ----
+REM 相信「命令返回 0」是没用的（今晚就栽在这）：必须回读 tunnel.log 确认，
+REM 只有看到成功注册的痕迹才算就绪。
+timeout /t 6 >nul
+findstr /C:"Registered tunnel connection" tunnel.log >nul 2>nul
+if errorlevel 1 goto tunnelFail
+
+REM 多实例提醒：上面的 taskkill 只杀窗口标题为 EtsyOps-Tunnel 的（即本脚本启动的）。
+REM 此刻手动启动过的隧道窗口标题不同会残留 —— 多个 connector 同挂一个域名时，
+REM Cloudflare 会轮询转发 → 同一 URL 有时新代码有时旧代码，表现为「刚修好的问题又复现」。
+echo   [提示] 以后若出现「改完不生效」，打开 /api/etsy/whoami 多刷几次：
+echo          hostname 一致 = 单实例；不一致 = 有多个后端在抢这个域名。
+echo          手动清残留：taskkill /fi "IMAGENAME eq cloudflared.exe" /f
+echo   [ok] 隧道已启动，外部访问地址 https://api.mailili-agency.com
+goto tunnelDone
+
 :tunnelDone
 
 echo.
@@ -91,12 +110,20 @@ exit /b 0
 
 :tunnelFail
 echo.
-echo [错误] 隧道未运行，外部访问会报 Error 1033。
+echo [错误] 隧道启动失败，外部访问会报 Error 1033。
 echo        后端本身已启动，但无法被外部访问。
 echo.
-echo        请在新的命令行窗口手动跑这两条，把输出截图发我：
-echo          sc query cloudflared
-echo          sc start cloudflared
+echo        真正的原因在 tunnel.log 最后几行，请打开看：
+echo          notepad tunnel.log
+echo.
+echo        常见原因：
+echo          Invalid tunnel token = tunnel-token.txt 内容不对（多了换行/空格）
+echo          Unable to establish  = 网络不通（如需代理才能访问并非 Cloudflare）
+echo          cannot find exe        = cloudflared 不在 PATH，请装或用完整路径
+echo.
+echo        若需手动起（在此目录下打开 PowerShell 窗口）：
+echo          $T = (Get-Content .\tunnel-token.txt -Raw).Trim()
+echo          cloudflared tunnel --no-autoupdate run --token $T --url http://localhost:3000
 pause
 exit /b 1
 
