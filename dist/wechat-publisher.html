@@ -120,7 +120,7 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build 4ab0042</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build bcf207b</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
@@ -148,7 +148,7 @@
         <div class="ph-sub">支持本地文件（.md / .txt / .html / .docx / .pdf，可多选依次载入），上传后归一为可编辑正文。</div>
         <div class="drop" id="drop"><b>点击或拖拽上传文稿（可多选）</b><br><span style="font-size:12px">md / txt / html / docx / pdf</span></div>
         <input type="file" id="file" accept=".md,.txt,.html,.htm,.docx,.pdf" multiple hidden />
-        <div id="fileTag"></div>
+        <div id="fileTag" style="display:flex;flex-direction:column;gap:6px;margin-top:10px"></div>
         <label class="fld">文章标题</label>
         <input type="text" id="title" placeholder="给文章起个标题…（AI 生稿后自动填写）" />
         <label class="fld">素材正文（可编辑，AI 生稿的输入；排版时支持 Markdown）</label>
@@ -479,25 +479,25 @@ function htmlToText(html){
 function handleFile(f){
   if(!f) return;
   const name=f.name.toLowerCase();
-  $('#fileTag').innerHTML='<span class="filetag">📄 '+f.name+' <span style="opacity:.6">· '+ (f.size/1024).toFixed(0) +'KB</span></span>';
+    // 标签由 renderFileTags() 统一渲染
   const reader=new FileReader();
   if(name.endsWith('.docx')){
     ensureMammoth(err=>{
       if(err){ toast('docx 解析库加载失败，请联网后重试'); return; }
-      reader.onload=()=>window.mammoth.convertToHtml({arrayBuffer:reader.result}).then(r=>{ fillText(htmlToText(r.value), f.name); toast('docx 已解析'); }).catch(()=>toast('docx 解析失败'));
+      reader.onload=()=>window.mammoth.convertToHtml({arrayBuffer:reader.result}).then(r=>{ fillText(htmlToText(r.value), f.name, f.size); toast('docx 已解析'); }).catch(()=>toast('docx 解析失败'));
       reader.readAsArrayBuffer(f);
     });
   } else if(name.endsWith('.pdf')){
     ensurePdfJS(err=>{
       if(err){ toast('pdf 解析库加载失败，请联网后重试'); return; }
-      reader.onload=async()=>{ try{ fillText(await pdfToText(reader.result), f.name); toast('pdf 已抽取文本'); }catch{ toast('pdf 解析失败'); } };
+      reader.onload=async()=>{ try{ fillText(await pdfToText(reader.result), f.name, f.size); toast('pdf 已抽取文本'); }catch{ toast('pdf 解析失败'); } };
       reader.readAsArrayBuffer(f);
     });
   } else if(name.endsWith('.html')||name.endsWith('.htm')){
-    reader.onload=()=>{ const doc=new DOMParser().parseFromString(reader.result,'text/html'); fillText(doc.body.innerText||doc.body.textContent||'', f.name); toast('HTML 已抽取正文'); };
+    reader.onload=()=>{ const doc=new DOMParser().parseFromString(reader.result,'text/html'); fillText(doc.body.innerText||doc.body.textContent||'', f.name, f.size); toast('HTML 已抽取正文'); };
     reader.readAsText(f);
   } else {
-    reader.onload=()=>{ fillText(reader.result, f.name); toast('文稿已载入'); };
+    reader.onload=()=>{ fillText(reader.result, f.name, f.size); toast('文稿已载入'); };
     reader.readAsText(f);
   }
 }
@@ -512,15 +512,45 @@ function validateManuscript(){
   return true;
 }
 
-function fillText(t, fname){
-  t = (t||'').trim(); if(!t){ toast('文件内容为空'); return; }
-  // 多文件依次载入：追加并加分隔线，不覆盖已有内容
-  const cur = $('#src').value.trim();
-  const head = fname ? '【素材文件：'+fname+'】\n\n' : '';
-  $('#src').value = cur ? (cur+'\n\n---\n\n'+head+t) : (head+t);
+/* 已上传文件登记表：每个文件记住自己的正文块，删除时只移除这一块 */
+let __files = [];   // [{id, name, size, text}]
+let __fileSeq = 0;
+
+function fillText(t, fname, fsize){
+  t = (t||'').trim(); if(!t){ toast('文件「'+(fname||'?')+'」内容为空'); return; }
+  __files.push({ id: ++__fileSeq, name: fname || ('文件'+__fileSeq), size: fsize || 0, text: t });
   if(!$('#title').value) $('#title').value='未命名文章';
+  rebuildSrcFromFiles();
+}
+
+/* 依据登记表重建 #src（每个文件用 --- 分隔），并刷新标签 */
+function rebuildSrcFromFiles(){
+  $('#src').value = __files.map(f => '【素材文件：'+f.name+'】\n\n' + f.text).join('\n\n---\n\n');
+  renderFileTags();
   renderPreview();
   validateManuscript();
+}
+
+/* 渲染文件标签，每个带× 删除按钮 */
+function renderFileTags(){
+  const box = $('#fileTag');
+  if(!__files.length){ box.innerHTML = ''; return; }
+  box.innerHTML = __files.map(f=>{
+    const kb = f.size ? (f.size/1024).toFixed(0)+'KB' : (f.text.length+' 字');
+    return '<div class="filetag" style="display:flex;align-items:center;gap:8px;justify-content:space-between">'
+      + '<span>📄 '+f.name.replace(/[<>]/g,'')+' <span style="opacity:.6">· '+kb+'</span></span>'
+      + '<button class="btn ghost" data-delfile="'+f.id+'" title="移除此文件" '
+      + 'style="padding:2px 8px;font-size:12px;line-height:1.4">×</button></div>';
+  }).join('');
+  box.querySelectorAll('[data-delfile]').forEach(btn=>{
+    btn.onclick = ()=>{
+      const id = +btn.getAttribute('data-delfile');
+      const f = __files.find(x=>x.id===id);
+      __files = __files.filter(x=>x.id!==id);
+      rebuildSrcFromFiles();
+      toast('已移除「'+(f?f.name:'')+'」' + (__files.length? '' : '，素材已清空'));
+    };
+  });
 }
 
 ['title','src','author','cover','digest'].forEach(id=> $('#'+id).addEventListener('input', ()=>{ if(id==='src') validateManuscript(); renderPreview(); }));
@@ -765,11 +795,11 @@ let __lastCoverUrl = '', __lastCoverB64 = '';
 // 视觉风格：内置几套，保证整体调性统一；可存为「风格1/2/3」随时切换。
 // prompt 结构 = 通用构图约束 + 风格后缀 + 自动提炼的画面主体 + 用户补充（可选）
 const COVER_STYLES_DEFAULT = [
-  { id:'clean',  name:'清新文艺', tail:'清新文艺 ins 风格，柔和自然光，低饱和莫兰迪色，浅景深，留白构图，干净通透，高级感' },
-  { id:'warm',   name:'温暖治愈', tail:'温暖治愈风，暖黄色调，柔和散射光， cozy 氛围，浅木与棉麻质感，温柔手作感' },
-  { id:'biz',    name:'商务专业', tail:'商务专业风格，冷调蓝灰，稳定构图，简洁现代，几何线条，理性克制，图表元素点缀' },
-  { id:'life',   name:'生活纪实', tail:'生活纪实摄影感，自然抓拍，真实场景，35mm 视角，浅景深，温暖但不摆拍' },
-  { id:'art',    name:'插画手绘', tail:'清新手绘插画风，扁平质感，柔和配色，线条简洁，留白，杂志内页插画风格' },
+  { id:'clean',  name:'清新文艺', builtIn:true, tail:'清新文艺 ins 风格，柔和自然光，低饱和莫兰迪色，浅景深，留白构图，干净通透，高级感' },
+  { id:'warm',   name:'温暖治愈', builtIn:true, tail:'温暖治愈风，暖黄色调，柔和散射光， cozy 氛围，浅木与棉麻质感，温柔手作感' },
+  { id:'biz',    name:'商务专业', builtIn:true, tail:'商务专业风格，冷调蓝灰，稳定构图，简洁现代，几何线条，理性克制，图表元素点缀' },
+  { id:'life',   name:'生活纪实', builtIn:true, tail:'生活纪实摄影感，自然抓拍，真实场景，35mm 视角，浅景深，温暖但不摆拍' },
+  { id:'art',    name:'插画手绘', builtIn:true, tail:'清新手绘插画风，扁平质感，柔和配色，线条简洁，留白，杂志内页插画风格' },
 ];
 let COVER_STYLES = loadCoverStyles();
 
@@ -783,19 +813,43 @@ function loadCoverStyles(){
   }catch(e){}
   return COVER_STYLES_DEFAULT.slice();
 }
-function saveCoverStyles(){ try{ localStorage.setItem('etsyops.coverStyles', JSON.stringify(COVER_STYLES)); }catch(e){} }
+// 只持久化「用户自建」的风格；内置风格每次由 COVER_STYLES_DEFAULT 提供，
+// 否则内置项被写进 localStorage 后会带上 builtIn 标记却仍显示删除按钮，或删不掉。
+function saveCoverStyles(){
+  try{ localStorage.setItem('etsyops.coverStyles', JSON.stringify(COVER_STYLES.filter(x=>!x.builtIn))); }catch(e){}
+}
 let _coverStyleId = COVER_STYLES[0].id;
 
 function renderCoverStyleRow(){
   const row = $('#coverStyleRow'); if(!row) return;
   row.innerHTML = '';
   COVER_STYLES.forEach(st=>{
+    const wrap = document.createElement('span');
+    wrap.style.cssText = 'display:inline-flex;align-items:center;gap:2px;border:1px solid var(--border);border-radius:9px;padding:0 2px 0 0;';
     const b = document.createElement('button');
-    b.className = 'tpl'; b.style.width='auto'; b.style.padding='7px 12px';
+    b.className = 'tpl'; b.style.cssText = 'width:auto;padding:7px 12px;border:0;background:transparent;';
     b.textContent = st.name;
     if(st.id === _coverStyleId) b.classList.add('active');
     b.onclick = ()=>{ _coverStyleId = st.id; renderCoverStyleRow(); };
-    row.appendChild(b);
+    wrap.appendChild(b);
+    if(!st.builtIn){
+      // 自定义风格才给删除按钮；内置风格删了就没了
+      const x = document.createElement('button');
+      x.className = 'btn ghost';
+      x.textContent = '×'; x.title = '删除风格「'+st.name+'」';
+      x.style.cssText = 'padding:0 6px;font-size:14px;line-height:1;border:0;background:transparent;color:var(--text-faint);';
+      x.onclick = ()=>{
+        if(!window.confirm('删除封面风格「'+st.name+'」？')) return;
+        COVER_STYLES = COVER_STYLES.filter(y=>y.id!==st.id);
+        // 存的是用户自建的那些，重新合并内置
+        saveCoverStyles();
+        if(_coverStyleId === st.id) _coverStyleId = COVER_STYLES[0].id;
+        renderCoverStyleRow();
+        toast('已删除封面风格「'+st.name+'」');
+      };
+      wrap.appendChild(x);
+    }
+    row.appendChild(wrap);
   });
 }
 
