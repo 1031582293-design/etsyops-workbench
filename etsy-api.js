@@ -170,10 +170,44 @@ function buildAuthorizeUrl(cfg, { state, codeChallenge }) {
   return `${cfg.authorizeUrl}?${q.toString()}`;
 }
 
+/*把「fetch 抛出来的网络错误」翻译成能据此行动的一句话。
+   为什么要专门做这件事：Node 的 fetch 在**还没拿到HTTP 响应**时只会抛一个
+   `TypeError: fetch failed`， cause 里才有真信息（DNS 失败 / 连接被拒 / 超时 / TLS 中断）。
+   不挖出来的话，页面��显示「授权失败：fetch failed」，排查时完全不知道该查网络还是查参数。
+   —— 2026-07-06 就因为这个裸报错卡住过一次：机器开着 VPN，网络其实通，但无从判断。*/
+function explainFetchFailure(err, what) {
+  const c = (err && err.cause) || {};
+  const code = c.code || err.code || '';
+  const msg = c.message || '';
+  const bits = [];
+  if (code) bits.push('code=' + code);
+  if (msg) bits.push('msg=' + msg);
+  // 常见成因 → 人能看懂的处理动作
+  let advice = '';
+  if (/ENOTFOUND|EAI_AGAIN/i.test(code + msg)) {
+    advice = '域名解析失败：这台机器连不上该域名。检查网络/DNS，或确认 VPN 是否正确接管了流量。';
+  } else if (/ECONNREFUSED/i.test(code + msg)) {
+    advice = '连接被拒绝：目标端口没有服务在听。若你开过代理，检查代理是否已断开或端口变了。';
+  } else if (/ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|ESOCKETTIMEDOUT/i.test(code + msg)) {
+    advice = '连接超时：请求在超时时间内没有任何响应。常见于需要代理才能访问的站点，' +
+      '或网络不通。若刚重启过代理/隧道，等它稳定后重试一次。';
+  } else if (/ECONNRESET|EPIPE|socket hang up/i.test(code + msg)) {
+    advice = '连接被中断：可能是 VPN 切换、代理重连，或对方中断了长连接。重试一次通常就好了。';
+  } else if (/CERT|SSL|TLS/i.test(code + msg + (c.name || ''))) {
+    advice = 'TLS/证书错误：常见于代理做了 SSL 拦截。试试把该域名加入代理的直连/绕过列表。';
+  } else if (/UND_ERR_SOCKET|UND_ERR|EPROTO/i.test(code + msg)) {
+    advice = '底层网络错误：连接建立或传输阶段失败。若刚开启/切换 VPN，多半是切换瞬间的抖动，稍后重试。';
+  } else {
+    advice = '属于网络层失败（还没收到 HTTP 响应就断了），不是 Etsy 返回的业务错误。';
+  }
+  return `${what}网络请求失败：${err && err.message ? err.message : '未知错误'}` +
+    (bits.length ? `（${bits.join('，')}）` : '') + '。' + advice;
+}
+
 /** 用 authorization code + verifier 换 token。
  *  ⚠️ fetchImpl 必须显式传入：token 端点是本模块唯一的对外网络出口，收敛后才可被自测 mock。
  *  漏传会直接打到生产 api.etsy.com —— 自测会因连不上而崩，且真机偶发时极难定位。 */
-async function exchangeCode(cfg, { code, verifier }, fetchImpl = fetch) {
+async function exchangeCode(cfg, { code, verifier }, fetchImpl = fetch, timeoutMs = 30000) {
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     client_id: cfg.keystring,
@@ -181,13 +215,39 @@ async function exchangeCode(cfg, { code, verifier }, fetchImpl = fetch) {
     code_verifier: verifier,
   });
   if (cfg.redirectUri) body.set('redirect_uri', cfg.redirectUri);
-  const r = await fetchImpl(cfg.tokenUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  });
+  let r;
+  try {
+    r = await fetchImpl(cfg.tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      // ★ 显式超时：Etsy 正常响应在 1 秒内，30 秒还没回来说明网络有问题，
+      //   没有这个上限时fetch 可能挂几分钟，页面就一直空着。
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    // 网络层失败 → 翻译成能据此排查的话，而不是把 "fetch failed" 甩给用户
+    throw Object.assign(new Error(explainFetchFailure(e, '换 token 的')), { cause: e, isNetworkError: true });
+  }
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`换token 失败（HTTP ${r.status}）：` + (d.error || JSON.stringify(d).slice(0, 300)));
+  if (!r.ok) {
+    // 业务层错误：Etsy 给了明确的 error 字段，补上「该怎么办」。
+    // ★ 判断依据必须同时看 error_description：Etsy 的 redirect_uri 不匹配返回的是
+    //   { error: "invalid_grant", error_description: "redirect_uri mismatch" }，
+    //   只看 error 字段会被误判成「授权码失效」，给出完全错误的指引。
+    const detail = d.error || JSON.stringify(d).slice(0, 300);
+    const full = (d.error || '') + ' ' + (d.error_description || '');
+    let extra = '';
+    if (/redirect_uri/i.test(full)) {
+      extra = ' → 请确认 .env 里的 ETSY_REDIRECT_URI 与 Etsy App 登记的 Callback URL 一字不差。';
+    } else if (/invalid_grant|invalid_code|expired/i.test(d.error || '')) {
+      extra = ' → 授权码已失效或被用过一次（Etsy 的 code 只能用一次）。请重新点一次授权。';
+    } else if (/unauthorized_client|invalid_client/i.test(d.error || '')) {
+      extra = ' → keystring 或 shared secret 不对。请检查 .env 里这两项有没有复制错（尤其尾部空格）。';
+    }
+    const suffix = d.error_description && d.error_description !== d.error ? '（' + d.error_description + '）' : '';
+    throw new Error(`换 token 失败（HTTP ${r.status}）：${detail}${suffix}${extra}`);
+  }
   return d;
 }
 
@@ -198,13 +258,29 @@ async function refreshAccessToken(cfg, fetchImpl = fetch) {
     client_id: cfg.keystring,
     refresh_token: cfg.refreshToken,
   });
-  const r = await fetchImpl(cfg.tokenUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  });
+  let r;
+  try {
+    r = await fetchImpl(cfg.tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: AbortSignal.timeout(30000),
+    });
+  } catch (e) {
+    // 与 exchangeCode 同样的处理：网络层失败要给出可排查的说明，而不是裸 fetch failed
+    throw Object.assign(new Error(explainFetchFailure(e, '刷新 token 的')), { cause: e, isNetworkError: true });
+  }
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`刷新 token 失败（HTTP ${r.status}）：` + (d.error || JSON.stringify(d).slice(0, 300)));
+  if (!r.ok) {
+    const detail = d.error || JSON.stringify(d).slice(0, 300);
+    let extra = '';
+    if (/invalid_grant|expired|revoked/i.test(d.error || '')) {
+      extra = ' → refresh token 已失效（超过 90 天或被撤销）。请在页面重新点一次「连接 Etsy 店铺」授权。';
+    } else if (/unauthorized_client|invalid_client/i.test(d.error || '')) {
+      extra = ' → keystring 或 shared secret 不对，请检查 .env 里这两项。';
+    }
+    throw new Error(`刷新 token 失败（HTTP ${r.status}）：${detail}${extra}`);
+  }
   return d;
 }
 
@@ -904,6 +980,7 @@ function validateVariationRows(combos, perRow) {
 
 export {
   etsyConfig,
+  explainFetchFailure,
   userIdFromToken,
   discoverShopId,
   toSubunit,

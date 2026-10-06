@@ -835,6 +835,117 @@ console.log('\n【18】回调路径兼容（防止 not_found 让授权失败）'
   }
 }
 
+// ========== 19. 网络错误诊断（曾因裸 "fetch failed" 排查无从下手） ==========
+console.log('\n【19】网络错误诊断：把 fetch failed 翻译成能据此行动的话');
+{
+  const mk = (code, msg) => Object.assign(new TypeError('fetch failed'),
+    { cause: Object.assign(new Error(msg), code ? { code } : {}) });
+
+  const cases = [
+    ['ENOTFOUND', 'getaddrinfo ENOTFOUND api.etsy.com', /域名解析/],
+    ['ECONNREFUSED', 'connect ECONNREFUSED 127.0.0.1:53305', /连接被拒绝/],
+    ['UND_ERR_CONNECT_TIMEOUT', 'Connect Timeout Error (attempted address: api.etsy.com:443, timeout 10000ms)', /连接超时/],
+    ['ECONNRESET', 'socket hang up', /连接被中断/],
+    ['CERT_HAS_EXPIRED', 'certificate has expired', /TLS|证书/],
+  ];
+  for (const [code, msg, want] of cases) {
+    const out = etsy.explainFetchFailure(mk(code, msg), '换 token 的');
+    ok(want.test(out), `${code} → 给出可行动的建议`, out.slice(0, 62));
+    ok(out.includes(code), `${code} → 错误里带原始 code（便于交叉查资料）`);
+  }
+  // 无 cause 时也不能崩，且要说清是网络层问题而非业务错误
+  const bare = etsy.explainFetchFailure(new TypeError('fetch failed'), '换 token 的');
+  ok(bare.includes('网络层失败'), '无 cause 时安全回退', bare.slice(0, 46));
+  ok(/不是 Etsy 返回的业务错误/.test(bare), '明确区分「网络失败」与「Etsy 业务报错」');
+  // what 参数要体现在文案里，便于分清是授权时还是刷新时失败
+  ok(etsy.explainFetchFailure(mk('ECONNRESET', 'x'), '刷新 token 的').includes('刷新 token 的'),
+    '阶段名被带进文案（能分清授权/刷新）');
+}
+
+// ========== 20. 换 token：网络失败与业务失败分开处理 ==========
+console.log('\n【20】换 token：网络失败 / 业务失败分别给出可行动提示');
+{
+  const cfg = {
+    keystring: 'ks', redirectUri: 'https://api.mailili-agency.com/api/etsy/oauth/callback',
+    tokenUrl: 'https://api.etsy.com/v3/public/oauth/token',
+  };
+
+  // 网络层失败
+  let netErr = null;
+  try {
+    await etsy.exchangeCode(cfg, { code: 'c', verifier: 'v' },
+      async () => { throw Object.assign(new TypeError('fetch failed'),
+        { cause: Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' }) }); });
+  } catch (e) { netErr = e; }
+  ok(netErr && /网络请求失败/.test(netErr.message), '网络失败 → 明确说「网络请求失败」');
+  ok(netErr && netErr.isNetworkError === true, '标记 isNetworkError（便于上层区分处理）');
+  ok(netErr && /ETIMEDOUT/.test(netErr.message), '保留底层 code', (netErr && netErr.message || '').slice(0, 60));
+
+  // 业务层错误：redirect_uri 不匹配
+  let biz = null;
+  try {
+    await etsy.exchangeCode(cfg, { code: 'c', verifier: 'v' },
+      async () => new Response(JSON.stringify({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }));
+  } catch (e) { biz = e; }
+  ok(biz && /HTTP 400/.test(biz.message), '业务失败 → 带 HTTP 状态码');
+  ok(biz && /redirect_uri/.test(biz.message), '原文里含 redirect_uri');
+  ok(biz && /一字不差/.test(biz.message), '★ redirect_uri 不匹配时补上「怎么改」的指引');
+  ok(!biz.isNetworkError, '业务失败不带 isNetworkError 标记');
+
+  // 授权码只能用一次
+  let once = null;
+  try {
+    await etsy.exchangeCode(cfg, { code: 'c', verifier: 'v' },
+      async () => new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400, headers: { 'Content-Type': 'application/json' } }));
+  } catch (e) { once = e; }
+  ok(once && /重新点一次授权/.test(once.message), 'invalid_grant → 提示重新授权（code 只能用一次）');
+
+  // 凭证不对
+  let cred = null;
+  try {
+    await etsy.exchangeCode(cfg, { code: 'c', verifier: 'v' },
+      async () => new Response(JSON.stringify({ error: 'unauthorized_client' }), { status: 401, headers: { 'Content-Type': 'application/json' } }));
+  } catch (e) { cred = e; }
+  ok(cred && /keystring|shared secret/.test(cred.message), 'unauthorized_client → 指向凭证问题');
+
+  // 成功路径不能被诊断逻辑破坏
+  const okd = await etsy.exchangeCode(cfg, { code: 'c', verifier: 'v' },
+    async () => new Response(JSON.stringify({ access_token: 'A', refresh_token: 'R', expires_in: 3600 }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }));
+  ok(okd.access_token === 'A' && okd.refresh_token === 'R', '成功路径不受影响');
+
+  // 刷新 token 同理
+  let refErr = null;
+  try {
+    await etsy.refreshAccessToken({ ...cfg, refreshToken: 'RT' },
+      async () => { throw Object.assign(new TypeError('fetch failed'),
+        { cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }) }); });
+  } catch (e) { refErr = e; }
+  ok(refErr && /刷新 token 的网络请求失败/.test(refErr.message), '刷新 token 也走同一套诊断');
+}
+
+// ========== 21. 连通性自检接口（让页面能一键测「这台机器能不能连 Etsy」） ==========
+console.log('\n【21】连通性自检接口（排查「网络到底通不通」）');
+{
+  if (!fs.existsSync(path.resolve(ROOT, SERVER_TEST))) {
+    console.log('  （跳过：未生成 ' + SERVER_TEST + '）');
+  } else {
+    const r = await callApi('GET', '/api/etsy/connectivity');
+    ok(r.code === 200, 'connectivity → 200（不需要任何凭证也能测）', 'code=' + r.code);
+    ok(r.json && typeof r.json.reachable === 'boolean', '返回 reachable 布尔值');
+    ok(r.json && Array.isArray(r.json.checks) && r.json.checks.length > 0, '返回逐项检查结果');
+    //每项要么 reachable+note，要么不可达且带可读 detail（不能是裸的 fetch failed）
+    const checks = (r.json && r.json.checks) || [];
+    ok(checks.every(c => c.reachable
+        ? typeof c.note === 'string' && c.note.length > 0
+        : typeof c.detail === 'string' && c.detail.length > 0 && !/^[^（]*fetch failed。/.test(c.detail)),
+      '★ 每项都有可读说明（不通时也不会只给裸 fetch failed）',
+      checks.map(c => c.reachable ? 'ok' : (c.detail || '').slice(0, 26)).join(' | ').slice(0, 90));
+    ok(typeof r.json.note === 'string' && r.json.note.length > 10, '顶层给出整体结论与下一步动作');
+  }
+}
+
 console.log('\n' + '='.repeat(76));
 console.log(`结果：通过 ${pass} 项，失败 ${fail} 项`);
 console.log('='.repeat(76));

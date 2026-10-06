@@ -424,7 +424,9 @@ async function handleApi(req, res) {
   //  - /api/etsy/status：前端首屏要靠它判断显示「未配置 / 未授权 / 已就绪」哪一屏，
   //    它只返回布尔状态，不泄露任何密钥。
   //★ 回调的两个变体路径都要免 key（见下方路由注释），否则店主从 Etsy 跳回来时带不了 key
-  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status'];
+  // ★ connectivity 也要免 key：它是纯诊断接口（只发GET、不碰店铺数据），
+  //   排查「授权失败」时往往还没配好凭证/没授权，那时正是最需要用它的时候。
+  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status', '/api/etsy/connectivity'];
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status'
       && !ETSY_OPEN_PATHS.includes(p)) {
     const url = new URL(req.url, 'http://localhost');
@@ -788,6 +790,46 @@ async function handleApi(req, res) {
      GET       /api/etsy/inventory  读线上整表库存（改库存前必须先读）
      POST      /api/etsy/inventory  整表覆盖式改库存（内部会 GET→合并→PUT）
   */
+
+  /* 连通性自检：一键回答「这台机器到底能不能连到 Etsy」。
+     排查「授权失败：fetch failed」时最需要的就是这一条—— 网络不通 vs 凭证/参数不对，
+     两者的修法完全不同，而fetch failed 本身什么都告诉不了你。
+     ★ 不需要任何凭证，因此在还没配好 App、或者 OAuth 之前也能测。
+     ★ 放在免 key 白名单里：它只是发几个HEAD 请求，不读写店铺任何数据。 */
+  if (p === '/api/etsy/connectivity' && req.method === 'GET') {
+    const targets = [
+      { name: 'Etsy token 端点（换 token 用）', url: ETSY_CFG.tokenUrl },
+      { name: 'Etsy API 根（读写列表用）', url: ETSY_CFG.baseUrl + '/shops/1' },
+      { name: 'Etsy 授权页（浏览器跳转用）', url: 'https://www.etsy.com/oauth/connect' },
+    ];
+    const checks = [];
+    for (const t of targets) {
+      const t0 = Date.now();
+      try {
+        // 用 GET 而不是 POST：这里只关心「能不能连上」，不需要真的发 token 请求。
+        // 状态码 4xx 也说明连通性正常（是业务层拒绝，不是网络层不通）。
+        const r = await fetch(t.url, { method: 'GET', signal: AbortSignal.timeout(15000) });
+        checks.push({ name: t.name, url: t.url, reachable: true, status: r.status, ms: Date.now() - t0,
+          note: r.status < 500 ? '连通正常（HTTP ' + r.status + ' 说明网络通了，只是这次请求没带凭证）' : '连上了但服务端异常（HTTP ' + r.status + '）' });
+      } catch (e) {
+        const detail = etsy.explainFetchFailure(e, '连接 ' + t.name + ' 时');
+        checks.push({ name: t.name, url: t.url, reachable: false, ms: Date.now() - t0, detail });
+      }
+    }
+    const reachable = checks.filter(c => c.reachable).length;
+    return json(res, 200, {
+      ok: true,
+      reachable: reachable > 0,
+      total: checks.length,
+      passed: reachable,
+      checks,
+      note: reachable === checks.length
+        ? '全部连通，授权失败就不是网络问题，请查 redirect_uri 是否与 Etsy 登记值一字不差。'
+        : (reachable > 0
+          ? '部分连通。授权只用到第一个目标；看它是否 reachable。'
+          : '全部不通：这台机器连不上 Etsy。若你在用 VPN/代理，确认它已开启并接管了流量；若刚切换过网络，等它稳定后重试。'),
+    });
+  }
 
   // 授权状态自检：不消耗任何 Etsy 额度，前端首屏就调它决定显示哪一屏
   if (p === '/api/etsy/status' && req.method === 'GET') {
