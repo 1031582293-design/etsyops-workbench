@@ -99,12 +99,12 @@ console.log('\n【7】极速预览（lite）');
 {
   ok(html.includes('function renderPreviewLite()'), '有 lite 渲染函数');
   ok(html.includes('function renderPreview(lite)'), 'renderPreview 支持 lite 参数');
-  ok(html.includes('if(lite) return renderPreviewLite();'), 'lite 分支已接入');
-  ok(html.includes('cov.removeAttribute(\'src\')'), 'lite 模式清掉封面 src（不加载任何图片）');
-  ok(html.includes('cov.style.display = \'none\''), 'lite 模式隐藏封面');
-  ok(html.includes('parts.slice(0, half)'), '内容分两批插入');
-  ok(html.includes("setTimeout(()=>{ body.insertAdjacentHTML"), '第二批延后插入');
-  ok(/if\(\/\^```\//.test(html) || html.includes('// 代码块降级'), '代码块降级不渲染');
+  // lite 的实现细节断言已迁到 selftest.lite.mjs（那里才真正检查结构安全）
+  ok(/if\(lite\)\{ renderPreviewLite\(\); applyTplStyle\(\); return 0; \}/.test(html), 'lite 分支已接入且会套模板样式');
+  ok(html.includes('function renderPreviewLite()'), 'lite 渲染函数存在');
+  ok(html.includes('art.innerHTML = frame'), 'lite 只替换 #article 内部（不动外层容器）');
+  ok(html.includes('id="prevCover" style="display:none"'), 'lite 隐藏封面且不给 src');
+  ok(html.includes('setTimeout(()=>{ if($(\'#prevBody\'))'), '第二批延后插入');
 }
 
 console.log('\n【8】渲染前让出主线程（防事件循环被占死）');

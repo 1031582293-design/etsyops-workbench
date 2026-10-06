@@ -274,6 +274,7 @@
           <div class="tpl" data-s="17">大 (17px)</div>
         </div>
         <div style="margin-top:16px;display:flex;gap:10px">
+          <button class="btn" id="clearPreviewBtn" title="长稿预览会让页面变慢，可一键清空">清空预览</button>
           <button class="btn primary" id="toStep3">排版完成，去发布 →</button>
         </div>
       </div>
@@ -413,52 +414,72 @@ function mdToHtml(src){
 /* ---------- 预览渲染 ---------- */
 /* ---------- 最小可用预览（lite）----------
    目标：无论稿件多长都能秒出、且绝不让页面卡住。
-   做法：不碰任何图片；只渲染标题/正文纯文本结构；内容分两批插入。*/
+   实现要点（★ 都是踩过坑才定下来的）：
+   1. **只替换 #article 内部，绝不动外层容器**。
+      wx-top（绿色"公众号文章预览"条）本来就在 #article 外面；
+      早期版本用 outerHTML 把它也重建了一遍，结果：
+      · 绿色标题条出现两次
+      · #article / #prevTitle 等id 全丢了，后续 renderPreview 找不到元素 → 预览空白
+   2. 不加载任何图片（含封面 src 清掉并隐藏）→ 外网图不再是阻塞点。
+   3. 内容分两批插入：先框架后补内容，长稿也不会一次性塞满。
+   4. 复用页面原有的 inline() 处理加粗/斜体/代码，视觉与完整版一致。*/
 function renderPreviewLite(){
   const t0 = Date.now();
   const art = $('#article');
   if(!art) return 0;
-  // 隐藏封面 img（lite 模式不加载任何图片）
-  const cov = art.querySelector('#prevCover');
-  if(cov){ cov.removeAttribute('src'); cov.style.display = 'none'; }
   const title = ($('#title').value || '').trim();
-  const raw= ($('#src').value || '').trim();
+  const raw  = ($('#src').value || '').trim();
+  const author= ($('#author').value || '').trim();
+  const d = new Date();
+  const dateTxt = (d.getMonth()+1)+'月'+d.getDate()+'日';
 
-  // 先写「框架」：立刻可见
-  const head =
-    '<div class="wx-top"><span class="back">‹</span><span>公众号文章预览</span>'
-    + '<span style="font-size:12px;opacity:.8">···</span></div>'
-    + '<div class="article lite" id="articleLite">'
-    +   '<h1>' + (title || '给文章起个标题…') + '</h1>'
-    +   '<div class="byline"><span class="avatar">梦</span><span>' + (($('#author').value||'').trim()||'作者') + '</span></div>'
-    +   '<div class="lite-body" id="liteBody">';
-  art.outerHTML = head;
-  const body = document.getElementById('liteBody');
-  if(!body) return 0;
+  // 框架一次写入：仍保留原有的 id（prevTitle / prevAuthor / prevDate / prevBody / prevCover），
+  // 这样 applyTplStyle 等后续逻辑继续可用。
+  const frame =
+    '<img class="cover" id="prevCover" style="display:none" alt="" />'
+    + '<h1 id="prevTitle">' + (title || '给文章起个标题…') + '</h1>'
+    + '<div class="byline"><span class="avatar">💚</span><span id="prevAuthor">' + (author||'') + '</span><span id="prevDate">' + dateTxt + '</span></div>'
+    + '<div id="prevBody"><p style="color:#bbb">正文预览会随左侧编辑实时更新。</p></div>';
+  art.innerHTML = frame;
 
-  if(!raw){ body.innerHTML = '<p style="color:#999">正文预览会随左侧编辑实时更新。</p>'; return Date.now()-t0; }
+  if(!raw) return Date.now() - t0;
 
-  // 正文转纯文本结构（无图片、无表格）
+  // 正文 → 轻量结构（无图片、无表格、代码块降级）
+  const esc = t => String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const lines = raw.replace(/\r\n/g,'\n').split('\n');
   const parts = [];
   let buf = [];
   const flush = ()=>{ if(buf.length){ parts.push('<p>' + inline(esc(buf.join(' '))) + '</p>'); buf = []; } };
-  const esc = t => String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  let inCode = false;
   for(const ln of lines){
     const t = ln.trim();
+    if(t.startsWith('```')){ flush(); inCode = !inCode; continue; }
+    if(inCode){ continue; }                                  // 代码块跳过，不渲染
     if(!t){ flush(); continue; }
-    if(/^```/.test(t)){ flush(); continue; }               // 代码块降级
-    if(/^\s*#{1,6}\s/.test(t)){ flush(); parts.push('<h2>' + esc(t.replace(/^\s*#{1,6}\s*/,'')) + '</h2>'); continue; }
-    if(/^\s*>\s?/.test(t)){ flush(); parts.push('<blockquote>' + esc(t.replace(/^\s*>\s?/,'')) + '</blockquote>'); continue; }
-    if(/^\s*([-*]|\d+\.)\s+/.test(t)){ flush(); parts.push('<li>' + esc(t.replace(/^\s*([-*]|\d+\.)\s+/,'')) + '</li>'); continue; }
-    if(/^\s*(---|\*\*\*)\s*$/.test(t)){ flush(); parts.push('<hr>'); continue; }
+    if(/^#{1,6}\s/.test(t)){ flush(); parts.push('<h2>' + inline(esc(t.replace(/^#{1,6}\s*/,''))) + '</h2>'); continue; }
+    if(/^>\s?/.test(t)){ flush(); parts.push('<blockquote>' + inline(esc(t.replace(/^>\s?/,''))) + '</blockquote>'); continue; }
+    if(/^(---|\*\*\*)\s*$/.test(t)){ flush(); parts.push('<hr>'); continue; }
+    if(/^([-*]|\d+\.)\s+/.test(t)){
+      flush();
+      parts.push('<p style="margin:0 0 6px">· ' + inline(esc(t.replace(/^([-*]|\d+\.)\s+/,''))) + '</p>');
+      continue;
+    }
     buf.push(t);
   }
   flush();
-  // 分两批插入，避免一次性塞入造成长任务
+
+  const body = $('#prevBody');
+  if(!body) return Date.now() - t0;
   const half = Math.ceil(parts.length / 2);
   body.innerHTML = parts.slice(0, half).join('');
-  setTimeout(()=>{ body.insertAdjacentHTML('beforeend', parts.slice(half).join('')); }, 0);
+  setTimeout(()=>{ if($('#prevBody')) $('#prevBody').insertAdjacentHTML('beforeend', parts.slice(half).join('')); }, 0);
+  // 主题色/字号/模板都作用在 #article 上，渲染后立即套用，切样式才立刻可见
+  const art2 = $('#article');
+  if(art2){
+    art2.style.setProperty('--theme', state.color);
+    art2.style.fontSize = state.size + 'px';
+    applyTplStyle();
+  }
   return Date.now() - t0;
 }
 
@@ -489,7 +510,7 @@ function markPreviewStale(){
      · 正文按段落分批插入，先出框架再补内容（可感知更快）
    完整模式用于用户主动点「刷新预览」时的最终确认。*/
 function renderPreview(lite){
-  if(lite) return renderPreviewLite();
+  if(lite){ renderPreviewLite(); applyTplStyle(); return 0; }
   const theme = state.color;
   const art = $('#article');
   art.style.setProperty('--theme', theme);
@@ -522,8 +543,13 @@ function applyTplStyle(){
     biz:   { h1:'', h2:'' }, default:{ h1:'', h2:'' }
   };
   const st = map[state.tpl]||{};
-  const a=$('#article');
-  a.querySelector('h1').setAttribute('style', st.h1||'');
+  const a = $('#article');
+  // ★ 加防御：lite 模式下元素可能还不存在。原来的
+  //   a.querySelector('h1').setAttribute(...) 一旦拿不到 h1 就抛错，
+  //   会让整个 onclick 链断掉 → 表现为「点了没反应 / 预览不跟着变」。
+  if(!a) return;
+  const h1 = a.querySelector('h1'); if(h1) h1.setAttribute('style', st.h1||'');
+  const h2 = a.querySelector('h2'); if(h2) h2.setAttribute('style', st.h2||'');
 }
 
 /* ---------- 步骤切换 ---------- */
@@ -881,6 +907,23 @@ $('#genBtn').onclick = async ()=>{
     btn.disabled = false; btn.textContent = '✨ 开始 AI 生稿';
   }
 };
+// 一键清空预览：#article 里塞着整篇长稿的 DOM，长稿下会让整页操作变慢。
+// 清空后页面立刻恢复流畅，发布本身并不依赖预览。
+$('#clearPreviewBtn').onclick = ()=>{
+  const art = $('#article');
+  if(art){
+    art.style.setProperty('--theme', state.color);
+    art.style.fontSize = state.size + 'px';
+    art.innerHTML = '<img class="cover" id="prevCover" style="display:none" alt="" />'
+      + '<h1 id="prevTitle">' + (($('#title').value||'').trim() || '给文章起个标题…') + '</h1>'
+      + '<div class="byline"><span class="avatar">💚</span><span id="prevAuthor"></span><span id="prevDate"></span></div>'
+      + '<div id="prevBody"><p style="color:#bbb">预览已清空。发布不受影响。</p></div>';
+  }
+  __previewStale = true;
+  const tip = $('#previewTip'); if(tip) tip.style.display = 'block';
+  toast('预览已清空，页面恢复流畅。发布不需要预览。');
+};
+
 $('#skipGen').onclick = ()=>goStep(4);
 /* 预览渲染前的保护：先 setTimeout(0) 让出主线程，
    否则在长稿上同步渲染会把事件循环占死 → 连按钮都点不动。*/
