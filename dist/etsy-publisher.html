@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>EtsyOps · Etsy 商品上架</title>
 <script src="./config.js"></script>
+<script src="./etsy-import.js"></script>
 <style>
   :root{
     --bg:#0b0e1a; --bg2:#0f1426; --panel:rgba(255,255,255,.045); --panel-2:rgba(255,255,255,.07);
@@ -42,6 +43,12 @@
 
   /* stepper */
   .stepper{display:flex;gap:10px;margin:0 0 20px;flex-wrap:wrap}
+  /* 区块小标题：把长表单切成可扫读的段落，配套 .hint 说明「为什么要填」，
+     避免用户当成可选装饰跳过。 */
+  .subhead{margin:22px 0 12px;font-size:13px;font-weight:500;color:var(--text);
+    padding-bottom:8px;border-bottom:1px solid var(--border);}
+  .subhead .hint{display:block;margin-top:4px;font-weight:400;}
+
   .step-chip{flex:1;min-width:170px;background:var(--panel);border:1px solid var(--border);border-radius:14px;
     padding:13px 15px;cursor:pointer;transition:.2s;display:flex;gap:12px;align-items:center}
   .step-chip:hover{border-color:var(--border-strong)}
@@ -145,7 +152,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">fdc8476</span>
+  <span class="vtag" id="verTag">BUILD_VERSION</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -293,6 +300,53 @@
           </div>
         </div>
 
+        <div class="subhead">物理属性与生产伙伴
+          <span class="hint">Etsy 的API 层把这些标为可选，但 Shop Manager 界面会拦住不填的草稿。
+          所以：不填不阻断提交，但强烈建议补齐，否则后台无法编辑或上架。</span>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <label class="fld">净重<span class="hint">买家最关心的物流信息</span></label>
+            <div style="display:flex;gap:8px">
+              <input type="number" id="fWeight" step="any" min="0" placeholder="2250" style="flex:1" />
+              <select id="fWeightUnit" style="width:92px">
+                <option value="g">克 (g)</option>
+                <option value="kg">千克 (kg)</option>
+                <option value="oz">盎司 (oz)</option>
+                <option value="lb">磅 (lb)</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="fld">生产伙伴 ID<span class="hint">Shop Manager → 生产伙伴里拿</span></label>
+            <input type="text" id="fPartner" placeholder="可留空，多个用逗号分隔，如 123,456" />
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div>
+            <label class="fld">尺寸（长 × 宽 × 高）<span class="hint">包装尺寸，用于物流估算</span></label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input type="number" id="fLen" step="any" min="0" placeholder="50" />
+              <span style="color:var(--text-faint)">×</span>
+              <input type="number" id="fWid" step="any" min="0" placeholder="50" />
+              <span style="color:var(--text-faint)">×</span>
+              <input type="number" id="fHgt" step="any" min="0" placeholder="30" />
+              <select id="fDimUnit" style="width:76px;margin-left:4px">
+                <option value="cm">cm</option>
+                <option value="mm">mm</option>
+                <option value="m">m</option>
+                <option value="in">in</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="fld">适合人群 / 规格说明<span class="hint">非 Etsy 字段，建议写进描述</span></label>
+            <input type="text" id="fAudience" placeholder="如：标准尺寸，配有可调节海绵块" />
+          </div>
+        </div>
+
         <div class="btnrow">
           <button class="btn" id="btnValidate">本地校验（不消耗 Etsy 额度）</button>
           <button class="btn" data-goto="4">下一步：图片与库存 →</button>
@@ -310,6 +364,25 @@
         <input type="file" id="file" accept="image/*" multiple class="hidden" />
         <div class="thumbs" id="thumbs"></div>
         <div id="msgImg" class="msg"></div>
+
+        <div class="subhead">批量导入（一次上多个商品）
+          <span class="hint">从飞书 / Excel 复制表格，粘进下面的框，再点「解析」。
+          解析只是把数据填进表单让你逐个确认，<b>不会自动建草稿</b> —— 字段错位时批量建错草稿是要花上架费的。</span>
+        </div>
+
+        <div id="importBox">
+          <textarea id="importText" rows="5" class="hidden"
+            placeholder="在这里粘贴表格（第一行是列名）&#10;图片文件名&#9;价格&#9;数量&#9;制作方&#9;制作时间&#9;材质&#9;产品净重&#9;长度&#9;宽度&#9;高度&#10;6-狼头套-1.jpg&#9;30.70&#9;10&#9;代工&#9;2020_2026&#9;EVA, 网布&#9;2250&#9;50&#9;50&#9;30"></textarea>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn sm" id="btnImportToggle">粘贴表格内容</button>
+            <button class="btn sm" id="btnImportFile">选择 CSV 文件</button>
+            <button class="btn sm" id="btnImportParse">解析</button>
+            <button class="btn sm ghost" id="btnImportTpl">下载模板</button>
+          </div>
+          <input type="file" id="importFile" accept=".csv,.tsv,.txt" class="hidden" />
+          <div id="importMsg" class="msg"></div>
+          <div id="importList"></div>
+        </div>
 
         <label class="fld" style="margin-top:20px">变体<span class="hint">无变体就留空，留空则用上面的主价格与数量</span></label>
         <div id="varBox"></div>
@@ -514,6 +587,16 @@ function gate(title, html){
 
 function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
+/* 表单里的数值字段 → 数字或 null。
+ * 必须区分「空」与「0」：空表示用户没填（不提交该字段），
+ * 0 本身也是无效值（Etsy 要求 positive non-zero），两者都不该传给 Etsy。 */
+function numOrNull(v){
+  const t = String(v == null ? '' : v).trim();
+  if (!t) return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function renderStatus(){
   document.getElementById('svVer').textContent = STATUS.serverVersion || '—';
   document.getElementById('svShop').innerHTML = STATUS.shopId
@@ -691,6 +774,15 @@ function collectForm(){
     shop_section_id: document.getElementById('fSection').value,
     return_policy_id: document.getElementById('fReturn').value,
     materials: document.getElementById('fMat').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+    // 物理属性：三个维度都填了才提交，否则 Etsy 会拿到不完整的尺寸
+    item_weight: numOrNull(document.getElementById('fWeight').value),
+    item_weight_unit: document.getElementById('fWeightUnit').value,
+    item_length: numOrNull(document.getElementById('fLen').value),
+    item_width: numOrNull(document.getElementById('fWid').value),
+    item_height: numOrNull(document.getElementById('fHgt').value),
+    item_dimensions_unit: document.getElementById('fDimUnit').value,
+    production_partner_ids: document.getElementById('fPartner').value.trim(),
+    audience_note: document.getElementById('fAudience').value.trim(),
   };
 }
 
@@ -721,11 +813,14 @@ drop.addEventListener('drop', e => {
   e.preventDefault(); drop.style.borderColor = '';
   addFiles(e.dataTransfer.files);
 });
-fileInput.addEventListener('change', () => addFiles(fileInput.files));
+fileInput.addEventListener('change', () => { rememberPickedFiles(fileInput.files); addFiles(fileInput.files); });
 
 function addFiles(files){
   const m = document.getElementById('msgImg');
   const arr = Array.from(files || []);
+  // ★ 记住原始 File 对象：批量导入时要靠文件名把表格和图片对上号，
+  //   而 IMAGES 里只剩 base64、不含文件名。
+  rememberPickedFiles(files);
   if (!arr.length) return;
   if (IMAGES.length + arr.length > 20){
     showMsg(m, 'err', '图片最多 20 张，当前已有 ' + IMAGES.length + ' 张。');
@@ -743,6 +838,63 @@ function addFiles(files){
   });
 }
 
+/* ---------- 图片按文件名匹配（批量导入用） ----------
+ *
+ * 为什么需要：表格里只能放文件名，而 Etsy 传图要真实文件。
+ * 做法是用户先在「上传图片」里把所有图片选中，我们把 File 对象留在手里，
+ * 解析表格时按文件名对上号 —— 避免让用户为了导数据再手工传一次图。
+ *
+ * 匹配时忽略大小写、并容忍「用户选了整个文件夹但表格写的是相对路径名」这种常见错位。
+ */
+
+/* 记住用户在上传框里选过的原始 File 对象（IMAGES 存的是已转 base64 的结果，
+ * 不含文件名，所以要单独留一份）。 */
+const PICKED_FILES = [];
+
+function rememberPickedFiles(fileList) {
+  PICKED_FILES.length = 0;
+  Array.from(fileList || []).forEach(f => PICKED_FILES.push(f));
+}
+
+/* 按表格给出的文件名，从已选文件里找出对应的那些。
+ * 返回 File[]，顺序与表格里写的顺序一致 —— 主图顺序直接影响 Etsy 的展示。 */
+function matchPickedImages(names) {
+  if (!PICKED_FILES.length || !names || !names.length) return [];
+  const pool = PICKED_FILES.slice();
+  const out = [];
+  for (const raw of names) {
+    // 运营可能把相对路径一起写进来（如 ./images/6-狼头套-1.jpg），只取最后一段
+    const want = String(raw).trim().split(/[\\/]/).pop().toLowerCase();
+    const idx = pool.findIndex(f => f.name.toLowerCase() === want);
+    if (idx >= 0) out.push(pool.splice(idx, 1)[0]);
+  }
+  return out;
+}
+
+/* 把匹配到的 File 转成 IMAGES 的结构并渲染。
+ * 复用页面既有的读图逻辑，保证 base64 形态与手工上传完全一致。 */
+function setPickedFiles(fileList) {
+  IMAGES.length = 0;
+  return Promise.all(Array.from(fileList || []).map(f => readAsImage(f)))
+    .then(list => {
+      list.filter(Boolean).forEach(o => IMAGES.push(o));
+      renderThumbs();
+      return IMAGES.length;
+    });
+}
+
+function readAsImage(file) {
+  return new Promise((resolve) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const s = String(fr.result || '');
+      const i = s.indexOf(',');
+      resolve(i > 0 ? { data: s.slice(i + 1), name: file.name } : null);
+    };
+    fr.onerror = () => resolve(null);
+    fr.readAsDataURL(file);
+  });
+}
 function renderThumbs(){
   const box = document.getElementById('thumbs');
   box.innerHTML = IMAGES.map((im, i) =>
@@ -905,6 +1057,123 @@ window.fillFromJson = function(obj){
 };
 
 boot();
+
+/* ---------- 批量导入 UI ---------- */
+const IMPORT_BATCH = [];   // 解析后的行
+
+function importMsg(kind, text) {
+  const el = document.getElementById('importMsg');
+  el.className = 'msg ' + (kind || '');
+  el.innerHTML = text;
+}
+
+document.getElementById('btnImportToggle').addEventListener('click', () => {
+  const t = document.getElementById('importText');
+  t.classList.toggle('hidden');
+  if (!t.classList.contains('hidden')) t.focus();
+});
+
+document.getElementById('btnImportFile').addEventListener('click', () => {
+  document.getElementById('importFile').click();
+});
+
+document.getElementById('importFile').addEventListener('change', async (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const text = await f.text();
+  document.getElementById('importText').value = text;
+  document.getElementById('importText').classList.remove('hidden');
+  doParseImport();
+});
+
+/* 模板：第 1 行列名、第 2 行填写说明、第 3 行示例（用前删除）。
+ * 带 BOM 头，否则Excel 打开中文列名会乱码。 */
+document.getElementById('btnImportTpl').addEventListener('click', () => {
+  const rows = [
+    ['图片文件名', '价格', '数量', '制作方', '制作时间', '材质', '产品净重', '长度', '宽度', '高度',
+     '适合人群', '标题', '描述', '标签', '类目ID', '生产伙伴'],
+    ['【必填】逗号分隔多个文件名', '【必填】美元数字', '【必填】正整数',
+     'i_did / someone_else / collective', 'made_to_order / 2020_2026',
+     '逗号分隔', '克或千克', 'cm', 'cm', 'cm',
+     '非 Etsy 字段，建议写进描述', '可留空，由 AI 生成', '可留空，由 AI 生成',
+     '逗号分隔，最多 13 个', '先搜类目再填 ID', '可留空'],
+    ['6-狼头套-1.jpg;6-狼头套-2.jpg', '30.70', '10', 'someone_else', '2020_2026',
+     'EVA, 三明治网布', '2250', '50', '50', '30',
+     '标准尺寸，配可调节海绵块', '（示例行，用前请删除）', '（示例行）',
+     'wolf fursuit head, wolf mask', '', ''],
+  ];
+  const q = c => '"' + String(c).replace(/"/g, '""') + '"';
+  const csv = rows.map(r => r.map(q).join(',')).join('\r\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'Etsy批量上架模板.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+function doParseImport() {
+  const text = document.getElementById('importText').value;
+  const r = parseImportTable(text);
+
+  if (r.errors.length) {
+    importMsg('err', '<b>无法导入：</b><br>' + r.errors.map(esc).join('<br>'));
+    document.getElementById('importList').innerHTML = '';
+    IMPORT_BATCH.length = 0;
+    return;
+  }
+
+  IMPORT_BATCH.length = 0;
+  IMPORT_BATCH.push(...r.rows);
+
+  const bad = r.rows.filter(x => x._problems.length).length;
+  const cols = r.columns.map(c => c.field).join(', ');
+  importMsg(bad ? 'warn' : 'ok',
+    '解析出 <b>' + r.rows.length + '</b> 行，识别列：<code>' + esc(cols) + '</code>'
+    + (bad ? '<br>其中 <b>' + bad + '</b> 行有问题（见下方红色标注），问题行仍可导入，但请先核对。' : ''));
+
+  const box = document.getElementById('importList');
+  box.innerHTML = r.rows.map((it, i) => {
+    const pb = it._problems.length
+      ? '<div style="color:var(--bad);font-size:12px;margin-top:6px">⚠ ' + it._problems.map(esc).join('；') + '</div>'
+      : '';
+    const meta = [
+      it.price ? ('$' + it.price) : '',
+      it.quantity ? ('×' + it.quantity) : '',
+      it.who_made, it.when_made,
+      it.materials.length ? it.materials.join('/') : '',
+      it.item_weight ? (it.item_weight + (it.item_weight_unit || 'g')) : '',
+      it.images.length + ' 张图',
+    ].filter(Boolean).join(' · ');
+    return '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:8px">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+      + '<b style="font-size:13px">' + esc(it.sku || ('第 ' + it._row + ' 行')) + '</b>'
+      + '<button class="btn sm" data-imp-fill="' + i + '">填入表单 →</button></div>'
+      + '<div style="font-size:12px;color:var(--text-faint);margin-top:4px">' + esc(meta) + '</div>'
+      + pb + '</div>';
+  }).join('');
+
+  box.querySelectorAll('[data-imp-fill]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const it = IMPORT_BATCH[Number(btn.dataset.impFill)];
+      if (!it) return;
+      applyImportRow(it);
+      const matched = matchPickedImages(it.images);
+      if (matched.length) {
+        setPickedFiles(matched);
+        importMsg('ok', '已填入第 ' + it._row + ' 行，并匹配到 <b>' + matched.length + '</b> 张图片。'
+          + (matched.length < it.images.length
+            ? '<br>还有 ' + (it.images.length - matched.length) + ' 张没找到：请点上方「上传图片」把这些文件也选上。'
+            : ''));
+      } else {
+        importMsg('warn', '已填入第 ' + it._row + ' 行。<b>图片还没匹配上</b> —— '
+          + '请先点上方「上传图片」选择文件，文件名要与表格里的完全一致。');
+      }
+    });
+  });
+}
+
+document.getElementById('btnImportParse').addEventListener('click', doParseImport);
 </script>
 </body>
 </html>
