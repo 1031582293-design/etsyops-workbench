@@ -63,7 +63,7 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 - 同步模式仍可用（旧前端兼容）
 - **等 35 秒验证清理定时器不报 ReferenceError**（捕获作用域错误这类只在运行期暴露的 bug）
 
-**Etsy selftest.etsy.mjs（254 项）**
+**Etsy selftest.etsy.mjs（274 项）**
 按「最容易造成真实损失」排序，重点覆盖：
 - **金额 subunit**：$29.99→2999、$0.29→29、负数与非数字被拒
 - **★ inventory 价格格式不对称**：读回是 Money 对象 `{amount, divisor}`，
@@ -97,6 +97,10 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 - **远程日志读取**：`/api/diag/logs?file=backend|tunnel&lines=N` 返回末尾 N 行原文，
   排障不再依赖截图。安全边界有 6 项断言守着：任意路径（含 URL 编码的
   `..%2F.env`）一律 400、token 片段自动掩码、lines 夹在 10~500
+- **代理支持（ETSY_PROXY）**：起真假代理做端到端验证，断言**请求行是完整 URL**
+  （`https://openapi.etsy.com/...`）、**Host 是 Etsy 而非代理**、刷新 token 也走代理、
+  显式 fetchImpl 优先级高于代理（自测 mock 不被劫持）、代理不可达时错误点名「代理/端口」、
+  非法地址直接抛错不退回直连
 - **★ 回调路径兼容**：`/api/etsy/callback` 与 `/api/etsy/oauth/callback` **两个路径
   都必须进回调逻辑**（曾因指引里写了后者、代码只注册前者，导致点「同意」后拿到
   404 not_found、授权 100% 失败）；state校验（CSRF 防护）仍生效；

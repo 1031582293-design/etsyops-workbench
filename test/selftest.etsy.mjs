@@ -1006,6 +1006,97 @@ console.log('\n【21】连通性自检接口（排查「网络到底通不通」
   const small = await callApi('GET', '/api/diag/logs?file=backend&lines=1');
   ok(small.code === 200 && small.json.lines >= 10, 'lines 下限被夹住', String(small.json && small.json.lines));
 }
+// ========== 23. 代理支持（ETSY_PROXY） ==========
+// 起因：操作者电脑必须开 VPN 才能连 Etsy，但开VPN 会让 cloudflared 隧道
+// 连不上 Cloudflare（QUIC/UDP 被拦）→ 外部访问 1033；不开 VPN 又连不上 Etsy。
+// 而「开着系统代理」对 Node 后端无效——已实测 Node 内置 fetch 完全忽略
+// HTTPS_PROXY/HTTP_PROXY（起假代理设环境变量，代理收到 0 个请求）。
+// 所以必须显式把代理地址传进代码。这就是本组测试存在的理由。
+{
+  const http = await import('node:http');
+  const seen = [];
+  const proxy = http.createServer((req, res) => {
+    seen.push({ method: req.method, url: req.url, host: req.headers.host });
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ shop_id: 999, access_token: 'AT1', refresh_token: 'RT1', expires_in: 3600, echo: body }));
+    });
+  });
+  await new Promise(r => proxy.listen(0, '127.0.0.1', r));
+  const pp = proxy.address().port;
+
+  const cfg = {
+    keystring: 'ks', sharedSecret: 'ss', apiKeyHeader: 'ks:ss', shopId: '999',
+    allowWrite: false, redirectUri: 'https://x/cb',
+    baseUrl: 'https://openapi.etsy.com/v3/application',
+    tokenUrl: 'https://api.etsy.com/v3/public/oauth/token',
+    proxy: `http://127.0.0.1:${pp}`,
+  };
+  let disk = { accessToken: '', refreshToken: 'RT0', accessTokenExpiresAt: 0, refreshTokenExpiresAt: Date.now() + 9e7 };
+  const store = { read: () => ({ ...disk }), write: d => { disk = { ...d }; } };
+
+  // 1) 配置读取
+  ok(etsy.etsyConfig({ ETSY_PROXY: 'http://127.0.0.1:7890' }).proxy === 'http://127.0.0.1:7890',
+    'ETSY_PROXY 从环境读取');
+  ok(etsy.etsyConfig({}).proxy === '', '未配时为空串（不误判成已配置）');
+
+  // 2) 不显式传 fetchImpl 时自动走代理
+  const c = etsy.createClient({ config: cfg, store });
+  const r = await c.get('/shops/999');
+  ok(r && r.shop_id === 999, '★ 配置代理后请求成功（未注入 fetchImpl 也生效）');
+  const apiReq = seen.find(x => /openapi\.etsy\.com/.test(x.url));
+  ok(!!apiReq, '★ 请求确实到了代理（而不是直连）');
+  // 协议细节：普通 HTTP 代理把完整 URL 放进请求行，Host 是**目标站**
+  ok(apiReq && /^https:\/\/openapi\.etsy\.com\//.test(apiReq.url), '完整 URL 进了请求行', apiReq && apiReq.url);
+  ok(apiReq && apiReq.host === 'openapi.etsy.com', '★ Host 是 Etsy 而非代理', apiReq && apiReq.host);
+  ok(seen.some(x => /oauth\/token/.test(x.url)), '★ 刷新 token 也走同一代理（最容易漏的一处）');
+
+  // 3) resolveFetch：回调与探测必须复用同一出口，否则「其他接口都通、偏偏授权失败」
+  ok(typeof etsy.resolveFetch === 'function', 'resolveFetch 已导出');
+  ok(etsy.resolveFetch(cfg).isProxied === true, 'resolveFetch 有代理时返回代理出口');
+  ok(etsy.resolveFetch({}).isProxied === undefined, '无代理时返回原生 fetch');
+  const mock = async () => new Response('{}');
+  ok(etsy.resolveFetch(cfg, mock) === mock, '★ 显式传入的 fetchImpl 优先（自测 mock 不被劫持）');
+
+  // 4) 显式 fetchImpl 优先级最高——自测全部基于这一点
+  const c2 = etsy.createClient({ config: cfg, store, fetchImpl: async () => new Response(JSON.stringify({ shop_id: 7 }), { headers: { 'Content-Type': 'application/json' } }) });
+  const r2 = await c2.get('/shops/999');
+  ok(r2.shop_id === 7, '★ 显式 fetchImpl 覆盖代理（自测注入仍生效）');
+
+  // 5) 代理不可达时报错必须可读，而不是裸 fetch failed
+  const cBad = etsy.createClient({ config: { ...cfg, proxy: 'http://127.0.0.1:1' }, store });
+  try {
+    await cBad.get('/shops/999');
+    ok(false, '代理不可达应抛错');
+  } catch (e) {
+    ok(/代理/.test(e.message), '★ 代理不可达时明确说「代理」', e.message.slice(0, 60));
+    ok(!/fetch failed。$/.test(e.message), '不是裸 fetch failed');
+    ok(/端口/.test(e.message), '提示检查端口');
+  }
+
+  // 6) 非法代理地址必须直接抛错，**不能静默退回直连**
+  //    静默退回会造成「以为配了代理、其实没走」的假象，比报错更难查。
+  let threw = false;
+  try { etsy.createClient({ config: { ...cfg, proxy: '垃圾地址' }, store }); } catch (e) { threw = true; }
+  ok(threw, '★ 非法 ETSY_PROXY 直接抛错');
+  threw = false;
+  try { etsy.createProxyFetch('无协议'); } catch (e) { threw = true; }
+  ok(threw, 'createProxyFetch 对无协议地址抛错');
+
+  // 7) Body 转发：POST 的 urlencoded body 必须原样送到代理（换 token 全靠它）
+  seen.length = 0;
+  await etsy.exchangeCode(cfg, { code: 'CODE123', verifier: 'V456' }, etsy.resolveFetch(cfg));
+  const tokReq = seen.find(x => /oauth\/token/.test(x.url));
+  ok(tokReq && tokReq.method === 'POST', '换 token 用 POST');
+  ok(!!tokReq, '换 token 走了代理');
+
+  // 8) HTTPS 代理地址也能解析（不因协议头不同就崩）
+  ok(etsy.createProxyFetch('https://127.0.0.1:8443').isProxied === true, 'https 代理地址可解析');
+
+  proxy.close();
+}
 console.log('\n' + '='.repeat(76));
 console.log(`结果：通过 ${pass} 项，失败 ${fail} 项`);
 console.log('='.repeat(76));

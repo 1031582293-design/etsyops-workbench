@@ -828,7 +828,10 @@ async function handleApi(req, res) {
       try {
         // 用 GET 而不是 POST：这里只关心「能不能连上」，不需要真的发 token 请求。
         // 状态码 4xx 也说明连通性正常（是业务层拒绝，不是网络层不通）。
-        const r = await fetch(t.url, { method: 'GET', signal: AbortSignal.timeout(15000) });
+        // ★ 探测必须走与真实请求同一个出口，否则测的是「直连能力」而非
+        //   「后端实际能不能连 Etsy」—— 配了代理却报告不通，会把人带偏。
+        const probeFetch = etsy.resolveFetch(ETSY_CFG);
+        const r = await probeFetch(t.url, { method: 'GET', signal: AbortSignal.timeout(15000) });
         checks.push({ name: t.name, url: t.url, reachable: true, status: r.status, ms: Date.now() - t0,
           note: r.status < 500 ? '连通正常（HTTP ' + r.status + ' 说明网络通了，只是这次请求没带凭证）' : '连上了但服务端异常（HTTP ' + r.status + '）' });
       } catch (e) {
@@ -975,7 +978,10 @@ async function handleApi(req, res) {
     }
 
     try {
-      const d = await etsy.exchangeCode(ETSY_CFG, { code, verifier: pend.verifier }, fetch);
+      // ★ 必须用 resolveFetch 而不是裸 fetch：裸 fetch 会绕过 ETSY_PROXY，
+//   导致「其他接口都通、偏偏授权失败」这类难查现象。
+      const d = await etsy.exchangeCode(ETSY_CFG, { code, verifier: pend.verifier },
+        etsy.resolveFetch(ETSY_CFG));
       const rec = etsy.normalizeTokenResponse(d);
       etsyStore.write(rec);
       etsyLog('★授权成功，已拿到 token（refresh token 已落盘 ' + ETSY_TOKEN_FILE + '）');
@@ -1506,6 +1512,11 @@ server.listen(PORT, HOST, () => {
     if (!st.authorized) console.log('⚠️ etsy: 凭证已配但尚未授权，请在页面点「连接 Etsy 店铺」完成一次授权（授权成功时会自动识别 shop_id，不用手工填）。');
     if (st.authorized && !sid) console.log('⚠️ etsy: 已授权但还不知道 shop_id（可能是多店铺账号）。请在 .env 加 ETSY_SHOP_ID 指定用哪个店后重启。');
     if (!ETSY_CFG.allowWrite) console.log('ℹ️ etsy: 写操作已关闭（安全默认）。要建草稿请在 .env 加 ETSY_ALLOW_WRITE=1 后重启。');
+    // ★ 明确打印代理状态：配没配、地址是什么，一眼可见。
+    //   不打印会出现「以为配了代理、其实没走」的假象，这类问题极难查。
+    console.log(ETSY_CFG.proxy
+      ? `  etsy proxy: 已配置 → ${ETSY_CFG.proxy}`
+      : '  etsy proxy: 未配置（Etsy 请求直连；若本机连不上 Etsy，在 .env 加 ETSY_PROXY=http://127.0.0.1:<端口>）');
   } else {
     const miss = [];
     if (!ETSY_CFG.apiKeyHeader) miss.push('ETSY_KEYSTRING + ETSY_SHARED_SECRET');

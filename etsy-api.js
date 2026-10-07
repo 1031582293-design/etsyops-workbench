@@ -43,6 +43,11 @@ function etsyConfig(env = process.env) {
     baseUrl: (env.ETSY_BASE_URL || 'https://openapi.etsy.com/v3/application').replace(/\/+$/, ''),
     tokenUrl: (env.ETSY_TOKEN_URL || 'https://api.etsy.com/v3/public/oauth/token').replace(/\/+$/, ''),
     authorizeUrl: (env.ETSY_AUTHORIZE_URL || 'https://www.etsy.com/oauth/connect').replace(/\/+$/, ''),
+    // ★ 显式代理地址（如 http://127.0.0.1:7890）。为什么必须显式而不能靠环境变量：
+    //   Node 内置 fetch **完全忽略** HTTPS_PROXY/HTTP_PROXY（已实测：设了变量后
+    //   假代理收到 0 个请求），所以「开着代理软件 + 系统代理模式」对 Node 后端无效，
+    //   必须把地址显式传进来。见 createProxyFetch()。
+    proxy: (env.ETSY_PROXY || '').trim(),
     accessToken: (env.ETSY_ACCESS_TOKEN || '').trim(),
     refreshToken: (env.ETSY_REFRESH_TOKEN || '').trim(),
     accessTokenExpiresAt: Number(env.ETSY_ACCESS_TOKEN_EXPIRES_AT || 0) || 0,
@@ -55,6 +60,98 @@ function etsyConfig(env = process.env) {
     // 无沙箱档：开发调用直接消耗生产额度，故默认关掉写操作，只允许 dry-run。
     allowWrite: String(env.ETSY_ALLOW_WRITE || '') === '1',
   };
+}
+
+// ---------------------------------------------------------------- 代理支持
+
+/* 通过显式 HTTP 代理发请求，零依赖（只用 node 内置的 http/https）。
+ *
+ * ★ 为什么必须自己写，而不能靠 HTTPS_PROXY 环境变量：
+ *   Node 内置 fetch **完全忽略** HTTPS_PROXY / HTTP_PROXY / NO_PROXY。
+ *   实测方法（2026-10-06）：起一个假 HTTP 代理并设好环境变量，
+ *   然后 fetch 一个不存在的域名 —— 假代理收到 0 个请求，直接 ENOTFOUND。
+ *   结论：「装了代理软件 + 开着系统代理模式」对 Node 后端**完全无效**，
+ *   必须把地址显式传进代码。这就是本函数存在的唯一理由。
+ *
+ * 实现要点：对普通 HTTP 代理，代理协议就是「把完整 URL 放进请求行」：
+ *     GET http://api.etsy.com/v3/... HTTP/1.1
+ *     Host: api.etsy.com
+ * TLS 仍然在代理与目标站之间端到端进行（代理只看得到 Host，看不到密文），
+ * 所以凭证（Bearer token、shared secret）不会泄漏给代理。
+ */
+function createProxyFetch(proxyUrl, opts = {}) {
+  const timeoutMs = opts.timeoutMs || 30000;
+  let target;
+  try {
+    target = new URL(proxyUrl);
+  } catch {
+    throw new Error(`ETSY_PROXY 地址不合法：${proxyUrl}（应形如 http://127.0.0.1:7890）`);
+  }
+  const proxyIsHttps = target.protocol === 'https:';
+  const proxyPort = Number(target.port) || (proxyIsHttps ? 443 : 80);
+  // 只有需要连「本地代理的 TLS」时才用 node:https；本地代理通常是明文 http
+  const transport = proxyIsHttps ? https : http;
+
+  const proxiedFetch = async (url, init = {}) => {
+    const targetUrl = new URL(url);
+    const headers = Object.assign({}, init.headers);
+    // Host 必须是**目标站**，不是代理 —— 否则代理会拒绝或路由错误
+    headers.Host = targetUrl.host;
+    if (headers['Accept-Encoding'] === undefined) headers['Accept-Encoding'] = 'identity';
+
+    const body = init.body;
+    const bodyBuf = body == null
+      ? null
+      : (typeof body === 'string' ? Buffer.from(body, 'utf8')
+        : (Buffer.isBuffer(body) ? body : Buffer.from(String(body), 'utf8')));
+    if (bodyBuf) headers['Content-Length'] = String(bodyBuf.length);
+
+    return new Promise((resolve, reject) => {
+      const req = transport.request({
+        host: target.hostname,
+        port: proxyPort,
+        method: init.method || 'GET',
+        path: targetUrl.toString(),   // ← 代理形式：整条 URL 进请求行
+        headers,
+        timeout: timeoutMs,
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          // 拼一个与 fetch Response 形状兼容的最小实现，只覆盖本项目用到的部分
+          resolve({
+            ok: res.statusCode >= 200 && res.statusCode < 300,
+            status: res.statusCode,
+            headers: new Map(Object.entries(res.headers || {})),
+            text: async () => buf.toString('utf8'),
+            json: async () => JSON.parse(buf.toString('utf8')),
+            arrayBuffer: async () => buf,
+          });
+        });
+      });
+      req.on('timeout', () => {
+        req.destroy();
+        reject(Object.assign(new Error(`通过代理请求超时（${timeoutMs}ms）：${targetUrl.host}`),
+          { cause: { code: 'ETIMEDOUT' } }));
+      });
+      req.on('error', (e) => {
+        // 代理本身连不上（端口没监听 / 代理软件没开）是最常见的失败，
+        // 必须说清「该检查代理地址与代理软件」，而不是笼统的 fetch failed
+        const msg = /ECONNREFUSED/.test(e.code || '')
+          ? `连不上代理 ${target.hostname}:${proxyPort} —— 代理软件没开，或端口不对。`
+             + `请确认代理软件已启动、端口与 .env 里 ETSY_PROXY 一致（常见 7890 / 10808 / 1080）。`
+          : e.message;
+        reject(Object.assign(new Error(msg), { cause: e }));
+      });
+      if (bodyBuf) req.write(bodyBuf);
+      req.end();
+    });
+  };
+
+  proxiedFetch.isProxied = true;
+  proxiedFetch.proxyUrl = proxyUrl;
+  return proxiedFetch;
 }
 
 // ---------------------------------------------------------------- 小工具
@@ -105,6 +202,8 @@ async function discoverShopId(client, accessToken) {
 
 // 本文件零依赖（仅 Node 内置）：crypto 用于 PKCE 与随机 verifier
 import { createHash, randomBytes } from 'node:crypto';
+import http from 'node:http';
+import https from 'node:https';
 
 const b64url = (buf) =>
   Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -349,7 +448,17 @@ function normalizeTokenResponse(d, now = Date.now()) {
    - access token 临近过期自动刷新一次，并处理 refresh token 轮换；
    - 401 自动重试一次（刷新后重试），避免并发请求撞在一起导致重复刷新；
    - 429 按 retry-after 退避（指数退避，封顶 8 秒，只重试可重试的写操作）。 */
-function createClient({ config, store, fetchImpl = fetch, now = () => Date.now(), sleep = (ms) => new Promise(r => setTimeout(r, ms)), log = () => {}, shopIdProvider = null }) {
+function createClient({ config, store, fetchImpl = null, now = () => Date.now(), sleep = (ms) => new Promise(r => setTimeout(r, ms)), log = () => {}, shopIdProvider = null }) {
+  // ★ 代理决策点（全模块唯一一处）：没显式给 fetchImpl 时，看 config.proxy 决定出口。
+  //   优先级：显式传入的 fetchImpl > ETSY_PROXY 指定的代理 > 原生 fetch。
+  //   自测注入的 mock fetchImpl 因此仍完全生效，不会被代理劫持。
+  let fetchImplResolved = fetchImpl;
+  if (!fetchImplResolved && config && config.proxy) {
+    // 地址不合法时直接抛错，**不静默退回直连** ——
+    // 那样会造成「以为配了代理、其实没走」的假象，比报错更难查。
+    fetchImplResolved = createProxyFetch(config.proxy);
+  }
+  if (!fetchImplResolved) fetchImplResolved = fetch;
   let refreshing = null;
 
   async function accessToken() {
@@ -365,7 +474,9 @@ function createClient({ config, store, fetchImpl = fetch, now = () => Date.now()
     if (!refreshing) {
       refreshing = (async () => {
         log('token 临近过期，自动刷新');
-        const d = await refreshAccessToken({ ...config, refreshToken: cur.refreshToken }, fetchImpl);
+        // 传fetchImplResolved（已解析好的出口，含代理），而不是形参 fetchImpl ——
+        // 后者是 null 时形如「fetchImpl is not a function」，代理因此完全失效。
+        const d = await refreshAccessToken({ ...config, refreshToken: cur.refreshToken }, fetchImplResolved);
         const rec = normalizeTokenResponse(d, now());
         store.write(rec);
         log('token 刷新成功' + (rec.refreshToken ? '（refresh token 已轮换并覆盖落盘）' : ''));
@@ -402,7 +513,7 @@ function createClient({ config, store, fetchImpl = fetch, now = () => Date.now()
       } else if (opts.multipart) {
         body = opts.multipart; // fetch 会自己带 boundary
       }
-      return fetchImpl(url, { method, headers, body });
+      return fetchImplResolved(url, { method, headers, body });
     };
 
     let tok = await accessToken();
@@ -978,8 +1089,20 @@ function validateVariationRows(combos, perRow) {
   return { ok: errs.length === 0, errors: errs };
 }
 
+/* 解析本次运行的对外出口：有代理走代理，没有用原生 fetch。
+ * server.js 里的 OAuth 回调与连通性探测都必须用它，
+ * 否则那两处会各自走裸 fetch、绕过了 ETSY_PROXY ——
+ * 结果是「其他接口都通、偏偏授权失败」这种极难定位的现象。 */
+function resolveFetch(config, explicit = null) {
+  if (explicit) return explicit;
+  if (config && config.proxy) return createProxyFetch(config.proxy);
+  return fetch;
+}
+
 export {
   etsyConfig,
+  createProxyFetch,
+  resolveFetch,
   explainFetchFailure,
   userIdFromToken,
   discoverShopId,
