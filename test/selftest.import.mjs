@@ -5,7 +5,7 @@ const html = fs.readFileSync('/tmp/etsyops-work/etsy-publisher.html', 'utf8');
 const src = fs.readFileSync('/tmp/etsyops-work/etsy-import.js', 'utf8');
 
 // 在 Node 里模拟浏览器环境
-const fn = new Function(src + '\n; return { parseImportTable, parseHeaderRow, parseNumCell, parseTagsCell, parseWhoMade, parseWhenMade, applyImportRow, IMPORT_ALIASES };');
+const fn = new Function(src + '\n; return { parseImportTable, parseHeaderRow, parseNumCell, parseTagsCell, parseWhoMade, parseWhenMade, applyImportRow, parseAiCopy, IMPORT_ALIASES };');
 const M = fn();
 global.document = { getElementById: () => null };
 
@@ -137,6 +137,50 @@ console.log('\n【G】逗号分隔（CSV）也支持');
   ok(r.rows[0].price === '9.99', 'CSV 价格');
 }
 
+
+console.log('\n【H】AI 返回内容的解析（parseAiCopy）');
+{
+  // ★ 这段解析最容易「静默丢内容」：模型返回了完整文案，页面却显示三个空框，
+  //   用户会以为「AI 什么都没生成」。所以边界必须逐个钉死。
+  const cases = [
+    ['markdown 粗体', '**TITLE:** Wolf Fursuit Head Mask\n\n**DESCRIPTION:**\nMATERIALS\nEVA.\n\n**TAGS:** wolf mask, fursuit head',
+      'Wolf Fursuit Head Mask', 2],
+    ['普通格式', 'TITLE: abc\nDESCRIPTION:\n仅描述\nTAGS: a, b, c', 'abc', 3],
+    ['中文冒号', 'TITLE：中文标题\nDESCRIPTION：中文描述\nTAGS：a，b', '中文标题', 2],
+    ['标题带行内冒号', 'TITLE: Wolf Mask: Large\nTAGS: a,b', 'Wolf Mask: Large', 2],
+  ];
+  for (const [n, input, wantTitle, wantTags] of cases) {
+    const r = M.parseAiCopy(input);
+    ok(r.title === wantTitle, '★ ' + n + ' → 标题正确（不含段标题残渣）', JSON.stringify(r.title));
+    ok(r.tags.length === wantTags, '  ' + n + ' → 标签数正确', r.tags.length + ' vs ' + wantTags);
+  }
+  // 段标题不能被带进内容里（自测抓到过："TITLE:** Wolf Fursuit..."）
+  ok(!M.parseAiCopy('**TITLE:** x\nTAGS: a').title.includes('TITLE'), '★ 标题里没有残留 "TITLE"');
+  ok(!M.parseAiCopy('**TAGS:** a, b').tags.some(t => /TAGS/i.test(t)), '★ 标签里没有残留 "TAGS"');
+
+  // 缺段时的行为
+  const noTags = M.parseAiCopy('TITLE: abc\nDESCRIPTION:\n仅描述');
+  ok(noTags.title === 'abc' && noTags.description.includes('仅描述') && noTags.tags.length === 0,
+    '缺 TAGS 段时不报错，标题描述仍正确');
+  const noDesc = M.parseAiCopy('TITLE: abc\nTAGS: a,b');
+  ok(noDesc.title === 'abc' && noDesc.tags.length === 2, '缺 DESCRIPTION 段时仍能取到标题与标签');
+
+  // 描述里含冒号：必须靠「下一个段标题」终止，不能靠第一个冒号
+  const colon = M.parseAiCopy('TITLE: t\nDESCRIPTION:\n尺寸: 27cm\nTAGS: a,b');
+  ok(colon.description.includes('尺寸: 27cm'), '★ 描述里的冒号没被当成段终止', JSON.stringify(colon.description));
+
+  // 标签用换行分隔
+  const nl = M.parseAiCopy('TITLE: t\nDESCRIPTION:\nd\nTAGS: a\nb\nc');
+  ok(nl.tags.length === 3, '标签用换行分隔也能解析', String(nl.tags.length));
+
+  // 空输入
+  const empty = M.parseAiCopy('');
+  ok(empty.parsed === false && empty.empty === true, '★ 空输入标记为 empty（前端应显示提示而非空框）');
+
+  // 标签超过 13 个要被截断
+  const many = 'TITLE: t\nDESCRIPTION:\nd\nTAGS: ' + Array.from({length: 20}, (_, i) => 'tag' + i).join(', ');
+  ok(M.parseAiCopy(many).tags.length === 13, '★ 超过 13 个标签被截到 13（Etsy 硬限制）');
+}
 console.log('\n' + '='.repeat(60));
 console.log(`导入器：${pass} 项通过，${fail} 项失败`);
 process.exit(fail ? 1 : 0);

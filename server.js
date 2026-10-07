@@ -470,6 +470,8 @@ async function readJson(req) {
    前端每 3 秒 GET /api/ai/job?id=xxx 查结果，每次都是短连接。
    ⚠️ 必须声明在模块顶层：曾误放在 handleApi 函数内部，导致末尾清理定时器报
    ReferenceError: _genJobs is not defined。 */
+const _etsyBatch = new Map(); // Etsy 文案批量生成：id -> { status, total, done, okCount, results, failures, stopRequested }
+let _etsyBatchSeq = 0;
 const _genJobs = new Map(); // id -> { status:'running'|'done'|'error', content, note, at }
 let _genJobSeq = 0;
 
@@ -493,6 +495,7 @@ async function handleApi(req, res) {
   // whoami 与 connectivity 一样是纯诊断（不碰店铺数据），放在免 key 白名单里
   // diag/logs 也是免key：排障时常常正好没配好凭证/没授权，那时最需要看日志
   const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status', '/api/etsy/connectivity', '/api/etsy/whoami', '/api/diag/logs'];
+  // batch/status 同样免key：AI 未配置时队列本来就跑不起来，届时最需要看它报什么
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status'
       && !ETSY_OPEN_PATHS.includes(p)) {
     const url = new URL(req.url, 'http://localhost');
@@ -801,6 +804,124 @@ async function handleApi(req, res) {
    * 提示词存在 data/etsy-prompt.txt —— 运营可以直接改这个文件调提示词，
    * 不用改代码也不用重启（每次调用时读盘）。
    */
+  /* ============ Etsy 文案生成：批量队列 ============
+   *
+   * 为什么必须走队列而不是前端循环调单条：
+   *   单条生成 20~60 秒，30 个商品串行要 10~30 分钟。浏览器会：
+   *     · 页面刷新/关标签 → 中断，全部白跑
+   *     · 长时间挂着一个请求 → 超时、断网
+   *   队列在后端串行跑，前端只轮询进度；即使页面关了，生成仍在继续，
+   *   下次打开能从断点看到已完成的条目。
+   *
+   * 串行而非并发：并发会把 API 配额打满（429），而且并发时 Etsy 侧
+   * 与 AI 侧的失败会互相干扰，排查困难。30 条量级串行完全够快。
+   *
+   * 失败策略：单条失败**跳过并记录原因**，不中断整批 —— 用户按你选的
+   * 「跳过失败项+ 列清单」实现。跑完后返回 failures 数组。
+   */
+  if (p === '/api/etsy/ai/batch' && req.method === 'POST') {
+    if (!etsyAiConfigured()) {
+      return json(res, 400, { error: 'etsy_ai_not_configured',
+        note: 'Etsy 文案生成未配置。请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL。' });
+    }
+    try {
+      const b = await readJson(req);
+      const items = Array.isArray(b.items) ? b.items : [];
+      if (!items.length) return json(res, 400, { error: 'bad_request', note: 'items 为空，没有要生成的内容' });
+      if (items.length > 100) {
+        return json(res, 400, { error: 'too_many', note: `一次最多 100 条，当前 ${items.length} 条。`
+          + '请分批 —— 这个上限是为了避免误操作把配额一次打光。' });
+      }
+
+      // 预检：把「事实不足」的条目**在开跑前**就挑出来，别浪费 AI 调用
+      const ready = [];
+      const skipped = [];
+      items.forEach((it, idx) => {
+        const f = factsToText(it);
+        if (!factsEnough(f)) {
+          skipped.push({ index: idx, sku: it.sku || ('第 ' + (idx + 1) + ' 条'),
+            reason: '缺材质/ 尺寸 / 适合人群 / 净重，AI 没有可依据的事实' });
+        } else {
+          ready.push({ index: idx, sku: it.sku || ('第 ' + (idx + 1) + ' 条'), facts: f });
+        }
+      });
+      if (!ready.length) {
+        return json(res, 400, { error: 'nothing_to_do',
+          note: '所有条目都缺事实信息（至少要有材质、尺寸、适合人群、净重中的一项）。', skipped });
+      }
+
+      const systemPrompt = readEtsyPrompt(b.prompt);
+      const id = 'eb' + Date.now().toString(36) + (_etsyBatchSeq++);
+      const job = {
+        id, status: 'running', at: Date.now(),
+        total: ready.length, done: 0, okCount: 0,
+        results: [],        // {index, sku, title, description, tags, raw, parsed}
+        failures: skipped.slice(),  // 预检跳过的也算 failure，前端统一列清单
+        stopRequested: false,
+      };
+      _etsyBatch.set(id, job);
+
+      // 后台串行跑，不 await —— 立即返回 jobId 让前端轮询
+      (async () => {
+        for (const item of ready) {
+          if (job.stopRequested) {
+            job.status = 'stopped';
+            etsyLog(`Etsy 文案批次 ${id} 被手动中断（已完成 ${job.done}/${job.total}）`);
+            return;
+          }
+          try {
+            const content = await etsyAiGenerate(systemPrompt,
+              '请为下面这个产品生成一套完整的英文 Etsy Listing。严格按系统提示词里的格式输出：\n'
+              + 'TITLE（不超过 140 字符）\nDESCRIPTION（手机端可读，段落简短）\n'
+              + 'TAGS（13 个，逗号分隔，每个不超过 20 字符）\n\n'
+              + '产品事实（只能依据这些，不要编造未提及的规格）：\n' + item.facts);
+            const parsed = parseEtsyCopy(content);
+            job.results.push({ index: item.index, sku: item.sku, ...parsed });
+            if (parsed.parsed) job.okCount++;
+            else job.failures.push({ index: item.index, sku: item.sku,
+              reason: 'AI 返回的内容无法解析出 TITLE/DESCRIPTION/TAGS（可能格式跑偏了，可点该条「换一版」重试）' });
+          } catch (e) {
+            // ★ 单条失败不中断整批 —— 用户明确选了「跳过 + 列清单」
+            job.failures.push({ index: item.index, sku: item.sku, reason: e.message });
+            etsyLog(`Etsy 文案生成失败（${item.sku}）：${e.message}`);
+          }
+          job.done++;
+        }
+        job.status = job.stopRequested ? 'stopped' : 'done';
+        job.finishedAt = Date.now();
+        etsyLog(`Etsy 文案批次 ${id} ${job.status}：成功 ${job.okCount}/${job.total}，失败 ${job.failures.length}`);
+      })();
+
+      return json(res, 202, { ok: true, jobId: id, total: job.total, preSkipped: skipped.length,
+        note: `已受理 ${job.total} 条，后台逐条生成。关掉页面也会继续跑，重新打开能看到进度。` });
+    } catch (e) {
+      return json(res, 400, { error: 'bad_request', note: e.message });
+    }
+  }
+
+  /* 轮询批次进度 */
+  if (p === '/api/etsy/ai/batch' && req.method === 'GET') {
+    const u = new URL(req.url, 'http://x');
+    const id = u.searchParams.get('jobId') || '';
+    const job = _etsyBatch.get(id);
+    if (!job) return json(res, 404, { error: 'job_not_found', note: '批次不存在或已过期（服务重启后会清空）' });
+    return json(res, 200, {
+      ok: true, jobId: job.id, status: job.status, total: job.total, done: job.done,
+      okCount: job.okCount, results: job.results, failures: job.failures,
+      note: job.status === 'running' ? '生成中…' : (job.status === 'stopped' ? '已中断' : '已完成'),
+    });
+  }
+
+  /* 手动中断批次（避免已经发现 prompt 写错却还要等它跑完） */
+  if (p === '/api/etsy/ai/batch/stop' && req.method === 'POST') {
+    const b = await readJson(req).catch(() => ({}));
+    const job = _etsyBatch.get(b.jobId || '');
+    if (!job) return json(res, 404, { error: 'job_not_found' });
+    if (job.status !== 'running') return json(res, 400, { error: 'not_running', note: '该批次已结束' });
+    job.stopRequested = true;
+    return json(res, 200, { ok: true, note: '已请求中断，当前这条生成完就停。' });
+  }
+
   if (p === '/api/etsy/ai/copy' && req.method === 'POST') {
     if (!etsyAiConfigured()) {
       return json(res, 400, { error: 'etsy_ai_not_configured',
@@ -824,12 +945,7 @@ async function handleApi(req, res) {
           note: '至少要提供材质、尺寸、适合人群中的一项，AI 才能据此写文案（凭空编造是 Etsy 合规风险）。' });
       }
 
-      // 提示词：优先用 data/etsy-prompt.txt（运营可自行编辑），缺失则用内置的
-      let systemPrompt = ETSY_AI_DEFAULT_PROMPT;
-      try {
-        const custom = readFileSync(join(DATA_DIR, 'etsy-prompt.txt'), 'utf8');
-        if (custom && custom.trim()) systemPrompt = custom;
-      } catch { /* 文件不存在就用内置的，不报错 */ }
+      const systemPrompt = readEtsyPrompt();
 
       const content = await etsyAiGenerate(systemPrompt,
         '请为下面这个产品生成一套完整的英文 Etsy Listing。严格按系统提示词里的格式输出：\n'
@@ -901,6 +1017,60 @@ async function handleApi(req, res) {
   }
 
 
+
+/* ---------- Etsy 文案生成：prompt 与 facts 的共用逻辑 ---------- */
+
+/* 读取提示词。优先级：请求里传的 > data/etsy-prompt.txt > 内置默认。
+ * 之所以做成「每次读盘」：运营可以在页面上改 prompt 并保存成那个文件，
+ * 改完下一次生成立即生效，不用重启后端、不用改代码。 */
+function readEtsyPrompt(override) {
+  const o = String(override || '').trim();
+  if (o) return o;
+  try {
+    const custom = readFileSync(join(DATA_DIR, 'etsy-prompt.txt'), 'utf8');
+    if (custom && custom.trim()) return custom;
+  } catch { /* 文件不存在就用内置的，不报错 —— 这是正常路径 */ }
+  return ETSY_AI_DEFAULT_PROMPT;
+}
+
+/* 把一条「事实记录」转成给 AI 的文字块。
+ * ★ 只拼已填的项：AI 拿不到没填的字段，就不会凭空编造规格。
+ *   这是 Etsy 合规的关键 —— 编造材质/配件/物种属于虚假描述。 */
+function factsToText(b) {
+  return [
+    b.sku ? `产品编号：${b.sku}` : '',
+    b.materials && b.materials.length ? `制作材料：${(b.materials || []).join('、')}` : '',
+    b.audience_note ? `适合人群/规格：${b.audience_note}` : '',
+    b.item_weight ? `净重：${b.item_weight} ${b.item_weight_unit || 'g'}` : '',
+    (b.item_length && b.item_width && b.item_height)
+      ? `尺寸：${b.item_length}×${b.item_width}×${b.item_height} ${b.item_dimensions_unit || 'cm'}` : '',
+    b.price ? `售价：$${b.price}` : '',
+    b.taxonomy_name ? `Etsy 类目：${b.taxonomy_name}` : '',
+  ].filter(Boolean);
+}
+
+/* 判断一条 facts 是否「够AI 生成」。不够就拒绝 —— 宁可让人补齐，也不让 AI 编。 */
+function factsEnough(factsText) {
+  return factsText.length > 0;
+}
+
+/* 解析 AI 返回的 TITLE / DESCRIPTION / TAGS 三段。
+ * ★ 容错要点：模型可能用 markdown 粗体、可能漏标签行、可能多输出说明文字 ——
+ *   解析失败要**如实返回 raw** 并在 note 里说明，不能静默丢内容。 */
+function parseEtsyCopy(content) {
+  const out = { raw: content, title: '', description: '', tags: [] };
+  const t = content.match(/TITLE\s*[:：]\s*([\s\S]*?)(?=\n\s*DESCRIPTION|$)/i);
+  const d = content.match(/DESCRIPTION\s*[:：]\s*([\s\S]*?)(?=\n\s*TAGS|$)/i);
+  const g = content.match(/TAGS\s*[:：]\s*([\s\S]+)$/i);
+  if (t) out.title = t[1].trim().replace(/^[*_#`"'\u201c\u2018]+|[*_#`"'\u201d\u2019]+$/g, '').split('\n')[0].trim();
+  if (d) out.description = d[1].trim().replace(/^[\s*_#`-]+|[\s*_#`-]+$/g, '');
+  if (g) {
+    out.tags = g[1].split(/[,，\n]/).map(x => x.trim().replace(/^[*_#`"'\u201c]+|[*_#`"'\u201d]+$/g, ''))
+      .filter(Boolean).slice(0, 13);
+  }
+  out.parsed = Boolean(out.title || out.description || out.tags.length);
+  return out;
+}
 
 /* ---------- Etsy Listing 专用生成 ----------
  *
