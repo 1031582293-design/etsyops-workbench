@@ -1,12 +1,15 @@
 @echo off
 chcp 65001 >nul
+REM ★ 延迟展开：配置预检的 for 循环内要用 !VAR! 读当前迭代的值。
+REM   没有这行时 !K! 会被当字面量，循环里的判断全部静默失效。
+setlocal enabledelayedexpansion
 REM ============================================================
 REM  EtsyOps backend one-click launcher for Windows
 REM  Requires: Node.js + cloudflared + .env + tunnel-token.txt
 REM ============================================================
 cd /d %~dp0
 
-echo [1/3] 检查并更新代码（git pull 最新）...
+echo [1/4] 检查并更新代码（git pull 最新）...
 if not exist .git goto nonGit
 git pull 2>nul
 if errorlevel 1 (
@@ -28,7 +31,44 @@ echo          若你刚改过代码并以为已生效，并没有生效。
 echo   [提示] 可能是离线或无权限。可手动执行 git pull查看真实原因。
 
 :step2
-echo [2/3] 启动 Node 后端（server.js :3000）...
+echo [2/4] 检查配置（.env）...
+REM ============================================================
+REM  配置预检：在启动 Node **之前**检查 .env。
+REM  为什么必须前置：配置写错时后端直接崩（外部表现为 502），
+REM  而崩溃原因只在 backend.log 里 —— 不预检的话排查链路是
+REM  「外部 502 → 扒日志 → 猜是哪行配置错了」，绕一大圈。
+REM  （2026-10-07 加：当时加错一行 ETSY_PROXY 导致后端起不来，
+REM    现象是 502，启动窗口里什么都看不到。）
+REM ============================================================
+if not exist .env goto noEnv
+set "CFG_WARN="
+for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
+  set "K=%%A"
+  if not "!K!"=="" (
+    if not "!K:~0,1!"=="#" (
+      if "!K!"=="ETSY_PROXY" (
+        set "V=%%B"
+        call :trim "!V!" V
+        if "!V!"=="" (
+          echo   [提示] ETSY_PROXY 留空 = Etsy 请求直连（本机能直连 Etsy 时才这样）
+        ) else (
+          echo !V!| findstr /C:"^http://" >nul
+          if errorlevel 1 (
+            echo   [错误] .env 里 ETSY_PROXY 格式不对：!V!
+            echo          必须形如http://127.0.0.1:10080
+            echo          注意：等号两边不要空格，末尾不要加引号或分号。
+            set "CFG_WARN=1"
+          ) else (
+            echo   [ok] ETSY_PROXY = !V!
+          )
+        )
+      )
+    )
+  )
+)
+if defined CFG_WARN goto cfgBad
+echo   [ok] 配置格式检查通过
+echo [3/4] 启动 Node 后端（server.js :3000）...
 where node >nul 2>nul
 if errorlevel 1 goto noNode
 REM /t 连子进程一起杀干净，否则旧的 node 会残留占着 3000 端口
@@ -41,7 +81,7 @@ start "EtsyOps-Backend" /min cmd /c "node server.js >> backend.log 2>&1"
 echo   [ok] 日志已写入 backend.log，崩溃原因看这个文件
 
 :step3
-echo [3/3] Cloudflare Tunnel 检查...
+echo [4/4] Cloudflare Tunnel 检查...
 REM ============================================================
 REM  设计原则：直接起隧道优先，系统服务只作回退。
 REM
@@ -127,6 +167,23 @@ echo          cloudflared tunnel --no-autoupdate run --token $T --url http://loc
 pause
 exit /b 1
 
+:cfgBad
+echo.
+echo 请修改后重新双击本文件。
+pause
+exit /b 1
+
+:noEnv
+echo [错误] 找不到 .env，无法启动。
+echo.
+echo 这个文件必须在当前目录下，内容至少包含：
+echo   WECHAT_APPID / WECHAT_APPSECRET
+echo   AI_API_KEY / AI_BASE_URL / AI_MODEL
+echo   ETSY_KEYSTRING / ETSY_SHARED_SECRET / ETSY_REDIRECT_URI
+echo 它含密钥，不要发给别人。
+pause
+exit /b 1
+
 :noNode
 echo [错误] 未找到 node，请先安装 Node.js 并加入 PATH
 pause
@@ -143,3 +200,15 @@ echo 请在 Cloudflare Zero Trust 创建 Tunnel，复制命令里的 token 整�
 echo 单独存入本目录 tunnel-token.txt，然后重跑本脚本。
 pause
 exit /b 1
+
+:trim
+REM 把 %1 去掉首尾空格后放进变量 %2
+REM 不用 for /f 做 trim：它在空字符串上不执行循环体，
+REM 会漏掉「值为空」这个最需要判断的情况。
+set "_T=%~1"
+if defined _T (
+  for /f "tokens=* delims= " %%a in ("!_T!") do set "_T=%%a"
+  if "!_T:~-1!"==" " set "_T=!_T:~0,-1!"
+)
+set "%2=%_T%"
+goto :eof
