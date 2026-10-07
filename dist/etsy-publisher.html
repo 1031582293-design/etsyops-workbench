@@ -300,6 +300,12 @@
           </div>
         </div>
 
+        <div class="btnrow" style="margin:0 0 14px">
+          <button class="btn sm" id="btnAiCopy">AI 生成标题 / 描述 / 标签</button>
+          <span class="hint" style="align-self:center">只用你填的材质、尺寸、适合人群生成，不编造未提供的规格</span>
+        </div>
+        <div id="msgAi" class="msg"></div>
+
         <div class="subhead">物理属性与生产伙伴
           <span class="hint">Etsy 的API 层把这些标为可选，但 Shop Manager 界面会拦住不填的草稿。
           所以：不填不阻断提交，但强烈建议补齐，否则后台无法编辑或上架。</span>
@@ -1174,6 +1180,63 @@ function doParseImport() {
 }
 
 document.getElementById('btnImportParse').addEventListener('click', doParseImport);
+
+
+/* ---------- AI 生成 Etsy 文案 ---------- */
+document.getElementById('btnAiCopy').addEventListener('click', async () => {
+  const btn = document.getElementById('btnAiCopy');
+  const msg = document.getElementById('msgAi');
+  // 只把「事实信息」喂给 AI —— 素材缺失就明说，而不是让它编
+  const facts = {
+    sku: document.getElementById('fSku') ? document.getElementById('fSku').value.trim() : '',
+    materials: document.getElementById('fMat').value.split(/[,，]/).map(s => s.trim()).filter(Boolean),
+    audience_note: document.getElementById('fAudience').value.trim(),
+    item_weight: numOrNull(document.getElementById('fWeight').value),
+    item_weight_unit: document.getElementById('fWeightUnit').value,
+    item_length: numOrNull(document.getElementById('fLen').value),
+    item_width: numOrNull(document.getElementById('fWid').value),
+    item_height: numOrNull(document.getElementById('fHgt').value),
+    item_dimensions_unit: document.getElementById('fDimUnit').value,
+    price: document.getElementById('fPrice').value.trim(),
+  };
+  if (!facts.materials.length && !facts.audience_note && !facts.item_weight) {
+    showMsg(msg, 'err', '请先填「材质」或「适合人群」或「净重」至少一项，再让 AI 生成。'
+      + '（凭空生成会编造规格，是 Etsy 的合规风险。）');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '生成中（约 20~60 秒）…';
+  showMsg(msg, 'info', 'AI 正在按你给的事实生成…');
+  try {
+    const r = await apiCall('/api/etsy/ai/copy', {
+      method: 'POST',
+      body: JSON.stringify(facts),
+      timeout: 120000,
+      label: 'Etsy 文案生成',
+    });
+    if (r && r.title) document.getElementById('fTitle').value = r.title;
+    if (r && r.description) document.getElementById('fDesc').value = r.description;
+    if (r && r.tags && r.tags.length) document.getElementById('fTags').value = r.tags.join(', ');
+    const cnt = document.getElementById('cntTitle');
+    if (cnt) cnt.textContent = (r && r.title ? r.title.length : 0) + ' / 140';
+    const warn = [];
+    if (r && r.title && r.title.length > 140) warn.push('标题超过 140 字符，已超限');
+    if (r && r.tags && r.tags.length > 13) warn.push('标签超过 13 个');
+    if (r && r.tags && r.tags.some(t => t.length > 20)) warn.push('有标签超过 20 字符');
+    showMsg(msg, warn.length ? 'warn' : 'ok',
+      '已生成并填入：标题 ' + (r && r.title ? r.title.length : 0) + ' 字符、'
+      + (r && r.tags ? r.tags.length : 0) + ' 个标签。'
+      + (warn.length ? '<br>⚠ ' + warn.join('；') : '')
+      + '<br><b>请人工核对</b>：AI 只依据你给的事实生成，材质真伪、图片权利、'
+      + '创意标准符合性仍需你确认。');
+  } catch (e) {
+    showMsg(msg, 'err', '生成失败：' + esc(e.message || e));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'AI 生成标题 / 描述 / 标签';
+  }
+});
+
 </script>
 </body>
 </html>

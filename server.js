@@ -356,23 +356,60 @@ async function getArticleSummary(days = 7) {
 }
 
 /* ===================== AI 生稿（OpenAI 兼容接口，凭证留服务端） ===================== */
+/* 面向公众号的一套 AI（生稿 + 生图）。国内服务直连。
+ * 保持原有 AI_* 变量名，公众号那套配置一行都不用改。 */
 const AI_API_KEY = process.env.AI_API_KEY || '';
 const AI_BASE_URL = (process.env.AI_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
 const AI_MODEL = process.env.AI_MODEL || 'deepseek-v4-flash'; // 注意：deepseek-chat 老模型名已于 2026-07-24 停用
-const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 300000; // 长文生稿可能要 1~3 分钟
 const AI_IMAGE_MODEL = process.env.AI_IMAGE_MODEL || 'cogview-3-flash'; // 免费生图档；升级画质改 cogview-4（约0.06元/次）
+
+/* 面向 Etsy 的一套 AI（Listing 标题/描述/标签生成）。
+ * 与上面**完全独立**：换这一套不影响公众号，反之亦然。
+ * 留空 = 复用上面那套（即只配 AI_* 也能工作，向后兼容）。 */
+const ETSY_AI_API_KEY = (process.env.ETSY_AI_API_KEY || '').trim() || AI_API_KEY;
+const ETSY_AI_BASE_URL = ((process.env.ETSY_AI_BASE_URL || '').trim() || AI_BASE_URL).replace(/\/+$/, '');
+const ETSY_AI_MODEL = (process.env.ETSY_AI_MODEL || '').trim() || AI_MODEL;
+
+/* 两套各自的出口。原理与 Etsy API 一样：Node 内置 fetch 忽略 HTTPS_PROXY
+ * 与系统代理，必须显式写地址（已实测：设了环境变量后假代理收到 0 个请求）。
+ *   · AI_PROXY  只作用于公众号这套 —— 智谱国内直连，一般留空
+ *   · ETSY_AI_PROXY 只作用于 Etsy 这套 —— 换 OpenAI 时**必填**，否则连接超时
+ * 这样配的好处是：公众号直连最快，Etsy 走代理，两边互不拖累。 */
+const AI_PROXY = (process.env.AI_PROXY || '').trim();
+const ETSY_AI_PROXY = (process.env.ETSY_AI_PROXY || '').trim() || AI_PROXY;
+const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 300000; // 长文生稿可能要 1~3 分钟
 
 function aiConfigured() {
   return Boolean(AI_API_KEY);
 }
 
-/* AI 请求的出口。与 Etsy 共用 createProxyFetch，理由完全一致：
- * Node 内置 fetch 忽略 HTTPS_PROXY，系统代理对它无效，必须显式传地址。
- * 这点很实际：api.openai.com 在国内需要代理才能访问——
- * 只改 .env 的 AI_BASE_URL 而不给AI_PROXY，会直接连接超时。
- * 留空 = 直连（智谱、DeepSeek 等国内接口走这条）。 */
-const AI_PROXY = (process.env.AI_PROXY || '').trim();
+function etsyAiConfigured() {
+  return Boolean(ETSY_AI_API_KEY && ETSY_AI_BASE_URL);
+}
+
 const aiFetch = () => (AI_PROXY ? etsy.createProxyFetch(AI_PROXY) : fetch);
+const etsyAiFetch = () => (ETSY_AI_PROXY ? etsy.createProxyFetch(ETSY_AI_PROXY) : fetch);
+
+/* Etsy Listing 生成的**内置**提示词。
+ * 运营可以直接编辑 data/etsy-prompt.txt 覆盖它（每次调用时读盘，改完即生效、
+ * 不用重启），适合按自己的 SEO 策略迭代，无需改代码。 */
+const ETSY_AI_DEFAULT_PROMPT = `你是一名熟悉 Etsy SEO、欧美 Furry 市场和 Fursuit 产品的 Listing 文案助手。
+为目标店铺 AURENMORPH 生成一套完整的英文 Etsy Listing。
+
+规则（务必遵守）：
+1. Title 不超过 140 个字符，把最重要的产品锚点词放在前面。
+2. Description 用自然、专业、易懂的美式英语，适合手机端阅读，段落简短。
+3. 使用清晰的大写小标题（如 MATERIALS、CARE、SIZING），不要过多Emoji。
+4. 不要反复说明 handmade、custom、high quality、soft 等相同信息。
+5. 不要使用营销套话（perfect、best、premium quality 等），除非产品信息支持。
+6. **不得使用事实资料里没有的词**。例如：没有响笛就不写 squeaky；不是脚爪就不写 feet paws；
+   未在资料中出现的物种、风格、配件一律不得提及。真实性优先于流量。
+7. TAGS 恰好 13 个，每个不超过 20 个字符，需覆盖：核心产品词、同义词、风格词、
+   物种词、颜色/结构特征、定制意图、使用场景、目标用户。彼此不要重复。
+8. 只输出三段，格式严格如下（不要加任何其它说明）：
+TITLE: <标题>
+DESCRIPTION: <描述正文>
+TAGS: <tag1, tag2, ...>`;
 
 async function aiGenerate(systemPrompt, userPrompt) {
   const r = await aiFetch()(`${AI_BASE_URL}/chat/completions`, {
@@ -757,6 +794,64 @@ async function handleApi(req, res) {
   }
 
   // AI 生成标题：基于成稿/素材生成若干候选公众号标题
+  /* Etsy Listing 文案生成（标题 / 描述 / 标签）。
+   * 与公众号的 /api/ai/generate 完全分开：
+   *   · 用哪套 AI 由ETSY_AI_* 决定（留空则回落到公众号那套）
+   *   · 走哪个代理由 ETSY_AI_PROXY 决定（换 OpenAI 时必填）
+   * 提示词存在 data/etsy-prompt.txt —— 运营可以直接改这个文件调提示词，
+   * 不用改代码也不用重启（每次调用时读盘）。
+   */
+  if (p === '/api/etsy/ai/copy' && req.method === 'POST') {
+    if (!etsyAiConfigured()) {
+      return json(res, 400, { error: 'etsy_ai_not_configured',
+        note: 'Etsy 文案生成未配置。请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL（留空则复用公众号那套 AI_*）。' });
+    }
+    try {
+      const b = await readJson(req);
+      const facts = [
+        b.sku ? `产品编号：${b.sku}` : '',
+        b.materials && b.materials.length ? `制作材料：${(b.materials || []).join('、')}` : '',
+        b.audience_note ? `适合人群/规格：${b.audience_note}` : '',
+        b.item_weight ? `净重：${b.item_weight}${b.item_weight_unit || 'g'}` : '',
+        (b.item_length && b.item_width && b.item_height)
+          ? `尺寸：${b.item_length}×${b.item_width}×${b.item_height} ${b.item_dimensions_unit || 'cm'}` : '',
+        b.price ? `售价：$${b.price}` : '',
+        b.taxonomy_name ? `Etsy 类目：${b.taxonomy_name}` : '',
+      ].filter(Boolean);
+
+      if (!facts.length) {
+        return json(res, 400, { error: 'no_facts',
+          note: '至少要提供材质、尺寸、适合人群中的一项，AI 才能据此写文案（凭空编造是 Etsy 合规风险）。' });
+      }
+
+      // 提示词：优先用 data/etsy-prompt.txt（运营可自行编辑），缺失则用内置的
+      let systemPrompt = ETSY_AI_DEFAULT_PROMPT;
+      try {
+        const custom = readFileSync(join(DATA_DIR, 'etsy-prompt.txt'), 'utf8');
+        if (custom && custom.trim()) systemPrompt = custom;
+      } catch { /* 文件不存在就用内置的，不报错 */ }
+
+      const content = await etsyAiGenerate(systemPrompt,
+        '请为下面这个产品生成一套完整的英文 Etsy Listing。严格按系统提示词里的格式输出：\n'
+        + 'TITLE（不超过 140 字符）\nDESCRIPTION（手机端可读，段落简短）\nTAGS（13 个，逗号分隔，每个不超过 20 字符）\n\n'
+        + '产品事实（只能依据这些，不要编造未提及的规格）：\n' + facts.join('\n'));
+
+      // 解析成结构化字段，供前端直接填
+      const out = { raw: content };
+      const t = content.match(/TITLE\s*[:：]\s*(.+)/i);
+      const d = content.match(/DESCRIPTION\s*[:：]\s*([\s\S]+?)(?=\n\s*TAGS|$)/i);
+      const g = content.match(/TAGS\s*[:：]\s*([\s\S]+)$/i);
+      if (t) out.title = t[1].trim().replace(/^["'\u201c]|["'\u201d]$/g, '');
+      if (d) out.description = d[1].trim();
+      if (g) out.tags = g[1].split(/[,，\n]/).map(x => x.trim()).filter(Boolean).slice(0, 13);
+
+      return json(res, 200, { ok: true, ...out, note: 'AI 只依据你给的事实生成。它不会也不能替你判断材质真伪、授权情况与合规性——那些仍需人工确认。' });
+    } catch (e) {
+      etsyLog('Etsy 文案生成失败：' + e.message);
+      return json(res, 500, { error: 'etsy_ai_failed', note: e.message });
+    }
+  }
+
   if (p === '/api/ai/title' && req.method === 'POST') {
     if (!aiConfigured()) {
       return json(res, 400, { error: 'ai_not_configured', note: '服务端未配置 AI_API_KEY（请在 .env 填写后重启后端）。' });
@@ -804,6 +899,58 @@ async function handleApi(req, res) {
       return json(res, 502, { error: 'ai_error', note: e.message });
     }
   }
+
+
+
+/* ---------- Etsy Listing 专用生成 ----------
+ *
+ * 与 aiGenerate 的差别只有三点：**配置源、出口、模型**。
+ * 请求体格式两者完全一致（都是 OpenAI 兼容的 /chat/completions），
+ * 所以不重复实现，直接复用同样的 body 结构。
+ *
+ * 配置留空时自动回落到上面那套（ETSY_AI_API_KEY = AI_API_KEY），
+ * 这样「只有一套 key」的老配置依然能工作，向后兼容。
+ */
+async function etsyAiGenerate(systemPrompt, userPrompt) {
+  if (!etsyAiConfigured()) {
+    throw new Error('Etsy 文案生成未配置：请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL'
+      + '（留空则复用公众号那套 AI_* 配置）。');
+  }
+  const r = await etsyAiFetch()(`${ETSY_AI_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ETSY_AI_API_KEY}` },
+    body: JSON.stringify({
+      model: ETSY_AI_MODEL,
+      temperature: 0.7,
+      max_tokens: 4000,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+  });
+  const d = await r.json().catch(() => ({}));
+  let content = d.choices?.[0]?.message?.content;
+  if (!content) {
+    // ★ 把「代理不通」与「服务返回错误」区分开 ——
+    //   换 OpenAI 时最常见的是代理没配/端口变了，裸错误根本看不出来。
+    if (r.status === 401 || r.status === 403) {
+      const msg = d.error?.message || JSON.stringify(d).slice(0, 200);
+      throw new Error(`Etsy 文案生成鉴权失败（HTTP ${r.status}）：${msg} → `
+        + '请检查 .env 里的 ETSY_AI_API_KEY 是否正确、是否已过期。');
+    }
+    if (r.status === 404) {
+      throw new Error(`Etsy 文案生成返回 404：模型名「${ETSY_AI_MODEL}」可能不存在 → `
+        + `请检查 ETSY_AI_MODEL 是否拼写正确（可用 ${ETSY_AI_BASE_URL}/models 列出可用模型）。`);
+    }
+    throw new Error('Etsy 文案生成返回异常：' + (() => {
+      try { return JSON.stringify(d).slice(0, 300); } catch { return '(响应体过大)'; }
+    })());
+  }
+  if (content.length > 8000) content = content.slice(0, 8000);
+  return content;
+}
 
 /* ===================== Etsy Open API v3 =====================
      GET/POST  /api/etsy/status     配置与授权状态自检（不花API 额度）
@@ -1529,6 +1676,10 @@ server.listen(PORT, HOST, () => {
     console.log(AI_PROXY
       ? `  ai proxy: 已配置 → ${AI_PROXY}`
       : '  ai proxy: 未配置（AI 请求直连；若换成需代理的服务如 OpenAI，请加 AI_PROXY）');
+  console.log(`  etsy ai: ${etsyAiConfigured() ? ('已配置 → ' + ETSY_AI_MODEL + ' @ ' + ETSY_AI_BASE_URL) : '未配置（Etsy 文案生成不可用）'}`);
+  console.log(ETSY_AI_PROXY
+    ? `  etsy ai proxy: 已配置 → ${ETSY_AI_PROXY}`
+    : '  etsy ai proxy: 未配置（若用 OpenAI 必须配，否则连接超时）');
   } else {
     const miss = [];
     if (!ETSY_CFG.apiKeyHeader) miss.push('ETSY_KEYSTRING + ETSY_SHARED_SECRET');
