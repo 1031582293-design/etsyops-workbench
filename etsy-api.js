@@ -767,6 +767,16 @@ function buildDraftForm(inp) {
   if (inp.item_height && inp.item_height > 0) form.item_height = String(inp.item_height);
   if (inp.item_weight_unit) form.item_weight_unit = String(inp.item_weight_unit);
   if (inp.item_dimensions_unit) form.item_dimensions_unit = String(inp.item_dimensions_unit);
+  //生产伙伴（合作工厂/生产方）。API 层官方规范标optional，
+  // 但 Shop Manager 界面会拦住不填的草稿 —— 所以页面把它当「强烈建议」而非可选。
+  if (Array.isArray(inp.production_partner_ids) && inp.production_partner_ids.length) {
+    form.production_partner_ids = inp.production_partner_ids.map(Number).filter(n => Number.isInteger(n) && n > 0).join(',');
+  } else if (inp.production_partner_ids) {
+    // 兼容字符串形态（表格导入时更常见）
+    const ids = String(inp.production_partner_ids).split(',').map(s => Number(s.trim()))
+      .filter(n => Number.isInteger(n) && n > 0);
+    if (ids.length) form.production_partner_ids = ids.join(',');
+  }
   if (inp.description && /[\u4e00-\u9fa5]/.test(inp.description)) {
     // 不阻断，但提示：Etsy 面向英语买家，中文会直接影响搜索与转化
   }
