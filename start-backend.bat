@@ -42,21 +42,38 @@ REM    现象是 502，启动窗口里什么都看不到。）
 REM ============================================================
 if not exist .env goto noEnv
 set "CFG_WARN="
+REM ★ 逐行扫 .env 做格式预检。
+REM
+REM 【为什么要预检】配置写错时后端直接崩（外部表现为 502），
+REM 而崩溃原因只在 backend.log 里，启动窗口什么都看不到。
+REM
+REM 【三个必须避开的坑 —— 2026-10-07 全部踩过】
+REM   坑1「echo 与变量之间必须有空格」：
+REM        写 `echo !V!` 会被 cmd 拆成「echo」+「!V!」两截，
+REM        后半截被当成命令执行 → 窗口刷出一堆
+REM        「xxx is not recognized as an internal or external command」。
+REM        正确写法：`echo(!V!` —— 用括号而非空格，值以任意字符开头都安全。
+REM   坑 2「不要用 call :trim 子程序」：
+REM        call 会另开作用域，delayed expansion 不会回传；
+REM        且 %~1 收到的参数仍带引号。这里改为**完全不修改变量**，
+REM        只做「有值就必须能通过格式检查」的判断 —— 留空是合法的。
+REM   坑 3「格式判定要精确」：
+REM        只判前缀 http:// 会把 https://、http://abc 之类一起放行。
+REM        用 findstr /R 精确匹配 ^http://数字.数字:数字$。
 for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
   set "K=%%A"
   if not "!K!"=="" (
     if not "!K:~0,1!"=="#" (
       if "!K!"=="ETSY_PROXY" (
         set "V=%%B"
-        call :trim "!V!" V
         if "!V!"=="" (
-          echo   [提示] ETSY_PROXY 留空 = Etsy 请求直连（本机能直连 Etsy 时才这样）
+          echo   [提示] ETSY_PROXY 留空 = Etsy 请求直连
         ) else (
-          echo !V!| findstr /C:"^http://" >nul
+          echo(!V!| findstr /R /X "^http://[0-9][0-9.]*:[0-9][0-9]*$" >nul
           if errorlevel 1 (
-            echo   [错误] .env 里 ETSY_PROXY 格式不对：!V!
-            echo          必须形如http://127.0.0.1:10080
-            echo          注意：等号两边不要空格，末尾不要加引号或分号。
+            echo   [错误] .env 里 ETSY_PROXY 格式不对，实际读到：!V!
+            echo           必须形如^http://127.0.0.1:10080
+            echo           注意三点：开头是 http 不是 https；冒号后是端口数字；末尾不要加引号或分号。
             set "CFG_WARN=1"
           ) else (
             echo   [ok] ETSY_PROXY = !V!
@@ -200,15 +217,3 @@ echo 请在 Cloudflare Zero Trust 创建 Tunnel，复制命令里的 token 整�
 echo 单独存入本目录 tunnel-token.txt，然后重跑本脚本。
 pause
 exit /b 1
-
-:trim
-REM 把 %1 去掉首尾空格后放进变量 %2
-REM 不用 for /f 做 trim：它在空字符串上不执行循环体，
-REM 会漏掉「值为空」这个最需要判断的情况。
-set "_T=%~1"
-if defined _T (
-  for /f "tokens=* delims= " %%a in ("!_T!") do set "_T=%%a"
-  if "!_T:~-1!"==" " set "_T=!_T:~0,-1!"
-)
-set "%2=%_T%"
-goto :eof
