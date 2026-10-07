@@ -252,3 +252,64 @@ function applyImportRow(item) {
   const chk = document.getElementById('fSupply');
   if (chk && item.is_supply != null) chk.checked = item.is_supply;
 }
+
+/* ---------- AI 返回内容的解析 ----------
+ *
+ * 为什么要单独抽出来：这个解析最容易出错，而且出错时**静默丢内容**——
+ * 模型返回了完整文案，页面却显示标题空、描述空，看起来像「AI 什么都没生成」。
+ * 抽成独立纯函数后可以独立测试，也能在前后端复用。
+ *
+ * 容错要点（都是模型真实会犯的错）：
+ *   - 可能用 markdown 粗体：`**TITLE:**`
+ *   - 可能多输出说明文字（"以下是生成的 Listing："）
+ *   - 描述里可能含冒号（"尺寸: 27cm"）→ 必须用「下一个已知段标题」做终止条件，
+ *     而不能用「第一个冒号」
+ *   - 标签可能用换行分隔而非逗号
+ */
+function parseAiCopy(content) {
+  const raw = String(content || '');
+  const out = { raw, title: '', description: '', tags: [] };
+  if (!raw.trim()) return { ...out, parsed: false, empty: true };
+
+  /* 找段起点。★ 必须返回**段标题之后的真实内容起点**，
+   *   而不只是段标题的位置 —— 否则切片会把 "TITLE:" 这几个字符带进内容里
+   *   （自测抓到过：标题变成 "TITLE:** Wolf Fursuit Head Mask"）。
+   *   matchAll + lastIndex 组合能直接给出内容起点。 */
+  const findSeg = (name) => {
+    const re = new RegExp('^[ \\t]*(?:\\*\\*)?[ \\t]*' + name + '[ \\t]*(?:\\*\\*)?[ \\t]*[:：][ \\t]*', 'im');
+    const m = re.exec(raw);
+    return m ? { start: m.index, body: m.index + m[0].length } : null;
+  };
+  const tSeg = findSeg('TITLE');
+  const dSeg = findSeg('DESCRIPTION');
+  const gSeg = findSeg('TAGS');
+
+  const clean = (s) => String(s || '')
+    .replace(/^\s*\*\*|\*\*\s*$/g, '')     // 去 markdown 粗体
+    .replace(/^[\s*_#`"'“”‘’]+|[\s*_#`"'“”‘’]+$/g, '')  // 去首尾装饰符
+    .trim();
+
+  if (tSeg) {
+    // 标题到下一段（DESCRIPTION 或 TAGS）之前；只取第一行
+    const end = dSeg ? dSeg.start : (gSeg ? gSeg.start : raw.length);
+    out.title = clean(raw.slice(tSeg.body, end)).split('\n')[0].trim();
+  }
+  if (dSeg) {
+    const end = gSeg ? gSeg.start : raw.length;
+    out.description = clean(raw.slice(dSeg.body, end));
+    // 描述里的换行保留（段落感），但去掉多余空行
+    out.description = out.description.replace(/\n{3,}/g, '\n\n');
+  }
+  if (gSeg) {
+    out.tags = raw.slice(gSeg.body)
+      .split(/[,，\n]/)
+      .map(x => clean(x))
+      .filter(Boolean)
+      .slice(0, 13);
+  }
+
+  // ★ 必须真解析出东西才算成功。parsed=false 时前端要显示 raw 原文，
+  //   而不是给用户三个空框（那样会误以为 AI 没生成）。
+  out.parsed = Boolean(out.title || out.description || out.tags.length);
+  return out;
+}
