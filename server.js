@@ -495,9 +495,11 @@ async function handleApi(req, res) {
   // whoami 与 connectivity 一样是纯诊断（不碰店铺数据），放在免 key 白名单里
   // diag/logs 也是免key：排障时常常正好没配好凭证/没授权，那时最需要看日志
   const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status', '/api/etsy/connectivity', '/api/etsy/whoami', '/api/diag/logs'];
-  // batch/status 同样免key：AI 未配置时队列本来就跑不起来，届时最需要看它报什么
+  // ★ AI 队列的三个路径也免key：AI 没配好时队列根本跑不起来，
+  //   那正是最需要看它报什么的时候（2026-10-07 加，之前只写了注释没真加，队列在排查时完全不可见）。
+  const ETSY_AI_BATCH_OPEN = p === '/api/etsy/ai/batch' || p === '/api/etsy/ai/batch/stop';
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status'
-      && !ETSY_OPEN_PATHS.includes(p)) {
+      && !ETSY_OPEN_PATHS.includes(p) && !ETSY_AI_BATCH_OPEN) {
     const url = new URL(req.url, 'http://localhost');
     const provided = req.headers['x-api-key'] || url.searchParams.get('key');
     if (!provided) {
@@ -838,7 +840,7 @@ async function handleApi(req, res) {
       const skipped = [];
       items.forEach((it, idx) => {
         const f = factsToText(it);
-        if (!factsEnough(f)) {
+        if (!factsEnough(it)) {
           skipped.push({ index: idx, sku: it.sku || ('第 ' + (idx + 1) + ' 条'),
             reason: '缺材质/ 尺寸 / 适合人群 / 净重，AI 没有可依据的事实' });
         } else {
@@ -929,37 +931,41 @@ async function handleApi(req, res) {
     }
     try {
       const b = await readJson(req);
-      const facts = [
-        b.sku ? `产品编号：${b.sku}` : '',
-        b.materials && b.materials.length ? `制作材料：${(b.materials || []).join('、')}` : '',
-        b.audience_note ? `适合人群/规格：${b.audience_note}` : '',
-        b.item_weight ? `净重：${b.item_weight}${b.item_weight_unit || 'g'}` : '',
-        (b.item_length && b.item_width && b.item_height)
-          ? `尺寸：${b.item_length}×${b.item_width}×${b.item_height} ${b.item_dimensions_unit || 'cm'}` : '',
-        b.price ? `售价：$${b.price}` : '',
-        b.taxonomy_name ? `Etsy 类目：${b.taxonomy_name}` : '',
-      ].filter(Boolean);
-
-      if (!facts.length) {
+      // ★ facts 拼装与 AI 返回解析都用共用函数 ——
+      //   之前这两处在 copy 与 batch 两条路由里各写了一份，改一处漏一处的后果是
+      //   「队列能跑但单条换一版失败」这类只在特定路径出现的怪问题。
+      const factsText = factsToText(b);
+      if (!factsEnough(b)) {
         return json(res, 400, { error: 'no_facts',
-          note: '至少要提供材质、尺寸、适合人群中的一项，AI 才能据此写文案（凭空编造是 Etsy 合规风险）。' });
+          note: '至少要提供材质、尺寸、适合人群、净重中的一项，AI 才能据此写文案'
+            + '（凭空编造规格是 Etsy 合规风险）。' });
       }
 
-      const systemPrompt = readEtsyPrompt();
+      const systemPrompt = (typeof b.prompt === 'string' && b.prompt.trim())
+        || readEtsyPrompt();
 
       const content = await etsyAiGenerate(systemPrompt,
         '请为下面这个产品生成一套完整的英文 Etsy Listing。严格按系统提示词里的格式输出：\n'
         + 'TITLE（不超过 140 字符）\nDESCRIPTION（手机端可读，段落简短）\nTAGS（13 个，逗号分隔，每个不超过 20 字符）\n\n'
-        + '产品事实（只能依据这些，不要编造未提及的规格）：\n' + facts.join('\n'));
+        + '产品事实（只能依据这些，不要编造未提及的规格）：\n' + factsText.join('\n'));
 
-      // 解析成结构化字段，供前端直接填
-      const out = { raw: content };
-      const t = content.match(/TITLE\s*[:：]\s*(.+)/i);
-      const d = content.match(/DESCRIPTION\s*[:：]\s*([\s\S]+?)(?=\n\s*TAGS|$)/i);
-      const g = content.match(/TAGS\s*[:：]\s*([\s\S]+)$/i);
-      if (t) out.title = t[1].trim().replace(/^["'\u201c]|["'\u201d]$/g, '');
-      if (d) out.description = d[1].trim();
-      if (g) out.tags = g[1].split(/[,，\n]/).map(x => x.trim()).filter(Boolean).slice(0, 13);
+      const out = parseEtsyCopy(content);
+      if (!out.parsed) {
+        // ★ 必须用非 2xx：这个响应在业务上是失败的（没拿到可用文案），
+        //   而不是成功。返回 200 会让 apiCall 把它当正常结果，页面于是填入三个空框，
+        //   看起来像「AI 什么都没生成」—— 用户会去怀疑模型，而真因是格式没对上。
+        //   502 是「上游返回了但内容不可用」，与网络错误区分开。
+        etsyLog('Etsy 文案解析失败（AI 有输出但格式不符），原文前200 字：' + String(content).slice(0, 200));
+        return json(res, 502, {
+          error: 'parse_failed', raw: content, parsed: false,
+          note: 'AI 返回了内容，但没能按 TITLE / DESCRIPTION / TAGS 三段解析出来。'
+            + '常见原因是提示词里的输出格式要求不明确 —— '
+            + '可在第 2 步的提示词框里写明「只输出三段，格式如下：TITLE: / DESCRIPTION: / TAGS:」后重试。'
+            + '\n原文前 200 字：' + String(content).replace(/\s+/g, ' ').slice(0, 200),
+        });
+      }
+      return json(res, 200, { ok: true, ...out,
+        note: 'AI 只依据你给的事实生成。它不会也不能替你判断材质真伪、授权情况与合规性——那些仍需人工确认。' });
 
       return json(res, 200, { ok: true, ...out, note: 'AI 只依据你给的事实生成。它不会也不能替你判断材质真伪、授权情况与合规性——那些仍需人工确认。' });
     } catch (e) {
@@ -1049,25 +1055,71 @@ function factsToText(b) {
   ].filter(Boolean);
 }
 
-/* 判断一条 facts 是否「够AI 生成」。不够就拒绝 —— 宁可让人补齐，也不让 AI 编。 */
-function factsEnough(factsText) {
-  return factsText.length > 0;
+/* 判断一条商品是否「够 AI 生成」。
+ * ★ 判断依据必须是**具体的商品事实**（材质 / 适合人群 / 净重 / 完整三维尺寸），
+ *   不能只看 factsToText 的输出长度 —— 因为它还会拼上「产品编号」和「售价」，
+ *   只填了这两项时长度不为 0，AI 就会在没有材质尺寸的情况下凭空编描述。
+ *   那个错误在页面上看不出来，但写进 Etsy 就是「虚假描述」，属于合规问题。
+ *   必须与前端 aiRunnable()保持同一套判据，两边不一致会导致「前端能跑、后端全跳过」。 */
+function factsEnough(item) {
+  const b = item || {};
+  return Boolean(
+    (b.materials && b.materials.length) ||
+    b.audience_note ||
+    b.item_weight ||
+    (b.item_length && b.item_width && b.item_height)
+  );
 }
 
 /* 解析 AI 返回的 TITLE / DESCRIPTION / TAGS 三段。
  * ★ 容错要点：模型可能用 markdown 粗体、可能漏标签行、可能多输出说明文字 ——
  *   解析失败要**如实返回 raw** 并在 note 里说明，不能静默丢内容。 */
+/* 解析 AI 返回的 TITLE / DESCRIPTION / TAGS 三段。
+ *
+ * ★ 与页面侧 etsy-import.js 的 parseAiCopy 保持同一套实现与同一批边界处理。
+ *   之前后端用的是更简单的正则，遇到模型加粗（**TITLE:**）或描述里含冒号就会解析错 ——
+ *   而「解析失败」的表现是标题/描述/标签三个空框，用户会误以为是模型没生成。
+ *
+ * 容错要点（都是模型真实会犯的错）：
+ *   - markdown 粗体：**TITLE:**
+ *   - 中文冒号：TITLE：
+ *   - 描述里含冒号（"尺寸: 27cm"）→ 用「下一个已知段标题」作终止条件
+ *   - 标签用换行分隔而非逗号
+ *   - 完全没按格式输出 → parsed=false，并把 raw 原样带回
+ */
 function parseEtsyCopy(content) {
-  const out = { raw: content, title: '', description: '', tags: [] };
-  const t = content.match(/TITLE\s*[:：]\s*([\s\S]*?)(?=\n\s*DESCRIPTION|$)/i);
-  const d = content.match(/DESCRIPTION\s*[:：]\s*([\s\S]*?)(?=\n\s*TAGS|$)/i);
-  const g = content.match(/TAGS\s*[:：]\s*([\s\S]+)$/i);
-  if (t) out.title = t[1].trim().replace(/^[*_#`"'\u201c\u2018]+|[*_#`"'\u201d\u2019]+$/g, '').split('\n')[0].trim();
-  if (d) out.description = d[1].trim().replace(/^[\s*_#`-]+|[\s*_#`-]+$/g, '');
-  if (g) {
-    out.tags = g[1].split(/[,，\n]/).map(x => x.trim().replace(/^[*_#`"'\u201c]+|[*_#`"'\u201d]+$/g, ''))
-      .filter(Boolean).slice(0, 13);
+  const raw = String(content == null ? '' : content);
+  const out = { raw, title: '', description: '', tags: [] };
+  if (!raw.trim()) return { ...out, parsed: false, empty: true };
+
+  /* 返回**段标题之后的真实内容起点**，而不只是段标题位置 ——
+   * 否则切片会把 "TITLE:" 这几个字符带进内容里（标题变成 "TITLE:** Wolf Mask"）。 */
+  const findSeg = (name) => {
+    const re = new RegExp('^[ \\t]*(?:\\*\\*)?[ \\t]*' + name + '[ \\t]*(?:\\*\\*)?[ \\t]*[:：][ \\t]*', 'im');
+    const m = re.exec(raw);
+    return m ? { start: m.index, body: m.index + m[0].length } : null;
+  };
+  const clean = (s) => String(s == null ? '' : s)
+    .replace(/^\s*\*\*|\*\*\s*$/g, '')
+    .replace(/^[\s*_#`"'“”‘’]+|[\s*_#`"'“”‘’]+$/g, '')
+    .trim();
+
+  const tSeg = findSeg('TITLE');
+  const dSeg = findSeg('DESCRIPTION');
+  const gSeg = findSeg('TAGS');
+
+  if (tSeg) {
+    const end = dSeg ? dSeg.start : (gSeg ? gSeg.start : raw.length);
+    out.title = clean(raw.slice(tSeg.body, end)).split('\n')[0].trim();
   }
+  if (dSeg) {
+    const end = gSeg ? gSeg.start : raw.length;
+    out.description = clean(raw.slice(dSeg.body, end)).replace(/\n{3,}/g, '\n\n');
+  }
+  if (gSeg) {
+    out.tags = raw.slice(gSeg.body).split(/[,，\n]/).map(clean).filter(Boolean).slice(0, 13);
+  }
+
   out.parsed = Boolean(out.title || out.description || out.tags.length);
   return out;
 }

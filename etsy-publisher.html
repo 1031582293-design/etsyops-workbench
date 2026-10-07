@@ -45,6 +45,23 @@
   .stepper{display:flex;gap:10px;margin:0 0 20px;flex-wrap:wrap}
   /* 区块小标题：把长表单切成可扫读的段落，配套 .hint 说明「为什么要填」，
      避免用户当成可选装饰跳过。 */
+  /* AI 提示词编辑区：默认收起 —— 多数时候用内置提示词就够，
+     展开说明「为什么要改」比直接把一大段英文糊在脸上更容易让人用起来。 */
+  .promptbox{margin:16px 0;border:1px solid var(--border);border-radius:12px;background:var(--panel-2);}
+  .promptbox summary{cursor:pointer;padding:10px 12px;font-size:13px;font-weight:500;user-select:none;}
+  .promptbox summary::marker{color:var(--etsy);}
+  .promptbox[open] summary{border-bottom:1px solid var(--border);}
+  .promptbox textarea{width:100%;font-family:var(--ff-mono);font-size:12px;line-height:1.55;}
+  .promptbox .hint{display:block;margin-top:6px;}
+  /* 队列进度条：宽度由 JS 设置，这里只定外观 */
+  .progress{display:flex;align-items:center;gap:10px;margin:12px 0;font-size:12px;color:var(--text-faint);}
+  .progress .bar{flex:1;height:6px;border-radius:99px;background:var(--panel-2);
+    border:1px solid var(--border);overflow:hidden;}
+  /* 填充层：JS 直接设它的 style.width（不是父元素）——
+     之前用 ::after + var(--w) 的话，JS 设 style.width 设在父元素上完全不生效，
+     进度条会永远停在 0%。 */
+  .progress .bar > i{display:block;height:100%;width:0;background:var(--etsy);transition:width .3s ease;}
+
   .subhead{margin:22px 0 12px;font-size:13px;font-weight:500;color:var(--text);
     padding-bottom:8px;border-bottom:1px solid var(--border);}
   .subhead .hint{display:block;margin-top:4px;font-weight:400;}
@@ -166,17 +183,19 @@
 <div id="main" class="hidden">
 
   <div class="stepper">
-    <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">店铺设置</div><div class="d">分区 / 配送 / 处理档案</div></div></div>
-    <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">类目与属性</div><div class="d">换真实 taxonomy_id</div></div></div>
-    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">商品资料</div><div class="d">标题 / 详情 / 标签</div></div></div>
-    <div class="step-chip" data-step="4"><div class="num">4</div><div><div class="t">图片与库存</div><div class="d">上传 / 变体</div></div></div>
-    <div class="step-chip" data-step="5"><div class="num">5</div><div><div class="t">写入与发布</div><div class="d">草稿 → 人工确认</div></div></div>
+    <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">给料</div><div class="d">表格 + 图片文件夹</div></div></div>
+    <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">AI 文案</div><div class="d">队列生成 / 逐条改</div></div></div>
+    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">店铺设置</div><div class="d">分区 / 配送 / 处理档案</div></div></div>
+    <div class="step-chip" data-step="4"><div class="num">4</div><div><div class="t">类目与属性</div><div class="d">换真实 taxonomy_id</div></div></div>
+    <div class="step-chip" data-step="5"><div class="num">5</div><div><div class="t">商品资料</div><div class="d">标题 / 详情 / 标签</div></div></div>
+    <div class="step-chip" data-step="6"><div class="num">6</div><div><div class="t">库存与变体</div><div class="d">数量 / 变体</div></div></div>
+    <div class="step-chip" data-step="7"><div class="num">7</div><div><div class="t">写入与发布</div><div class="d">草稿 → 人工确认</div></div></div>
   </div>
 
   <div class="layout">
     <div>
       <!-- 步骤 1 -->
-      <section class="panel step" data-step="1">
+      <section class="panel step" data-step="3">
         <h3>店铺设置</h3>
         <div class="ph-sub">这四个 ID 是建草稿的必填项。实物商品缺配送模板或处理档案，Etsy 会直接返回 400。</div>
         <div id="msg1" class="msg"></div>
@@ -190,13 +209,13 @@
             <tr><td>处理档案</td><td id="pfReady">—</td></tr>
           </table>
           <div class="btnrow">
-            <button class="btn sm" data-goto="2">下一步：选类目 →</button>
+            <button class="btn sm" data-goto="4">下一步：选类目 →</button>
           </div>
         </div>
       </section>
 
       <!-- 步骤 2 -->
-      <section class="panel step hidden" data-step="2">
+      <section class="panel step hidden" data-step="4">
         <h3>类目与属性</h3>
         <div class="ph-sub">AI 给的类目名只是候选。必须在这里搜出真实 taxonomy_id，否则建草稿会被拒。</div>
         <label class="fld">类目关键词<span class="hint">用英文物品名搜，例如 ceramic horse / pottery figurine</span></label>
@@ -217,8 +236,69 @@
         <div id="propList" class="tax-list"></div>
       </section>
 
+      <!-- ========== 步骤 1：给料 ========== -->
+      <section class="panel step" data-step="1">
+        <h3>给料：表格 + 图片文件夹</h3>
+        <div class="ph-sub">批量上新的起点。先把「事实数据」和「图片」一起丢进来，
+          后面 AI 生成、字段填充、建草稿都基于这里解析出的条目 —— 不再先填表再传图。</div>
+
+        <div class="subhead">1. 上架表格<span class="hint">从飞书 / Excel 复制整块粘进来，或选 CSV 文件。列名模板见「下载模板」。</span></div>
+        <textarea id="importText" rows="6" class="hidden"
+          placeholder="第一行是列名，之后每行一个商品&#10;图片文件名&#9;价格&#9;数量&#9;制作方&#9;制作时间&#9;材质&#9;产品净重&#9;长度&#9;宽度&#9;高度&#9;类目ID&#10;6-狼头套-1.jpg&#9;30.70&#9;10&#9;someone_else&#9;2020_2026&#9;EVA, 三明治网布&#9;2250&#9;50&#9;50&#9;30&#9;"></textarea>
+        <div class="btnrow">
+          <button class="btn sm" id="btnImportToggle">粘贴表格内容</button>
+          <button class="btn sm" id="btnImportFile">选择 CSV 文件</button>
+          <button class="btn sm" id="btnImportParse">解析表格</button>
+          <button class="btn sm ghost" id="btnImportTpl">下载模板</button>
+        </div>
+        <input type="file" id="importFile" accept=".csv,.tsv,.txt" class="hidden" />
+        <div id="importMsg" class="msg"></div>
+
+        <div class="subhead">2. 图片<span class="hint">表格里的「图片文件名」会按文件名自动对上号，并<b>保留表格里的顺序</b>（第一张是主图）。</span></div>
+        <input type="file" id="file" accept="image/*" multiple class="hidden" />
+        <div class="drop" id="drop">点击选择图片，或把图片拖到这里<span style="display:block;font-size:11.5px;color:var(--text-faint);margin-top:6px">支持 JPG / PNG，建议短边≥2000px。表格里的文件名会按名对上号</span></div>
+        <div class="thumbs" id="thumbs"></div>
+        <div id="msgImg" class="msg"></div>
+
+        <div id="importList"></div>
+
+        <div class="btnrow" style="margin-top:18px">
+          <button class="btn" id="btnToAi" disabled>下一步：生成 AI 文案 →</button>
+        </div>
+      </section>
+
+      <!-- ========== 步骤 2：AI 文案 ========== -->
+      <section class="panel step hidden" data-step="2">
+        <h3>AI 文案：队列生成 + 逐条确认</h3>
+        <div class="ph-sub">标题 / 描述 / 标签由 AI 按你给的事实生成。<b>AI 只依据表格里已填的字段</b>，
+          素材缺失时会拒绝生成 —— 凭空写出来的规格是 Etsy 的合规风险。</div>
+
+        <details class="promptbox">
+          <summary>提示词（点开可现场修改，改完对下一次生成立即生效）</summary>
+          <div class="msg info" style="margin:10px 0">
+            留空则用服务器内置版本；也可写成文件
+            <code>data/etsy-prompt.txt</code>（每次生成时读盘，改完不用重启）。
+          </div>
+          <textarea id="promptBox" rows="10" placeholder="留空 = 用内置提示词"></textarea>
+          <div class="btnrow">
+            <button class="btn sm ghost" id="btnPromptReset">恢复内置提示词</button>
+            <span class="hint" style="align-self:center">提示词按品类调（毛绒玩具和服装的 SEO 策略不同）</span>
+          </div>
+        </details>
+
+        <div class="btnrow" style="margin-top:16px">
+          <button class="btn primary" id="btnAiBatch">批量生成（全部条目）</button>
+          <button class="btn ghost" id="btnAiStop" disabled>中断队列</button>
+          <button class="btn" data-goto="3">跳过 AI，下一步 →</button>
+        </div>
+        <div id="msgAiBatch" class="msg"></div>
+        <div class="progress hidden" id="aiProg"><div class="bar"><i id="aiBar"></i></div><span id="aiProgTxt"></span></div>
+
+        <div id="aiList"></div>
+      </section>
+
       <!-- 步骤 3 -->
-      <section class="panel step hidden" data-step="3">
+      <section class="panel step hidden" data-step="5">
         <h3>商品资料</h3>
         <div class="ph-sub">这一屏的内容全部来自你的事实资料卡。AI 不能猜材质、认证、价格与交期。</div>
 
@@ -355,40 +435,19 @@
 
         <div class="btnrow">
           <button class="btn" id="btnValidate">本地校验（不消耗 Etsy 额度）</button>
-          <button class="btn" data-goto="4">下一步：图片与库存 →</button>
+          <button class="btn" data-goto="6">下一步：图片与库存 →</button>
         </div>
         <div id="msg3" class="msg"></div>
       </section>
 
       <!-- 步骤 4 -->
-      <section class="panel step hidden" data-step="4">
-        <h3>图片与库存</h3>
-        <div class="ph-sub">第一张即主图，最多 20 张。Etsy 要求实物商品展示真实成品照片。</div>
+      <section class="panel step hidden" data-step="6">
+        <h3>库存与变体</h3>
+        <div class="ph-sub">图片在第 1 步「给料」里已选定，第一张为主图、最多 20 张。Etsy 要求实物商品展示真实成品照片。</div>
 
-        <label class="fld">商品图片<span class="hint">第一张为主图，可点缩略图调整顺序</span></label>
-        <div class="drop" id="drop">点击选择图片，或把图片拖到这里<span style="display:block;font-size:11.5px;color:var(--text-faint);margin-top:6px">支持 JPG / PNG，建议短边≥2000px</span></div>
-        <input type="file" id="file" accept="image/*" multiple class="hidden" />
-        <div class="thumbs" id="thumbs"></div>
-        <div id="msgImg" class="msg"></div>
+        <label class="fld">商品图片（来自第 1 步）<span class="hint">要换图请回到第 1 步</span></label>
+        <div class="msg info" id="imgSummary">图片在第 1 步选定。</div>
 
-        <div class="subhead">批量导入（一次上多个商品）
-          <span class="hint">从飞书 / Excel 复制表格，粘进下面的框，再点「解析」。
-          解析只是把数据填进表单让你逐个确认，<b>不会自动建草稿</b> —— 字段错位时批量建错草稿是要花上架费的。</span>
-        </div>
-
-        <div id="importBox">
-          <textarea id="importText" rows="5" class="hidden"
-            placeholder="在这里粘贴表格（第一行是列名）&#10;图片文件名&#9;价格&#9;数量&#9;制作方&#9;制作时间&#9;材质&#9;产品净重&#9;长度&#9;宽度&#9;高度&#10;6-狼头套-1.jpg&#9;30.70&#9;10&#9;代工&#9;2020_2026&#9;EVA, 网布&#9;2250&#9;50&#9;50&#9;30"></textarea>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn sm" id="btnImportToggle">粘贴表格内容</button>
-            <button class="btn sm" id="btnImportFile">选择 CSV 文件</button>
-            <button class="btn sm" id="btnImportParse">解析</button>
-            <button class="btn sm ghost" id="btnImportTpl">下载模板</button>
-          </div>
-          <input type="file" id="importFile" accept=".csv,.tsv,.txt" class="hidden" />
-          <div id="importMsg" class="msg"></div>
-          <div id="importList"></div>
-        </div>
 
         <label class="fld" style="margin-top:20px">变体<span class="hint">无变体就留空，留空则用上面的主价格与数量</span></label>
         <div id="varBox"></div>
@@ -396,12 +455,12 @@
         <div id="msgVar" class="msg"></div>
 
         <div class="btnrow">
-          <button class="btn" data-goto="5">下一步：写入 Etsy →</button>
+          <button class="btn" data-goto="7">下一步：写入 Etsy →</button>
         </div>
       </section>
 
       <!-- 步骤 5 -->
-      <section class="panel step hidden" data-step="5">
+      <section class="panel step hidden" data-step="7">
         <h3>写入 Etsy 草稿</h3>
         <div class="ph-sub">这一步只建草稿。Etsy 上架费 $0.20 只在真正发布时产生。</div>
         <div id="msg5" class="msg"></div>
@@ -490,6 +549,13 @@ async function apiCall(path, opts){
   if(!r.ok){
     const extra = Array.isArray(d.errors) ? '\n· ' + d.errors.join('\n· ') : '';
     throw new Error((d && (d.note || d.error)) || (label + ' 失败（HTTP ' + r.status + '）') + extra);
+  }
+  /* ★ 纵深防御：HTTP 200 但业务失败（ok:false）也要当失败抛。
+   *   后端曾把「AI 有输出但格式不符」返回成 200 + ok:false，
+   *   结果页面拿到三个空字段还当成功，用户看到的现象是「AI 什么都没生成」——
+   *   真因（格式没对上）被完全掩盖，排查方向会跑偏到模型和网络。 */
+  if(d && d.ok === false){
+    throw new Error((d && (d.note || d.error)) || (label + ' 返回了 ok:false'));
   }
   return d;
 }
@@ -1064,122 +1130,6 @@ window.fillFromJson = function(obj){
 
 boot();
 
-/* ---------- 批量导入 UI ---------- */
-const IMPORT_BATCH = [];   // 解析后的行
-
-function importMsg(kind, text) {
-  const el = document.getElementById('importMsg');
-  el.className = 'msg ' + (kind || '');
-  el.innerHTML = text;
-}
-
-document.getElementById('btnImportToggle').addEventListener('click', () => {
-  const t = document.getElementById('importText');
-  t.classList.toggle('hidden');
-  if (!t.classList.contains('hidden')) t.focus();
-});
-
-document.getElementById('btnImportFile').addEventListener('click', () => {
-  document.getElementById('importFile').click();
-});
-
-document.getElementById('importFile').addEventListener('change', async (e) => {
-  const f = e.target.files && e.target.files[0];
-  if (!f) return;
-  const text = await f.text();
-  document.getElementById('importText').value = text;
-  document.getElementById('importText').classList.remove('hidden');
-  doParseImport();
-});
-
-/* 模板：第 1 行列名、第 2 行填写说明、第 3 行示例（用前删除）。
- * 带 BOM 头，否则Excel 打开中文列名会乱码。 */
-document.getElementById('btnImportTpl').addEventListener('click', () => {
-  const rows = [
-    ['图片文件名', '价格', '数量', '制作方', '制作时间', '材质', '产品净重', '长度', '宽度', '高度',
-     '适合人群', '标题', '描述', '标签', '类目ID', '生产伙伴'],
-    ['【必填】逗号分隔多个文件名', '【必填】美元数字', '【必填】正整数',
-     'i_did / someone_else / collective', 'made_to_order / 2020_2026',
-     '逗号分隔', '克或千克', 'cm', 'cm', 'cm',
-     '非 Etsy 字段，建议写进描述', '可留空，由 AI 生成', '可留空，由 AI 生成',
-     '逗号分隔，最多 13 个', '先搜类目再填 ID', '可留空'],
-    ['6-狼头套-1.jpg;6-狼头套-2.jpg', '30.70', '10', 'someone_else', '2020_2026',
-     'EVA, 三明治网布', '2250', '50', '50', '30',
-     '标准尺寸，配可调节海绵块', '（示例行，用前请删除）', '（示例行）',
-     'wolf fursuit head, wolf mask', '', ''],
-  ];
-  const q = c => '"' + String(c).replace(/"/g, '""') + '"';
-  const csv = rows.map(r => r.map(q).join(',')).join('\r\n');
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'Etsy批量上架模板.csv';
-  a.click();
-  URL.revokeObjectURL(a.href);
-});
-
-function doParseImport() {
-  const text = document.getElementById('importText').value;
-  const r = parseImportTable(text);
-
-  if (r.errors.length) {
-    importMsg('err', '<b>无法导入：</b><br>' + r.errors.map(esc).join('<br>'));
-    document.getElementById('importList').innerHTML = '';
-    IMPORT_BATCH.length = 0;
-    return;
-  }
-
-  IMPORT_BATCH.length = 0;
-  IMPORT_BATCH.push(...r.rows);
-
-  const bad = r.rows.filter(x => x._problems.length).length;
-  const cols = r.columns.map(c => c.field).join(', ');
-  importMsg(bad ? 'warn' : 'ok',
-    '解析出 <b>' + r.rows.length + '</b> 行，识别列：<code>' + esc(cols) + '</code>'
-    + (bad ? '<br>其中 <b>' + bad + '</b> 行有问题（见下方红色标注），问题行仍可导入，但请先核对。' : ''));
-
-  const box = document.getElementById('importList');
-  box.innerHTML = r.rows.map((it, i) => {
-    const pb = it._problems.length
-      ? '<div style="color:var(--bad);font-size:12px;margin-top:6px">⚠ ' + it._problems.map(esc).join('；') + '</div>'
-      : '';
-    const meta = [
-      it.price ? ('$' + it.price) : '',
-      it.quantity ? ('×' + it.quantity) : '',
-      it.who_made, it.when_made,
-      it.materials.length ? it.materials.join('/') : '',
-      it.item_weight ? (it.item_weight + (it.item_weight_unit || 'g')) : '',
-      it.images.length + ' 张图',
-    ].filter(Boolean).join(' · ');
-    return '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:8px">'
-      + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
-      + '<b style="font-size:13px">' + esc(it.sku || ('第 ' + it._row + ' 行')) + '</b>'
-      + '<button class="btn sm" data-imp-fill="' + i + '">填入表单 →</button></div>'
-      + '<div style="font-size:12px;color:var(--text-faint);margin-top:4px">' + esc(meta) + '</div>'
-      + pb + '</div>';
-  }).join('');
-
-  box.querySelectorAll('[data-imp-fill]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const it = IMPORT_BATCH[Number(btn.dataset.impFill)];
-      if (!it) return;
-      applyImportRow(it);
-      const matched = matchPickedImages(it.images);
-      if (matched.length) {
-        setPickedFiles(matched);
-        importMsg('ok', '已填入第 ' + it._row + ' 行，并匹配到 <b>' + matched.length + '</b> 张图片。'
-          + (matched.length < it.images.length
-            ? '<br>还有 ' + (it.images.length - matched.length) + ' 张没找到：请点上方「上传图片」把这些文件也选上。'
-            : ''));
-      } else {
-        importMsg('warn', '已填入第 ' + it._row + ' 行。<b>图片还没匹配上</b> —— '
-          + '请先点上方「上传图片」选择文件，文件名要与表格里的完全一致。');
-      }
-    });
-  });
-}
-
-document.getElementById('btnImportParse').addEventListener('click', doParseImport);
 
 
 /* ---------- AI 生成 Etsy 文案 ---------- */
@@ -1237,6 +1187,429 @@ document.getElementById('btnAiCopy').addEventListener('click', async () => {
   }
 });
 
+
+/* ================================================================
+ * 步骤 1：给料 —— 解析后逐条卡片，支持「填入表单」与「图片自动匹配」
+ * ============================================================== */
+const IMPORT_BATCH = [];   // 解析后的行
+const AI_RESULTS = [];     // 每条 { row, title, description, tags, status, error }
+let AI_POLL_TIMER = null;
+
+/* 步骤切换时禁用「下一步」—— 必须先解析出至少 1 条 */
+function refreshGiveNext() {
+  document.getElementById('btnToAi').disabled = IMPORT_BATCH.length === 0;
+}
+
+function importMsg(kind, text) {
+  const el = document.getElementById('importMsg');
+  el.className = 'msg ' + (kind || '');
+  el.innerHTML = text;
+}
+
+/** 表格解析成功后，把图片按文件名匹配上，并刷新卡片里的图片状态 */
+function matchAllRowsImages() {
+  let matched = 0, missing = 0;
+  for (const it of IMPORT_BATCH) {
+    it._matched = matchPickedImages(it.images);
+    if (it._matched.length === it.images.length) matched++;
+    else missing++;
+  }
+  return { matched, missing };
+}
+
+document.getElementById('btnImportToggle').addEventListener('click', () => {
+  const t = document.getElementById('importText');
+  t.classList.toggle('hidden');
+  if (!t.classList.contains('hidden')) t.focus();
+});
+
+document.getElementById('btnImportFile').addEventListener('click', () => {
+  document.getElementById('importFile').click();
+});
+
+document.getElementById('importFile').addEventListener('change', async (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const text = await f.text();
+  document.getElementById('importText').value = text;
+  document.getElementById('importText').classList.remove('hidden');
+  doParseImport();
+});
+
+/* 模板：第 1 行列名、第 2 行填法说明、第 3 行示例（示例行用前须删除） */
+document.getElementById('btnImportTpl').addEventListener('click', () => {
+  const rows = [
+    ['图片文件名', '价格', '数量', '制作方', '制作时间', '材质', '产品净重', '长度', '宽度', '高度', '适合人群', '类目ID', '标题', '描述', '标签', '生产伙伴'],
+    ['【必填】逗号分隔多个文件名', '【必填】美元数字', '【必填】正整数', 'i_did / someone_else / collective',
+     'made_to_order / 2020_2026', '逗号分隔', '克或千克', 'cm', 'cm', 'cm', '非 Etsy 字段，建议写进描述',
+     '搜类目后填 ID', '可留空由 AI 生成', '可留空由 AI 生成', '逗号分隔，最多 13 个', '可留空'],
+    ['6-狼头套-1.jpg', '30.70', '10', 'someone_else', '2020_2026', 'EVA, 三明治网布', '2250', '50', '50', '30',
+     '标准尺寸，配有可调节海绵块', '', '（示例行，用前请删除）', '（示例行）', 'wolf fursuit head, wolf mask', ''],
+  ];
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  // 带 BOM：Excel / WPS 打开中文 CSV 才不会乱码
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'Etsy批量上架模板.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+function doParseImport() {
+  const text = document.getElementById('importText').value;
+  const r = parseImportTable(text);
+
+  if (r.errors.length) {
+    importMsg('err', '<b>无法导入：</b><br>' + r.errors.map(esc).join('<br>'));
+    document.getElementById('importList').innerHTML = '';
+    IMPORT_BATCH.length = 0;
+    refreshGiveNext();
+    return;
+  }
+
+  IMPORT_BATCH.length = 0;
+  IMPORT_BATCH.push(...r.rows);
+  AI_RESULTS.length = 0;
+  const img = matchAllRowsImages();
+
+  const bad = r.rows.filter(x => x._problems.length).length;
+  const cols = r.columns.map(c => c.field).join(', ');
+  importMsg(bad ? 'warn' : 'ok',
+    '解析出 <b>' + r.rows.length + '</b> 行。识别列：<code>' + esc(cols) + '</code>'
+    + (img.missing
+      ? '<br>图片：<b>' + img.matched + '</b> 条全部匹配上，<b>' + img.missing + '</b> 条还缺 —— '
+        + '请把对应图片文件也选中（点上面的图片区）。'
+      : (r.rows.length ? '<br>图片：全部按文件名匹配上 ✓' : ''))
+    + (bad ? '<br>其中 <b>' + bad + '</b> 行有问题（下方红色标注），问题行仍可导入但请先核对。' : ''));
+
+  renderImportList();
+  refreshGiveNext();
+  renderAiList();
+}
+
+function renderImportList() {
+  const box = document.getElementById('importList');
+  if (!IMPORT_BATCH.length) { box.innerHTML = ''; return; }
+  box.innerHTML =
+    '<div class="subhead">解析结果（' + IMPORT_BATCH.length + ' 条）'
+    + '<span class="hint">点「填入表单」把该条套进后面的表单，逐条确认后再建草稿。'
+    + '<b>不会自动建草稿</b> —— 字段错位时批量建错草稿是要花上架费的。</span></div>'
+    + IMPORT_BATCH.map((it, i) => {
+      const pb = it._problems.length
+        ? '<div style="color:var(--bad);font-size:12px;margin-top:6px">⚠ ' + it._problems.map(esc).join('；') + '</div>'
+        : '';
+      const mi = it._matched ? it._matched.length : 0;
+      const imgTip = mi === it.images.length
+        ? '<span style="color:var(--good)">图 ' + mi + '/' + it.images.length + '</span>'
+        : '<span style="color:var(--warn)">图 ' + mi + '/' + it.images.length + ' 缺</span>';
+      return '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:8px">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+        + '<b style="font-size:13px">' + esc(it.sku || ('第 ' + it._row + ' 行')) + '</b>'
+        + '<button class="btn sm" data-imp-fill="' + i + '">填入表单 →</button></div>'
+        + '<div style="font-size:12px;color:var(--text-faint);margin-top:4px">'
+        + esc([it.price ? ('$' + it.price) : '', it.quantity ? ('×' + it.quantity) : '', it.who_made, it.when_made,
+               it.materials.length ? it.materials.join('/') : '',
+               it.item_weight ? (it.item_weight + (it.item_weight_unit || 'g')) : '', imgTip]
+              .filter(Boolean).join(' · '))
+        + '</div>' + pb + '</div>';
+    }).join('');
+
+  box.querySelectorAll('[data-imp-fill]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.impFill);
+      const it = IMPORT_BATCH[idx];
+      if (!it) return;
+      applyImportRow(it);
+      const matched = it._matched || matchPickedImages(it.images);
+      if (matched.length) setPickedFiles(matched);
+      importMsg('ok', '已把第 ' + it._row + ' 行填入表单'
+        + (matched.length ? '，并匹配到 <b>' + matched.length + '</b> 张图片。' : '。')
+        + (matched.length < it.images.length
+          ? '<br>还有 ' + (it.images.length - matched.length) + ' 张没找到：请把图片文件也选中。' : '')
+        + '<br>现在可以直接跳到第 5 步核对标题/描述/标签。');
+    });
+  });
+}
+
+document.getElementById('btnImportParse').addEventListener('click', doParseImport);
+
+document.getElementById('btnToAi').addEventListener('click', () => {
+  goto(2);
+  if (!AI_RESULTS.length) {
+    showAiMsg('info', '已解析 ' + IMPORT_BATCH.length
+      + ' 条。可以点「批量生成」让 AI 写标题/描述/标签，也可以直接「跳过 AI」手工填。');
+  }
+});
+
+/* ================================================================
+ * 步骤 2：AI 文案 —— 队列 + 逐条确认
+ * ============================================================== */
+
+function showAiMsg(kind, text) {
+  const el = document.getElementById('msgAiBatch');
+  el.className = 'msg ' + (kind || '');
+  el.innerHTML = text;
+}
+
+/** 单条「事实信息」→ AI 输入。只拼已填字段，AI 拿不到就没法编造。 */
+function factsOf(it) {
+  return {
+    sku: it.sku || '',
+    materials: it.materials || [],
+    audience_note: it.audience_note || '',
+    item_weight: it.item_weight,
+    item_weight_unit: it.item_weight_unit || 'g',
+    item_length: it.item_length,
+    item_width: it.item_width,
+    item_height: it.item_height,
+    item_dimensions_unit: it.item_dimensions_unit || 'cm',
+    price: it.price,
+  };
+}
+
+/** 事实不足的条目直接拒绝 —— 凭空写规格是 Etsy 的合规风险 */
+function aiRunnable(it) {
+  const f = factsOf(it);
+  return Boolean((f.materials && f.materials.length) || f.audience_note
+    || f.item_weight || f.item_length || f.item_height);
+}
+
+function setAiProgress(done, total, note) {
+  const box = document.getElementById('aiProg');
+  if (total <= 0) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  document.getElementById('aiBar').style.width = Math.round(done / total * 100) + '%';
+  document.getElementById('aiProgTxt').textContent = done + ' / ' + total + (note ? '　' + note : '');
+}
+
+document.getElementById('btnAiBatch').addEventListener('click', async () => {
+  if (!IMPORT_BATCH.length) { showAiMsg('warn', '还没有解析出条目。请回第 1 步粘贴表格并点「解析表格」。'); return; }
+
+  const btn = document.getElementById('btnAiBatch');
+  const stop = document.getElementById('btnAiStop');
+  const skip = IMPORT_BATCH.filter(it => !aiRunnable(it));
+  const todo = IMPORT_BATCH.filter(aiRunnable);
+
+  if (!todo.length) {
+    showAiMsg('err', '所有条目都缺「材质 / 适合人群 / 重量 / 尺寸」中的任意一项，AI 没有可用事实，拒绝生成。'
+      + '<br>凭空写出来的规格（材质真伪、尺寸、成分）是 Etsy 的合规风险。'
+      + '<br><br>请回第 1 步在表格里补上这些列。');
+    return;
+  }
+
+  btn.disabled = true; stop.disabled = false;
+  AI_RESULTS.length = 0;
+  IMPORT_BATCH.forEach((it, i) => AI_RESULTS.push({
+    i, row: it._row, sku: it.sku, status: skip.includes(it) ? 'skip' : 'wait',
+    title: '', description: '', tags: [],
+  }));
+
+  const warn = skip.length
+    ? '<br><b>' + skip.length + ' 条被跳过</b>（缺材质/尺寸/适合人群，AI 没有事实可用），下方以灰色标出。'
+    : '';
+  showAiMsg('info', '开始生成 <b>' + todo.length + '</b> 条（串行，每条约 20~60 秒）。' + warn
+    + '<br>关掉页面也会继续跑 —— 回来点「查进度」即可。');
+  setAiProgress(0, todo.length, '排队中');
+  renderAiList();
+
+  try {
+    const r = await apiCall('/api/etsy/ai/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        items: todo.map(factsOf),
+        prompt: (document.getElementById('promptBox').value || '').trim() || undefined,
+      }),
+      timeout: 30000,
+      label: 'AI 批量生成',
+    });
+    pollAiBatch(r.jobId, todo.length);
+  } catch (e) {
+    btn.disabled = false; stop.disabled = true;
+    setAiProgress(0, 0);
+    showAiMsg('err', '提交失败：' + esc(e.message || e));
+  }
+});
+
+/* 轮询进度。★ 不用 setInterval —— 轮询本身不占连接，
+   而且后端是串行的，并发查只会互相干扰。 */
+function pollAiBatch(jobId, total) {
+  const btn = document.getElementById('btnAiBatch');
+  const stop = document.getElementById('btnAiStop');
+  let stopped = false;
+  // 进度记在闭包里。反推 CSS width 来得到进度是不可靠的（宽度是百分比、
+  // 还可能被浏览器取整），出错时只会把「已完成几条」显示错。
+  let lastDone = 0;
+  let retries = 0;
+  stop.onclick = () => { stopped = true; };
+
+  const tick = async () => {
+    if (stopped) {
+      try { await apiCall('/api/etsy/ai/batch/stop', { method: 'POST', body: { jobId }, timeout: 15000, label: '中断队列' }); } catch (e) { /* 中断失败不打扰用户 */ }
+      btn.disabled = false; stop.disabled = true;
+      showAiMsg('warn', '已请求中断队列。已生成的条目保留，未生成的保持「待生成」。');
+      return;
+    }
+    try {
+      const r = await apiCall('/api/etsy/ai/batch?jobId=' + encodeURIComponent(jobId),
+        { timeout: 30000, label: '查询 AI 进度' });
+      const done = Number(r.done || 0);
+      lastDone = done;
+      setAiProgress(done, total, r.note || '');
+      // 用后端返回的 results 覆盖（断点续跑：刷新页面后接着看）
+      if (Array.isArray(r.results)) {
+        r.results.forEach((x, k) => {
+          const slot = AI_RESULTS[k];
+          if (!slot) return;
+          slot.status = x.status; slot.title = x.title || '';
+          slot.description = x.description || ''; slot.tags = x.tags || [];
+          slot.error = x.error || '';
+        });
+      }
+      renderAiList();
+      if (r.status === 'done' || r.status === 'stopped' || done >= total) {
+        btn.disabled = false; stop.disabled = true;
+        const fail = AI_RESULTS.filter(x => x.status === 'error').length;
+        const okN = AI_RESULTS.filter(x => x.status === 'done').length;
+        showAiMsg(fail ? 'warn' : 'ok',
+          '队列结束：成功 <b>' + okN + '</b> 条'
+          + (fail ? '，失败 <b>' + fail + '</b> 条' : '')
+          + (r.status === 'stopped' ? '（被中断）' : '') + '。'
+          + '<br>逐条核对文案后可「填入表单」，再往下走建草稿。'
+          + '<br><b>请人工核对</b>：AI 只依据你给的事实生成，材质真伪、图片权利、'
+          + '创意标准符合性仍需你确认。');
+        return;
+      }
+      AI_POLL_TIMER = setTimeout(tick, 3000);
+    } catch (e) {
+      // 单次失败不终止 —— 网络抖动很常见，连续 5 次才放弃
+      retries++;
+      if (retries > 5) {
+        btn.disabled = false; stop.disabled = true;
+        showAiMsg('err', '查询进度连续失败 5 次，已停止轮询（队列可能仍在后台跑）。'
+          + '刷新页面后重新点「批量生成」会从断点继续。'
+          + '<br>最后一次错误：' + esc(e.message || e));
+        return;
+      }
+      setAiProgress(lastDone, total, '重试中…');
+      AI_POLL_TIMER = setTimeout(tick, 5000);
+    }
+  };
+  tick();
+}
+
+function renderAiList() {
+  const box = document.getElementById('aiList');
+  if (!AI_RESULTS.length) { box.innerHTML = ''; return; }
+  const label = { wait: '待生成', run: '生成中', done: '已生成', error: '失败', skip: '已跳过（缺事实）' };
+  box.innerHTML = '<div class="subhead">逐条确认'
+    + '<span class="hint">每条都能单独改、单独「换一版」（只重跑这一条，不影响其他）。'
+    + '满意后点「填入表单」，再往下走建草稿。</span></div>'
+    + AI_RESULTS.map((x, k) => {
+      const color = { wait: 'var(--text-faint)', run: 'var(--accent)', done: 'var(--good)', error: 'var(--bad)', skip: 'var(--text-faint)' }[x.status] || '';
+      let body = '';
+      if (x.status === 'done') {
+        body = '<div style="margin-top:8px">'
+          + '<div style="font-size:11.5px;color:var(--text-faint)">标题（' + esc(String(x.title).length) + '/140）</div>'
+          + '<input type="text" data-ai-title="' + k + '" value="' + esc(x.title) + '" style="width:100%">'
+          + '<div style="font-size:11.5px;color:var(--text-faint);margin-top:8px">标签（' + x.tags.length + '/13，每个 ≤20 字符）</div>'
+          + '<input type="text" data-ai-tags="' + k + '" value="' + esc(x.tags.join(', ')) + '" style="width:100%">'
+          + '<div style="font-size:11.5px;color:var(--text-faint);margin-top:8px">描述（' + esc(String(x.description).length) + ' 字符）</div>'
+          + '<textarea data-ai-desc="' + k + '" rows="4" style="width:100%">' + esc(x.description) + '</textarea>'
+          + '</div>';
+      } else if (x.status === 'error') {
+        body = '<div style="color:var(--bad);font-size:12px;margin-top:6px">✗ ' + esc(x.error || '未知错误') + '</div>';
+      } else if (x.status === 'skip') {
+        body = '<div style="color:var(--text-faint);font-size:12px;margin-top:6px">'
+          + '表格里没填材质 / 尺寸 / 适合人群，AI 没有事实可用。回第 1 步补上再生成。</div>';
+      }
+      return '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:8px">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
+        + '<b style="font-size:13px">' + esc(x.sku || ('第 ' + x.row + ' 行')) + '</b>'
+        + '<span style="font-size:11.5px;color:' + color + '">' + (label[x.status] || x.status) + '</span></div>'
+        + body
+        + '<div class="btnrow" style="margin-top:8px">'
+        + '<button class="btn sm" data-ai-fill="' + k + '"' + (x.status === 'done' ? '' : ' disabled') + '>填入表单 →</button>'
+        + '<button class="btn sm ghost" data-ai-regen="' + k + '"' + (x.status === 'skip' ? ' disabled' : '') + '>换一版</button>'
+        + '</div></div>';
+    }).join('');
+
+  // 手动编辑 → 回写到内存
+  box.querySelectorAll('[data-ai-title]').forEach(el => {
+    el.addEventListener('input', () => { AI_RESULTS[Number(el.dataset.aiTitle)].title = el.value; });
+  });
+  box.querySelectorAll('[data-ai-desc]').forEach(el => {
+    el.addEventListener('input', () => { AI_RESULTS[Number(el.dataset.aiDesc)].description = el.value; });
+  });
+  box.querySelectorAll('[data-ai-tags]').forEach(el => {
+    el.addEventListener('input', () => {
+      AI_RESULTS[Number(el.dataset.aiTags)].tags = el.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+    });
+  });
+  box.querySelectorAll('[data-ai-fill]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const k = Number(btn.dataset.aiFill);
+      const x = AI_RESULTS[k];
+      const it = IMPORT_BATCH[x.i];
+      if (!x || !it) return;
+      applyImportRow(it);
+      const matched = it._matched || matchPickedImages(it.images);
+      if (matched.length) setPickedFiles(matched);
+      document.getElementById('fTitle').value = x.title;
+      document.getElementById('fDesc').value = x.description;
+      document.getElementById('fTags').value = x.tags.join(', ');
+      const cnt = document.getElementById('cntTitle');
+      if (cnt) cnt.textContent = x.title.length + ' / 140';
+      showAiMsg('ok', '已填入「' + (x.sku || ('第 ' + x.row + ' 行')) + '」的 AI 文案与图片。'
+        + '<br>下一步：确认类目（第 4 步）→ 核对资料（第 5 步）→ 建草稿（第 7 步）。');
+      goto(4);
+    });
+  });
+  box.querySelectorAll('[data-ai-regen]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const k = Number(btn.dataset.aiRegen);
+      const x = AI_RESULTS[k];
+      const it = IMPORT_BATCH[x.i];
+      if (!it) return;
+      if (!aiRunnable(it)) {
+        showAiMsg('warn', '这一条缺「材质 / 尺寸 / 适合人群」，AI 没有事实可用 —— '
+          + '回第 1 步在表格里补上再生成。');
+        return;
+      }
+      btn.disabled = true; btn.textContent = '生成中…';
+      x.status = 'run'; renderAiList();
+      try {
+        const r = await apiCall('/api/etsy/ai/copy', {
+          method: 'POST',
+          body: JSON.stringify(Object.assign(factsOf(it),
+            { prompt: (document.getElementById('promptBox').value || '').trim() || undefined })),
+          timeout: 120000,
+          label: 'AI 文案生成',
+        });
+        x.title = r.title || ''; x.description = r.description || '';
+        x.tags = r.tags || []; x.status = 'done'; x.error = '';
+        const warn = [];
+        if (x.title.length > 140) warn.push('标题超 140 字符');
+        if (x.tags.length > 13) warn.push('标签超 13 个');
+        if (x.tags.some(t => String(t).length > 20)) warn.push('有标签超 20 字符');
+        showAiMsg(warn.length ? 'warn' : 'ok',
+          '已重新生成「' + (x.sku || ('第 ' + x.row + ' 行')) + '」。'
+          + (warn.length ? '<br>⚠ ' + warn.join('；') + '（已在下方标出，可直接改）' : ''));
+      } catch (e) {
+        x.status = 'error'; x.error = e.message || String(e);
+        showAiMsg('err', '重新生成失败：' + esc(x.error));
+      } finally {
+        btn.disabled = false; btn.textContent = '换一版';
+        renderAiList();
+      }
+    });
+  });
+}
+
+document.getElementById('btnPromptReset').addEventListener('click', () => {
+  document.getElementById('promptBox').value = '';
+  showAiMsg('info', '已清空编辑框，下次生成将使用服务器内置提示词（或 data/etsy-prompt.txt，若存在）。');
+});
 </script>
 </body>
 </html>
