@@ -34,15 +34,16 @@ console.log('\n【2】★ 渲染不再操作主文档 DOM');
 console.log('\n【3】预览必须真的渲染正文');
 {
   ok(html.includes('function renderPreview(lite)'), '有 renderPreview 入口');
-  ok(rc.includes('mdToHtml(raw)'), '完整版用 mdToHtml');
-  ok(rc.includes('mdToLiteHtml(raw)'), '极速版用 mdToLiteHtml');
-  ok(html.includes('function mdToLiteHtml('), '有轻量转换函数');
-  const ml = html.slice(html.indexOf('function mdToLiteHtml'));
-  ok(ml.includes("parts.push('<p>'"), '轻量版渲染段落');
-  ok(ml.includes("parts.push('<h2>'"), '轻量版渲染小标题');
-  ok(ml.includes("parts.push('<blockquote>'"), '轻量版渲染引用');
-  ok(ml.includes("parts.push('<hr>'"), '轻量版渲染分隔线');
-  ok(ml.includes('inCode'), '轻量版跳过代码块');
+  // 渲染路径已升级为 xy-mp-layout 的 buildPreviewDoc（内部走 mdToWechat）
+  ok(rc.includes('buildPreviewDoc('), '走 xy-mp-layout 的 buildPreviewDoc');
+  ok(html.includes('function buildPreviewDoc('), 'buildPreviewDoc 已内联');
+  ok(html.includes('function mdToWechat('), 'mdToWechat 已内联');
+  ok(html.includes('STYLES'), '15 种风格表已内联');
+  const bd = html.slice(html.indexOf('function buildPreviewDoc'));
+  ok(bd.includes('mdToWechat('), 'buildPreviewDoc 内部调用 mdToWechat');
+  ok(bd.includes('<style>'), '预览文档带 <style>（本地看，粘贴时会被微信丢掉）');
+  ok(bd.includes('st.css'), '预览用风格 css');
+  ok(bd.includes('wx-foot'), '预览有风格标注页脚');
 }
 
 console.log('\n【4】模板/配色/字号仍能生效（改走 iframe 重渲染）');

@@ -6,6 +6,7 @@
    - 运行记录落到后端 data/runs.json，可在画布下方查看历史
    ============================================================ */
 import { $, $$ } from './dom.js';
+import { mdToWechat, pickStyle, STYLES } from './layout/engine.mjs';
 
 const API = () => (window.getApiBase ? window.getApiBase() : '');
 
@@ -95,6 +96,7 @@ const RUN = {
   configName: '默认配置',   // 运行时由syncConfigName() 更新
   pausedAt: -1,
   coverImgResult: null,   // 生图原始返回，供失败后续跑复用
+  layoutStyle: 'minimal',  // 排版风格（xy-mp-layout 15 种之一）
   lastFailStep: -1,        // 最近失败的步骤，供「从这里续跑」
 };
 
@@ -163,6 +165,12 @@ function paintRunBar() {
     </div>
     <div class="wf-rb-row2">
       <div class="wf-cfg">本次配置 <b>${RUN.configName}</b> <span class="wf-hint">（在专用工具页调整后保存）</span></div>
+      <div class="wf-cfg" style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span>排版风格</span>
+        <select id="wfStyleSel" style="flex:1;min-width:180px;padding:7px 10px;border-radius:8px">
+          ${STYLES.map(x => `<option value="${x.id}"${x.id === RUN.layoutStyle ? ' selected' : ''}>${x.name}（${x.group}）</option>`).join('')}
+        </select>
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${RUN.lastFailStep >= 0 ? `<button class="btn" id="wfResume">↻ 从「${(STEP_DEFS[RUN.lastFailStep]||{}).title || '失败步'}」续跑</button>` : ''}
         <button class="btn" id="wfReset">清空</button>
@@ -188,6 +196,8 @@ function paintRunBar() {
   }
   const run = $('#wfRun');
   if (run) run.onclick = () => startRun();
+  const stl = $('#wfStyleSel');
+  if (stl) stl.onchange = ()=>{ RUN.layoutStyle = stl.value; log('· 排版风格 → ' + pickStyle(stl.value).name); };
   const rsm = $('#wfResume');
   if (rsm) rsm.onclick = () => {
     const from = RUN.lastFailStep;
@@ -463,8 +473,9 @@ export async function startRun(fromStep) {
             + '可点「重试封面」再试一次（智谱生图有速率限制，稍等十几秒通常就好了）');
         }
       } else if (i === 4) {
-        RUN.steps[i] = { key: 'layout', title: '公众号排版', state: 'ok', ms: Date.now() - s0, note: RUN.words + ' 字' };
-        log('④ 排版完成（' + RUN.words + ' 字）');
+        const st = pickStyle(RUN.layoutStyle);
+        RUN.steps[i] = { key: 'layout', title: '公众号排版', state: 'ok', ms: Date.now() - s0, note: st.name };
+        log('④ 排版完成（' + RUN.words + ' 字 · ' + st.name + ' 风格，样式已摊平可粘进公众号）');
         // 人工确认闸门
         RUN.steps[i] = { key: 'layout', title: '公众号排版', state: 'wait', ms: Date.now() - s0 };
         RUN.steps[5] = { key: 'draft', title: '写入草稿箱', state: 'idle' };
@@ -504,13 +515,19 @@ export async function startRun(fromStep) {
   }
 }
 
-function buildDraftPayload() {
+/* 生成草稿请求体。
+   ★ 关键：content 必须用 mdToWechat() 摊平后的 HTML。
+     微信后台会丢弃 <style> 标签和 class，只靠样式表的排版粘进去必然散版
+     —— 这正是原来「排版没生效」的根因。*/
+function buildDraftPayload(){
   const p = parseArticle(RUN.article);
+  const r = mdToWechat(p.body, RUN.layoutStyle);
+  const title = p.title || RUN.title || r.firstTitle || '';
   return {
-    title: p.title || RUN.title,
+    title: title,
     author: '',
-    digest: p.body.replace(/<[^>]+>/g, '').slice(0, 100),
-    content: p.body,
+    digest: r.html.replace(/<[^>]+>/g, '').slice(0, 100),
+    content: r.html,
     thumb_media_id: RUN.thumbMediaId,
     need_open_comment: 1,
     only_fans_can_comment: 0,
