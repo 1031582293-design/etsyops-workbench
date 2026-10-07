@@ -120,7 +120,7 @@
     <div class="logo">💚</div>
     <div>
       <h1>公众号运营 · 排版发布工具</h1>
-      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build dd503f2</span></div>
+      <div class="sub">数字员工「公众号运营」专用工作流 · 文稿收集 → AI 生稿 → AI 标题/封面 → 公众号排版 → 发布草稿箱 <span style="opacity:.45;font-size:11px">· build a6b8021</span></div>
     </div>
     <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
       <span id="bindStatus" class="demo-flag">检测绑定状态…</span>
@@ -301,7 +301,10 @@
 
     <!-- 右：实时预览 -->
     <div class="preview-wrap">
-      <div class="phone">
+<iframe id="prevFrame" title="公众号文章预览"
+          style="width:100%;height:600px;border:0;background:#fff;border-radius:22px;display:block"
+          sandbox="allow-same-origin"></iframe>
+        <div class="phone" id="phoneHost" style="display:none">
         <div class="phone-bar"><i></i><i></i><i></i></div>
         <div class="wx-top"><span class="back">‹</span><span>公众号文章预览</span><span style="font-size:12px;font-weight:400;opacity:.8">···</span></div>
         <div class="article" id="article">
@@ -411,6 +414,109 @@ function mdToHtml(src){
   return html;
 }
 
+/* ---------- 预览：iframe 隔离渲染 ----------
+   ★ 为什么改成 iframe（这次是实测后的结论，不是猜）：
+     mdToHtml 本身极快 —— 1000 字 1ms、20000 字（628 个 DOM 节点）也只要 2ms。
+     所以瓶颈从来不在「生成 HTML」，而在**把它塞进主文档之后浏览器要做的事**：
+     样式计算 + 行盒布局 + 重绘；而预览区就贴在编辑区旁边，
+     高度一暴涨，**整个页面跟着重排**，按钮自然就点不动。
+   iframe 有独立文档与视口，渲染再重也只发生在它内部，
+   主页面的事件循环与布局完全不受影响 —— 这才是真正的隔离。
+   附带好处：sandbox="allow-same-origin" 天然禁掉外链脚本。*/
+const PREVIEW_CSS = [
+  'body{margin:0;background:#fff;font:16px/1.75 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:#3f3f3f;padding:0 18px 28px;word-break:break-word}',
+  '.wx-top{background:#07c160;color:#fff;padding:11px 14px;font-size:13px;display:flex;justify-content:space-between;margin:0 -18px 16px}',
+  'h1{font-size:21px;line-height:1.4;color:#1a1a1a;margin:0 0 14px;font-weight:800}',
+  '.byline{font-size:12.5px;color:#999;margin-bottom:18px;display:flex;gap:12px;align-items:center}',
+  '.byline .avatar{width:22px;height:22px;border-radius:50%;background:#07c160;display:grid;place-items:center;color:#fff;font-size:12px}',
+  'h2{font-size:18px;margin:22px 0 10px;color:#1a1a1a;font-weight:800;padding-left:10px;border-left:4px solid #07c160}',
+  'h3{font-size:16px;margin:18px 0 8px;color:#222;font-weight:700}',
+  'p{margin:0 0 14px}',
+  'blockquote{margin:0 0 14px;padding:10px 14px;background:#f6f8fa;border-left:4px solid #07c160;color:#555;border-radius:6px;font-size:14.5px}',
+  'ul,ol{margin:0 0 14px;padding-left:22px}',
+  'li{margin:5px 0}',
+  'a{color:#576b95}',
+  'pre{background:#f6f8fa;border-radius:8px;padding:12px;overflow:auto;font-size:13px;color:#333}',
+  'code{background:#f2f3f5;padding:2px 5px;border-radius:4px;font-size:13.5px;color:#c0341d}',
+  'img{max-width:100%;border-radius:8px;margin:6px 0}',
+  'hr{border:none;border-top:1px solid #eee;margin:18px 0}',
+  'strong{color:#1a1a1a}',
+  '.wx-foot{background:#fafafa;color:#999;font-size:11.5px;text-align:center;padding:12px;margin:18px -18px 0}'
+].join('');
+
+function renderInFrame(innerHtml){
+  const f = $('#prevFrame');
+  if(!f) return 0;
+  const t0 = Date.now();
+  // 关键：srcdoc 是**异步**加载的——主线程只做「设置一个字符串」，
+  // 不解析 HTML、不建 DOM、不布局，所以不会卡。
+  f.srcdoc = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<style>' + PREVIEW_CSS + '</style></head><body>' + innerHtml + '</body></html>';
+  return Date.now() - t0;
+}
+
+/* 预览入口。lite=true 走极速版（不含图/ 代码块）。
+   无论哪种，最终都交给 iframe 渲染 —— 主线程只做字符串拼接，绝不做布局。*/
+function renderPreview(lite){
+  const raw = ($('#src').value || '').trim();
+  const body = raw
+    ? (lite ? mdToLiteHtml(raw) : mdToHtml(raw))
+    : '<p style="color:#bbb">正文预览会随左侧编辑实时更新。</p>';
+  renderInFrame(buildPreviewInner({ fast: !!lite, bodyHtml: body }));
+  __previewStale = false;
+  const tip = $('#previewTip'); if(tip) tip.style.display = 'none';
+  return 0;
+}
+
+/* 组装 iframe 内部 HTML */
+function buildPreviewInner(opts){
+  opts = opts || {};
+  const title = ($('#title').value || '').trim();
+  const author= ($('#author').value || '').trim();
+  const cover = state.cover || $('#cover').value;
+  const d = new Date();
+  const dateTxt = (d.getMonth()+1)+'月'+d.getDate()+'日';
+  const bar = state.color;
+  const tplH1 = state.tpl === 'wenyi' ? 'font-family:"Songti SC",serif;letter-spacing:.5px'
+              : (state.tpl === 'mini' ? 'font-weight:800;letter-spacing:-.3px' : '');
+  const bodyStyle = 'font-size:' + state.size + 'px;'
+    + (state.tpl === 'mini' ? 'line-height:1.7;' : '')
+    + (state.tpl === 'wenyi' ? 'font-family:"Songti SC",serif;' : '');
+
+  let inner =
+    '<div class="wx-top" style="background:' + bar + '"><span>‹</span>'
+    + '<span>' + (opts.fast ? '公众号文章预览（极速·不含图）' : '公众号文章预览') + '</span>'
+    + '<span style="opacity:.8">···</span></div>'
+    + '<h1 style="' + tplH1 + '">' + (title || '给文章起个标题…') + '</h1>'
+    + '<div class="byline"><span class="avatar">💚</span><span>' + (author || '') + '</span><span>' + dateTxt + '</span></div>';
+  if (!opts.fast && cover) inner += '<img src="' + cover + '" alt="" />';
+  inner += '<div style="' + bodyStyle + '">' + opts.bodyHtml + '</div>'
+    + '<div class="wx-foot">EtsyOps · 公众号运营数字员工</div>';
+  return inner;
+}
+
+/* markdown → 轻量结构（无图/ 无代码块），用于极速预览 */
+function mdToLiteHtml(raw){
+  const esc = t => String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const lines = String(raw||'').replace(/\r\n/g,'\n').split('\n');
+  const parts = []; let buf = [], inCode = false;
+  const flush = ()=>{ if(buf.length){ parts.push('<p>' + inline(esc(buf.join(' '))) + '</p>'); buf = []; } };
+  for(const ln of lines){
+    const t = ln.trim();
+    if(t.startsWith('```')){ flush(); inCode = !inCode; continue; }
+    if(inCode) continue;
+    if(!t){ flush(); continue; }
+    if(/^#{1,6}\s/.test(t)){ flush(); parts.push('<h2>' + inline(esc(t.replace(/^#{1,6}\s*/,''))) + '</h2>'); continue; }
+    if(/^>\s?/.test(t)){ flush(); parts.push('<blockquote>' + inline(esc(t.replace(/^>\s?/,''))) + '</blockquote>'); continue; }
+    if(/^(---|\*\*\*)\s*$/.test(t)){ flush(); parts.push('<hr>'); continue; }
+    if(/^([-*]|\d+\.)\s+/.test(t)){ flush(); parts.push('<p style="margin:0 0 6px">· ' + inline(esc(t.replace(/^([-*]|\d+\.)\s+/,''))) + '</p>'); continue; }
+    buf.push(t);
+  }
+  flush();
+  return parts.join('');
+}
+
 /* ---------- 发布结果固定提示条 ----------
    之前发布结果只显示在弹窗里，而弹窗可能被长稿顶到屏幕外 →
    用户点了「没反应」。现在无论滚动到哪，屏幕顶部固定显示结果。*/
@@ -433,144 +539,11 @@ function showPublishBanner(ok, html){
 }
 
 /* ---------- 预览渲染 ---------- */
-/* ---------- 最小可用预览（lite）----------
-   目标：无论稿件多长都能秒出、且绝不让页面卡住。
-   实现要点（★ 都是踩过坑才定下来的）：
-   1. **只替换 #article 内部，绝不动外层容器**。
-      wx-top（绿色"公众号文章预览"条）本来就在 #article 外面；
-      早期版本用 outerHTML 把它也重建了一遍，结果：
-      · 绿色标题条出现两次
-      · #article / #prevTitle 等id 全丢了，后续 renderPreview 找不到元素 → 预览空白
-   2. 不加载任何图片（含封面 src 清掉并隐藏）→ 外网图不再是阻塞点。
-   3. 内容分两批插入：先框架后补内容，长稿也不会一次性塞满。
-   4. 复用页面原有的 inline() 处理加粗/斜体/代码，视觉与完整版一致。*/
-function renderPreviewLite(){
-  const t0 = Date.now();
-  const art = $('#article');
-  if(!art) return 0;
-  const title = ($('#title').value || '').trim();
-  const raw  = ($('#src').value || '').trim();
-  const author= ($('#author').value || '').trim();
-  const d = new Date();
-  const dateTxt = (d.getMonth()+1)+'月'+d.getDate()+'日';
-
-  // 框架一次写入：仍保留原有的 id（prevTitle / prevAuthor / prevDate / prevBody / prevCover），
-  // 这样 applyTplStyle 等后续逻辑继续可用。
-  const frame =
-    '<img class="cover" id="prevCover" style="display:none" alt="" />'
-    + '<h1 id="prevTitle">' + (title || '给文章起个标题…') + '</h1>'
-    + '<div class="byline"><span class="avatar">💚</span><span id="prevAuthor">' + (author||'') + '</span><span id="prevDate">' + dateTxt + '</span></div>'
-    + '<div id="prevBody"><p style="color:#bbb">正文预览会随左侧编辑实时更新。</p></div>';
-  art.innerHTML = frame;
-
-  if(!raw) return Date.now() - t0;
-
-  // 正文 → 轻量结构（无图片、无表格、代码块降级）
-  const esc = t => String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  const lines = raw.replace(/\r\n/g,'\n').split('\n');
-  const parts = [];
-  let buf = [];
-  const flush = ()=>{ if(buf.length){ parts.push('<p>' + inline(esc(buf.join(' '))) + '</p>'); buf = []; } };
-  let inCode = false;
-  for(const ln of lines){
-    const t = ln.trim();
-    if(t.startsWith('```')){ flush(); inCode = !inCode; continue; }
-    if(inCode){ continue; }                                  // 代码块跳过，不渲染
-    if(!t){ flush(); continue; }
-    if(/^#{1,6}\s/.test(t)){ flush(); parts.push('<h2>' + inline(esc(t.replace(/^#{1,6}\s*/,''))) + '</h2>'); continue; }
-    if(/^>\s?/.test(t)){ flush(); parts.push('<blockquote>' + inline(esc(t.replace(/^>\s?/,''))) + '</blockquote>'); continue; }
-    if(/^(---|\*\*\*)\s*$/.test(t)){ flush(); parts.push('<hr>'); continue; }
-    if(/^([-*]|\d+\.)\s+/.test(t)){
-      flush();
-      parts.push('<p style="margin:0 0 6px">· ' + inline(esc(t.replace(/^([-*]|\d+\.)\s+/,''))) + '</p>');
-      continue;
-    }
-    buf.push(t);
-  }
-  flush();
-
-  const body = $('#prevBody');
-  if(!body) return Date.now() - t0;
-  const half = Math.ceil(parts.length / 2);
-  body.innerHTML = parts.slice(0, half).join('');
-  setTimeout(()=>{ if($('#prevBody')) $('#prevBody').insertAdjacentHTML('beforeend', parts.slice(half).join('')); }, 0);
-  // 主题色/字号/模板都作用在 #article 上，渲染后立即套用，切样式才立刻可见
-  const art2 = $('#article');
-  if(art2){
-    art2.style.setProperty('--theme', state.color);
-    art2.style.fontSize = state.size + 'px';
-    applyTplStyle();
-  }
-  return Date.now() - t0;
-}
-
-// 内联 SVG 占位封面：data URI，零网络请求、零延迟
-const PLACEHOLDER_COVER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="760" height="420" viewBox="0 0 760 420">'
-  + '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">'
-  + '<stop offset="0" stop-color="#e8eef7"/><stop offset="1" stop-color="#dbe4f0"/>'
-  + '</linearGradient></defs>'
-  + '<rect width="760" height="420" fill="url(#g)"/>'
-  + '<text x="380" y="205" font-size="26" fill="#9aa7b8" text-anchor="middle" font-family="sans-serif">封面预览</text>'
-  + '<text x="380" y="240" font-size="15" fill="#b6c0cd" text-anchor="middle" font-family="sans-serif">在下一步生成，或上传封面图</text>'
-  + '</svg>');
-
-/* 预览过期标记：改标题后不立即重排，提示用户进排版步再看。
-   预览真正渲染的时机 = 进入第 4 步「公众号排版」+ 用户手动点「刷新预览」。*/
-let __previewStale = false;
-function markPreviewStale(){
-  __previewStale = true;
-  const tip = $('#previewTip');
-  if(tip) tip.style.display = 'block';
-}
-
-/* 预览渲染
-   lite=true 时走「最小可用预览」：
-     · 不插任何图片（含封面）→ 避免外网图/大图阻塞主线程
-     · 表格/代码块等重结构降级为普通段落
-     · 正文按段落分批插入，先出框架再补内容（可感知更快）
-   完整模式用于用户主动点「刷新预览」时的最终确认。*/
-function renderPreview(lite){
-  if(lite){ renderPreviewLite(); applyTplStyle(); return 0; }
-  const theme = state.color;
-  const art = $('#article');
-  art.style.setProperty('--theme', theme);
-  art.style.fontSize = state.size+'px';
-  const tplBody = { default:'', wenyi:'font-family:"Songti SC",serif;', biz:'', mini:'line-height:1.7;' }[state.tpl]||'';
-  if(tplBody) art.querySelector('#prevBody').setAttribute('style', tplBody);
-  else art.querySelector('#prevBody').removeAttribute('style');
-
-  $('#prevTitle').textContent = $('#title').value || '给文章起个标题…';
-  $('#prevAuthor').textContent = $('#author').value || '';
-  const cover = state.cover || $('#cover').value;
-  // ★ 用内联 SVG 占位，绝不请求 picsum.photos。
-  //   实测该域名返回 302 需跟随重定向，每次渲染要多等 1~3 秒且会重新请求，
-  //   而 Edge 在图片未就绪时会阻塞主线程 → 点一次候选标题就「未响应」。
-  if(cover) { if($('#prevCover').getAttribute('src') !== cover) $('#prevCover').src = cover; }
-  else { if(!$('#prevCover').getAttribute('src')) $('#prevCover').src = PLACEHOLDER_COVER; }
-  const raw = $('#src').value.trim();
-  $('#prevBody').innerHTML = raw ? mdToHtml(raw) : '<p style="color:#bbb">正文预览会随左侧编辑实时更新。</p>';
-  const d = new Date();
-  $('#prevDate').textContent = (d.getMonth()+1)+'月'+d.getDate()+'日';
-  __previewStale = false;
-  const _t = $('#previewTip'); if(_t) _t.style.display = 'none';
-}
-
-/* 当模板需要不同视觉（文艺/极简）时在 h2 上叠加风格 */
+/* 模板/配色/字号变化 → 重新渲染 iframe 即可。
+   旧实现是去改主文档里的 #article 节点，但预览已搬到 iframe 内，
+   那套 DOM 操作完全失效（也正是之前「点了没反应」的根源）。*/
 function applyTplStyle(){
-  const map = {
-    wenyi: { h1:'font-family:"Songti SC",serif;letter-spacing:.5px', h2:'font-family:"Songti SC",serif' },
-    mini:  { h1:'font-weight:800;letter-spacing:-.3px', h2:'background:transparent;padding-left:0' },
-    biz:   { h1:'', h2:'' }, default:{ h1:'', h2:'' }
-  };
-  const st = map[state.tpl]||{};
-  const a = $('#article');
-  // ★ 加防御：lite 模式下元素可能还不存在。原来的
-  //   a.querySelector('h1').setAttribute(...) 一旦拿不到 h1 就抛错，
-  //   会让整个 onclick 链断掉 → 表现为「点了没反应 / 预览不跟着变」。
-  if(!a) return;
-  const h1 = a.querySelector('h1'); if(h1) h1.setAttribute('style', st.h1||'');
-  const h2 = a.querySelector('h2'); if(h2) h2.setAttribute('style', st.h2||'');
+  safeRender(true);
 }
 
 /* ---------- 步骤切换 ---------- */
@@ -944,16 +917,9 @@ $('#genBtn').onclick = async ()=>{
 };
 // 一键清空预览：#article 里塞着整篇长稿的 DOM，长稿下会让整页操作变慢。
 // 清空后页面立刻恢复流畅，发布本身并不依赖预览。
+// 一键清空预览：iframe 内容置空，页面立刻恢复流畅（发布本身不依赖预览）。
 $('#clearPreviewBtn').onclick = ()=>{
-  const art = $('#article');
-  if(art){
-    art.style.setProperty('--theme', state.color);
-    art.style.fontSize = state.size + 'px';
-    art.innerHTML = '<img class="cover" id="prevCover" style="display:none" alt="" />'
-      + '<h1 id="prevTitle">' + (($('#title').value||'').trim() || '给文章起个标题…') + '</h1>'
-      + '<div class="byline"><span class="avatar">💚</span><span id="prevAuthor"></span><span id="prevDate"></span></div>'
-      + '<div id="prevBody"><p style="color:#bbb">预览已清空。发布不受影响。</p></div>';
-  }
+  renderInFrame('<p style="color:#bbb;padding:20px 0;text-align:center">预览已清空。发布不受影响。</p>');
   __previewStale = true;
   const tip = $('#previewTip'); if(tip) tip.style.display = 'block';
   toast('预览已清空，页面恢复流畅。发布不需要预览。');

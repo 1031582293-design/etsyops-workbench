@@ -95,16 +95,11 @@ console.log('\n【6】画面主题可编辑（用户说「没办法改」）');
   ok(html.includes('改这里就能改画面') || html.includes('随时改'), '提示用户可改');
 }
 
-console.log('\n【7】极速预览（lite）');
+console.log('\n【7】预览架构（细节见 selftest.frame.mjs）');
 {
-  ok(html.includes('function renderPreviewLite()'), '有 lite 渲染函数');
-  ok(html.includes('function renderPreview(lite)'), 'renderPreview 支持 lite 参数');
-  // lite 的实现细节断言已迁到 selftest.lite.mjs（那里才真正检查结构安全）
-  ok(/if\(lite\)\{ renderPreviewLite\(\); applyTplStyle\(\); return 0; \}/.test(html), 'lite 分支已接入且会套模板样式');
-  ok(html.includes('function renderPreviewLite()'), 'lite 渲染函数存在');
-  ok(html.includes('art.innerHTML = frame'), 'lite 只替换 #article 内部（不动外层容器）');
-  ok(html.includes('id="prevCover" style="display:none"'), 'lite 隐藏封面且不给 src');
-  ok(html.includes('setTimeout(()=>{ if($(\'#prevBody\'))'), '第二批延后插入');
+  ok(html.includes('mdToLiteHtml(raw)'), 'lite 走轻量转换');
+  ok(html.includes('function renderInFrame('), '统一交给 iframe 渲染');
+  ok(html.includes('id="prevFrame"'), '有 iframe 容器');
 }
 
 console.log('\n【8】渲染前让出主线程（防事件循环被占死）');
