@@ -366,8 +366,16 @@ function aiConfigured() {
   return Boolean(AI_API_KEY);
 }
 
+/* AI 请求的出口。与 Etsy 共用 createProxyFetch，理由完全一致：
+ * Node 内置 fetch 忽略 HTTPS_PROXY，系统代理对它无效，必须显式传地址。
+ * 这点很实际：api.openai.com 在国内需要代理才能访问——
+ * 只改 .env 的 AI_BASE_URL 而不给AI_PROXY，会直接连接超时。
+ * 留空 = 直连（智谱、DeepSeek 等国内接口走这条）。 */
+const AI_PROXY = (process.env.AI_PROXY || '').trim();
+const aiFetch = () => (AI_PROXY ? etsy.createProxyFetch(AI_PROXY) : fetch);
+
 async function aiGenerate(systemPrompt, userPrompt) {
-  const r = await fetch(`${AI_BASE_URL}/chat/completions`, {
+  const r = await aiFetch()(`${AI_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AI_API_KEY}` },
     body: JSON.stringify({
@@ -395,7 +403,8 @@ async function aiGenerate(systemPrompt, userPrompt) {
 
 // AI 生图（OpenAI 兼容 images/generations，智谱 CogView 系列；与文本共用 AI_API_KEY / AI_BASE_URL）
 async function aiImage(prompt, size = '1440x720') {
-  const r = await fetch(`${AI_BASE_URL}/images/generations`, {
+  // 生图与生文走同一出口：换 OpenAI 时生图同样需要代理
+  const r = await aiFetch()(`${AI_BASE_URL}/images/generations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${AI_API_KEY}` },
     body: JSON.stringify({ model: AI_IMAGE_MODEL, prompt, size }),
@@ -1517,6 +1526,9 @@ server.listen(PORT, HOST, () => {
     console.log(ETSY_CFG.proxy
       ? `  etsy proxy: 已配置 → ${ETSY_CFG.proxy}`
       : '  etsy proxy: 未配置（Etsy 请求直连；若本机连不上 Etsy，在 .env 加 ETSY_PROXY=http://127.0.0.1:<端口>）');
+    console.log(AI_PROXY
+      ? `  ai proxy: 已配置 → ${AI_PROXY}`
+      : '  ai proxy: 未配置（AI 请求直连；若换成需代理的服务如 OpenAI，请加 AI_PROXY）');
   } else {
     const miss = [];
     if (!ETSY_CFG.apiKeyHeader) miss.push('ETSY_KEYSTRING + ETSY_SHARED_SECRET');
