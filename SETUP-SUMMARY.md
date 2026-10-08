@@ -1,6 +1,6 @@
 # 电商运营工作台 · 搭建总结
 
-> **本文按日期追加章节**（第一章是 10-02，最新进展见第十章 2026-10-07）。
+> **本文按日期追加章节**（第一章是 10-02，最新进展见第十一章 2026-10-07 公众号前端迭代）。
 > 每章记录该阶段**已完成的搭建步骤**，未完成的留作「下一步待办」。
 > 配套文档：`OPERATOR-GUIDE.md`（操作人 Windows 傻瓜指引）、`MAC-QUICKSTART.md`（Mac 傻瓜指引）、`DEPLOY.md`（总部署文档）、`PITFALLS.md`（坑与避坑清单）。
 
@@ -12,6 +12,7 @@
 | 八 | 10-05 | 工作台四步流、AI 生稿、稳定地址打通 |
 | 九 | 10-06 | 稳定性改造、AI 生稿根因修复、部署通道厘清 |
 | **十** | **10-07** | **★ Etsy Open API v3 全链路打通 + 工作流重排为七步** |
+| **十一** | **10-07** | **公众号工作台前端专项迭代（预览卡顿根治 · 封面 · 排版引擎 · 画布 · iframe 隔离）** |
 
 ---
 
@@ -562,5 +563,61 @@ aiproxy 7 / batcfg 20
 
 **排障占比约 28%**，四个主要坑：CloudStudio 504、Cloudflare 边缘截断、
 多后端抢域名、Node 忽略系统代理。详见 PITFALLS 第 26~30 条。
+
+---
+
+## 十一、公众号工作台前端专项迭代（预览卡顿根治 · 封面 · 排版引擎 · 画布 · iframe 隔离）
+
+> 本章记录**公众号工作台（`wechat-publisher.html`）前端**的一轮专项打磨：把"点候选标题就卡死 / 封面生成后界面冻住 / 草稿箱排版散版 / 画布假跑"等体验与质量问题解决掉。
+> 全部为**纯前端改动**（`wechat-publisher.html` / `src/wechat-run.js` / `src/layout/*`），**不涉及 `server.js`，后端无需重启**。
+
+### 1. 预览卡顿真凶：外网图片阻塞主线程（commit `626352a`）
+- 实测 `picsum.photos` 返回 **302 重定向**，每次 `renderPreview()` 给 `<img>.src` 赋外网 URL 会阻塞 Edge 主线程 → 点候选标题即"未响应"。
+- 修复：占位封面改**内联 SVG data URI**（`PLACEHOLDER_COVER`）；选标题不再立即渲染，改 `markPreviewStale()`；进第 4 步排版才渲染；输入加 **400ms 防抖**。
+
+### 2. start-mac.sh 三个 bug（commit `25809ca`，脚本）
+- 删 `pkill -f "node .*/abs/path/server.js"`（会误杀刚启动的新进程）；启隧道前清旧 cloudflared（曾同时跑 3 个）；存活确认 `sleep 2→3`。
+- 纪律：**沙盒与用户终端共享进程空间**，不得在沙盒对 `~/etsyops` 起/杀 `server.js` 或 `cloudflared`。
+
+### 3. 封面图卡住（commit `821a849`，纯前端）
+- 生图回调裸赋外网 `ufileos.com` URL 给 `<img>.src` → 页面卡、按钮点不动。
+- 新增 `loadCoverSafe()` / `finishCoverImg()`（先绑 `onload`/`onerror` 再设 src，12s 超时兜底）；生图后**自动调 `/api/wechat/upload-url` 上传**（后端抓图，不经浏览器）。
+
+### 4. 封面关键词错 + 排版卡（commit `323c2cd`，纯前端）
+- `autoCoverScene()` 旧算法按标点切碎片，输出 "测试 视频脚本 Hi 大家好…" 废话。重写为：内置 ~80 词电商词典 `COVER_DICT` + `pickKeywords()` + 标题加权 + 频次 + 去重 + 兜底短句。实测用户稿 → "圣诞，节日，送礼"。
+- 画面主题改为**可编辑主输入框**；新增"极速预览（不含图）"+ `safeRender()`（先 `setTimeout` 让出主线程）。
+
+### 5. 预览只显示标题 + 切样式没反应（commit `f8a229e`，纯前端）
+- `renderPreviewLite` 用 `art.outerHTML` 重建容器 → 绿色标题条重复、`#article/#prevTitle/#prevBody` id 全丢。改 `art.innerHTML=frame` 只换内部并保留 id。
+- `applyTplStyle` 里 `querySelector('h1').setAttribute` 拿不到 h1 抛错 → onclick 链断。加防御 + h2 也设 + lite 渲染完立即套样式。新增"清空预览"按钮。
+
+### 6. 画布假演示 + 缺 prompt（commit `c1bbf83`，纯前端）
+- `runWorkflow()` 是 `setTimeout` 假动画（每 950ms 假装完成），无视真实情况。公众号工作流改"⚡ 去运行台"只引导不跑假逻辑；其他标"演示工作流"。
+- 画布 `window.getSavedPrompt` 跨页面不存在。工具页新增 `sharePrompt()` / `readSharedPrompt()` 写 `localStorage['wx_ai_current_prompt']`；画布读不到用 `DEFAULT_GEN_PROMPT` 兜底。
+
+### 7. docx/pdf 占位 bug + 发布无反馈（commit `6303476`，纯前端）
+- `readOne()` 对 docx/pdf 只返回占位符"【测试.docx】（DOCX 文件：已载入…）"→ AI 收到垃圾。改为真解析：`docxToText()`(mammoth) / `pdfToText()`(pdfjs)，按需加载+缓存，<20 字视为失败跳过。
+- 发布结果只显示弹窗被长稿顶出屏幕。新增顶部固定 `showPublishBanner()` + 即时反馈（按钮禁用+文案+提示条）。
+
+### 8. 封面上传失败 + 续跑（commit `9d8f1ea`，纯前端）
+- 只在 `if(r.b64)` 才上传，但智谱返回 url、b64 空 → 必失败。抽 `uploadCoverWithRetry()`（b64→/upload；url→/upload-url），重试 3 次（等 8/16s）。
+- 新增"↻ 从失败步续跑"按钮 + 生图结果 `RUN.coverImgResult` 复用。
+
+### 9. iframe 隔离预览（commit `9954753`，纯前端）— 真正解决卡顿
+- 实测 mdToHtml 1000 字 1ms / 20000 字 2ms，瓶颈是塞进主文档后 reflow。预览改 `iframe#prevFrame`（600px 高）+ `renderInFrame()` 赋 `iframe.srcdoc`（异步不阻塞）；`PREVIEW_CSS` 内联；`applyTplStyle` 改调 `safeRender(true)`；清空预览也走 iframe。删旧重复代码 159 行 + `PLACEHOLDER_COVER`。
+
+### 10. 隧道闪断 / launchd 讨论
+- 查明：不是隧道闪断，是后端被关（终端关了），零崩溃记录。launchd = macOS 自带后台服务管理器（Windows 无，对应任务计划程序）。操作者 Windows 已停服，仅用户 Mac 需配。用户暂不做的。
+
+### 11. xy-mp-layout 排版接入（commit `fdc8476`，纯前端）— 修草稿箱散版
+- **根因**：微信后台丢 `<style>`/class，原 mdToHtml 无 inline style。
+- 新建 `src/layout/engine.mjs`（从 skill `templates/styles.md` 提取 15 种风格 → `styles.json`）：迷你 CSS 解析+摊平器（`mdToWechat(md,styleId)→{html,firstTitle}`，零 `<style>`/class，body 继承，`:before` 降级为边框，剔除 float/box-shadow 等）；`buildPreviewDoc()`。
+- 画布 `buildDraftPayload` 用 `mdToWechat`；运行台加 15 种风格下拉 `wfStyleSel`。工具页 4 模板 → 15 风格分 4 组（引擎内联，剥 export）；预览走 buildPreviewDoc、发布走 mdToWechat。
+
+### 12. 性能验证（commit `988b95b`，纯前端）
+- mdToWechat 1000 字 1.4ms / 10000 字 3ms；buildPreviewDoc 10000 字 2.6ms；srcdoc 赋值 0ms。主线程 <16ms/帧。加固：计算放 `setTimeout(0)`；3s 超时提示；`__pvLoadTimer` 声明提前（TDZ）。
+
+### 13. 自测规模（本轮累计）
+全套 **803 项全绿**，新增脚本：`selftest.preview / cover2 / lite / canvas2 / parse / cover3 / frame / layout / layout2 / perf`（含用户 etsy 161 项）。
 
 ---
