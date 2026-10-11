@@ -140,13 +140,137 @@ function writeDiscoveredShop(rec) {
   } catch (e) { etsyLog('shop_id 落盘失败：' + (e && e.message)); return false; }
 }
 
+/* ---------------- Etsy 多账号 ----------------
+ * 一个 Etsy 账号 = 一次授权 = 一套 token。店主的几间店若是**不同** Etsy 账号，
+ * 就必须对每个账号各授权一次、token 分别存档，用哪间店就切到哪套。
+ * （同一个账号下有多间店的情况另说：那种一次授权就够，切 shop_id 即可。）
+ *
+ * 旧的单份 data/etsy-oauth.json 会在首次读取时自动迁移进来，现有授权不会丢。
+ * 迁移不联网：user_id 直接从 token 前缀解析；店铺列表要联网，留空，
+ * 等页面调 /api/etsy/shops 时再补。 */
+const ETSY_ACCOUNTS_FILE = join(DATA_DIR, 'etsy-accounts.json');
+
+function readAccounts() {
+  try {
+    const d = JSON.parse(readFileSync(ETSY_ACCOUNTS_FILE, 'utf8'));
+    if (!d || typeof d !== 'object' || !d.accounts || typeof d.accounts !== 'object') return null;
+    return d;
+  } catch { return null; }
+}
+
+function writeAccounts(obj) {
+  mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = ETSY_ACCOUNTS_FILE + '.tmp';
+  writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
+  renameSync(tmp, ETSY_ACCOUNTS_FILE);
+}
+
+function emptyAccount(userId) {
+  return {
+    userId: String(userId || ''), label: '',
+    accessToken: '', refreshToken: '',
+    accessTokenExpiresAt: 0, refreshTokenExpiresAt: 0,
+    shops: [], activeShopId: '', addedAt: Date.now(),
+  };
+}
+
+function ensureAccounts() {
+  let d = readAccounts();
+  if (!d) {
+    d = { version: 1, activeUserId: '', accounts: {} };
+    const old = etsyStore.read();
+    const userId = (old && old.accessToken) ? (etsy.userIdFromToken(old.accessToken) || '') : '';
+    if (userId && old.accessToken) {
+      d.accounts[userId] = Object.assign(emptyAccount(userId), {
+        accessToken: old.accessToken,
+        refreshToken: old.refreshToken || '',
+        accessTokenExpiresAt: Number(old.accessTokenExpiresAt || 0),
+        refreshTokenExpiresAt: Number(old.refreshTokenExpiresAt || 0),
+        addedAt: Number(old.obtainedAt || Date.now()),
+        migratedFrom: 'etsy-oauth.json',
+      });
+      d.activeUserId = userId;
+      etsyLog('已把旧的单份授权迁移到多账号结构：userId=' + userId + '（店铺列表在页面读取时补上）');
+    }
+    writeAccounts(d);
+  }
+  return d;
+}
+
+function activeAccount() {
+  const d = ensureAccounts();
+  return (d.activeUserId && d.accounts[d.activeUserId]) ? d.accounts[d.activeUserId] : null;
+}
+
+/* 给 etsyClient 用：读写的是「当前账号」那套 token，形状与 createTokenStore 一致。 */
+const accountStore = {
+  read: () => {
+    const a = activeAccount();
+    if (!a) return { accessToken: '', refreshToken: '', accessTokenExpiresAt: 0, refreshTokenExpiresAt: 0, obtainedAt: 0 };
+    return {
+      accessToken: a.accessToken || '', refreshToken: a.refreshToken || '',
+      accessTokenExpiresAt: Number(a.accessTokenExpiresAt || 0),
+      refreshTokenExpiresAt: Number(a.refreshTokenExpiresAt || 0),
+      obtainedAt: Number(a.addedAt || 0),
+    };
+  },
+  write: (x) => {
+    const d = ensureAccounts();
+    const id = d.activeUserId;
+    if (!id || !d.accounts[id]) return false;
+    d.accounts[id] = Object.assign({}, d.accounts[id], {
+      accessToken: x.accessToken || '', refreshToken: x.refreshToken || '',
+      accessTokenExpiresAt: Number(x.accessTokenExpiresAt || 0),
+      refreshTokenExpiresAt: Number(x.refreshTokenExpiresAt || 0),
+    });
+    writeAccounts(d);
+    return true;
+  },
+};
+
+/* 授权回调用：把新 token 归档到它所属的账号，并把那个账号设为当前。 */
+function saveAccountToken(rec) {
+  const d = ensureAccounts();
+  const userId = (rec && rec.accessToken) ? (etsy.userIdFromToken(rec.accessToken) || '') : '';
+  if (!userId) throw new Error('拿到的 token 里解析不出 user_id，无法归档（请重新授权一次）');
+  const isNew = !d.accounts[userId] || !d.accounts[userId].accessToken;
+  d.accounts[userId] = Object.assign(d.accounts[userId] || emptyAccount(userId), {
+    accessToken: rec.accessToken,
+    refreshToken: rec.refreshToken || '',
+    accessTokenExpiresAt: Number(rec.accessTokenExpiresAt || 0),
+    refreshTokenExpiresAt: Number(rec.refreshTokenExpiresAt || 0),
+  });
+  d.activeUserId = userId;
+  writeAccounts(d);
+  return { userId, isNew };
+}
+
+/* 店铺列表要联网才拿得到，授权后（或页面刷新时）单独补进来。
+ * 只在「该账号只有一间店」时才自动选中 —— 多店铺必须由人明确选，绝不自动挑。 */
+function attachAccountShops(userId, shops, forceActiveShopId) {
+  const d = ensureAccounts();
+  if (!userId || !d.accounts[userId]) return null;
+  d.accounts[userId].shops = shops || [];
+  if (forceActiveShopId) d.accounts[userId].activeShopId = String(forceActiveShopId);
+  else if (!d.accounts[userId].activeShopId && shops && shops.length === 1) {
+    d.accounts[userId].activeShopId = shops[0].shopId;
+  }
+  writeAccounts(d);
+  return d.accounts[userId];
+}
+
 const etsyClient = etsy.createClient({
   config: ETSY_CFG,
-  store: etsyStore,
+  store: accountStore,
   log: etsyLog,
   // shop_id 动态取：客户端不再缓存配置里的值，而是每次问这个函数。
   // 这样授权后即使 .env 里没填 ETSY_SHOP_ID，后续调用也能自动用上。
-  shopIdProvider: () => ETSY_CFG.shopId || readDiscoveredShop().shopId,
+  // 多账号时优先用「当前账号当前选中的店」。
+  shopIdProvider: () => {
+    const a = activeAccount();
+    if (a && a.activeShopId) return String(a.activeShopId);
+    return ETSY_CFG.shopId || readDiscoveredShop().shopId;
+  },
 });
 
 function etsyConfigured() {
@@ -156,6 +280,8 @@ function etsyConfigured() {
 }
 
 function etsyCurrentShopId() {
+  const a = activeAccount();
+  if (a && a.activeShopId) return String(a.activeShopId);
   return ETSY_CFG.shopId || readDiscoveredShop().shopId || '';
 }
 
@@ -1444,8 +1570,11 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
       const d = await etsy.exchangeCode(ETSY_CFG, { code, verifier: pend.verifier },
         etsy.resolveFetch(ETSY_CFG));
       const rec = etsy.normalizeTokenResponse(d);
-      etsyStore.write(rec);
-      etsyLog('★授权成功，已拿到 token（refresh token 已落盘 ' + ETSY_TOKEN_FILE + '）');
+      // ★ 多账号：token 按它所属的 Etsy 账号归档，并把那个账号设为当前。
+      //   同一个 Etsy 账号再授权一次 → 更新原槽位；换一个账号授权 → 新增槽位。
+      const acct = saveAccountToken(rec);
+      etsyLog('★授权成功，token 已归档到账号 userId=' + acct.userId
+        + (acct.isNew ? '（新账号）' : '（已有账号，token 已刷新）'));
 
       // ★ 自动发现 shop_id：从 token 前缀取 user_id → 查该用户的店铺。
       //   这样操作者完全不用手工找shop_id（Etsy 界面上任何地方都不显示它）。
@@ -1456,17 +1585,21 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
           const shop = await etsyClient.get(`/shops/${ETSY_CFG.shopId}`);
           shopHint = '已连上你在 .env 里指定的店铺：' + (shop.shop_name || ('shop_id=' + ETSY_CFG.shopId));
           writeDiscoveredShop({ shopId: String(ETSY_CFG.shopId), shopName: shop.shop_name || '', userId: etsy.userIdFromToken(rec.accessToken) || '', at: Date.now() });
+          attachAccountShops(acct.userId, [], String(ETSY_CFG.shopId));
         } catch (e) {
           shopHint = '⚠️ token 已拿到，但读取 .env 里指定的店铺失败：' + e.message;
         }
       } else {
         try {
           const found = await etsy.discoverShopId(etsyClient, rec.accessToken);
+          // 该账号的店铺全部记进账号槽位，页面第 1 步据此列下拉
+          attachAccountShops(acct.userId, found.allShops);
           if (found.ambiguous) {
-            // 一个账号多个店：绝不自动挑一个（可能把商品写错店），明确列出让店主选
+            // 一个账号多个店：绝不自动挑一个（可能把商品写错店），明确列出让店主在第 1 步选
             const list = found.allShops.map(s => s.shopName + '（' + s.shopId + '）').join('、');
-            shopHint = '该账号下有多个店铺：' + list + '。为避免写错店，请联系管理员在 .env 里用 ETSY_SHOP_ID 指定其中一个。';
-            etsyLog('⚠️ 多店铺账号，需人工指定：' + list);
+            shopHint = '该账号下有 ' + found.allShops.length + ' 间店：' + list
+              + '。为避免写错店，请回到工作台第 1 步在「店铺」下拉里明确选一间。';
+            etsyLog('⚠️ 多店铺账号，需人工在第 1 步选店：' + list);
           } else {
             writeDiscoveredShop({ shopId: found.shopId, shopName: found.shopName, userId: found.userId, at: Date.now() });
             shopHint = '已自动识别店铺：' + found.shopName + '（shop_id=' + found.shopId + '）。' +
@@ -1570,25 +1703,113 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
    *   必须对另一个账号再授权一次 —— 这版还没做多套 token，页面上会明确说明。 */
   if (p === '/api/etsy/shops' && req.method === 'GET') {
     if (!etsyConfigured()) return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 Etsy 凭证。' });
-    const rec = etsyStore.read();
-    if (!rec || !rec.accessToken) {
+    const tok = accountStore.read();
+    if (!tok || !tok.accessToken) {
       return json(res, 401, { error: 'not_authorized', note: '还没完成 Etsy 授权，先去授权再来看店铺列表。' });
     }
     try {
-      const found = await etsy.discoverShopId(etsyClient, rec.accessToken);
+      const found = await etsy.discoverShopId(etsyClient, tok.accessToken);
+      // 实时查一次并把结果记回账号槽位（新开的店也能被看到）
+      attachAccountShops(found.userId, found.allShops);
       return json(res, 200, {
         ok: true,
         current: etsyCurrentShopId(),
         userId: found.userId,
         shops: found.allShops,
         note: found.allShops.length > 1
-          ? '这个账号下有多间店。选中的店铺决定用哪套提示词版本；'
-            + '建草稿写入哪家店，取决于当前授权账号（见下方说明）。'
+          ? '这个账号下有 ' + found.allShops.length + ' 间店，在第 1 步明确选一间再继续。'
           : '',
       });
     } catch (e) {
       return json(res, 502, { error: 'shop_list_failed', note: e.message });
     }
+  }
+
+  /* ---------- Etsy 账号（多账号） ----------
+   * 一个 Etsy 账号 = 一次授权 = 一套 token。要上架到另一个 Etsy 账号的店铺，
+   * 必须再授权一次（且授权前要先在浏览器里退出当前 Etsy 登录，否则 Etsy 会直接用已登录的账号）。 */
+  if (p === '/api/etsy/accounts' && req.method === 'GET') {
+    const d = ensureAccounts();
+    const list = Object.keys(d.accounts).map(k => {
+      const a = d.accounts[k];
+      const shops = a.shops || [];
+      return {
+        userId: a.userId,
+        label: a.label || '',
+        // 没填备注就显示第一间店的名字，方便认
+        displayName: a.label || (shops[0] ? shops[0].shopName : ('账号 ' + a.userId)),
+        shopCount: shops.length,
+        hasToken: Boolean(a.accessToken),
+        activeShopId: a.activeShopId || '',
+        addedAt: a.addedAt || 0,
+      };
+    });
+    return json(res, 200, { ok: true, activeUserId: d.activeUserId, accounts: list });
+  }
+
+  if (p === '/api/etsy/accounts/activate' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const userId = String(b.userId || '');
+      const d = ensureAccounts();
+      if (!d.accounts[userId]) return json(res, 404, { error: 'account_not_found', note: '这个账号还没授权过。' });
+      if (!d.accounts[userId].accessToken) {
+        return json(res, 400, { error: 'account_no_token', note: '这个账号没有可用 token，请重新授权一次。' });
+      }
+      d.activeUserId = userId;
+      writeAccounts(d);
+      etsyLog('切换当前 Etsy 账号 → userId=' + userId);
+      return json(res, 200, { ok: true, activeUserId: userId });
+    } catch (e) { return json(res, 400, { error: 'bad_request', note: e.message }); }
+  }
+
+  if (p === '/api/etsy/accounts/label' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const userId = String(b.userId || '');
+      const d = ensureAccounts();
+      if (!d.accounts[userId]) return json(res, 404, { error: 'account_not_found', note: '这个账号不存在。' });
+      d.accounts[userId].label = String(b.label || '').trim();
+      writeAccounts(d);
+      return json(res, 200, { ok: true, label: d.accounts[userId].label });
+    } catch (e) { return json(res, 400, { error: 'bad_request', note: e.message }); }
+  }
+
+  if (p === '/api/etsy/accounts/del' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const userId = String(b.userId || '');
+      const d = ensureAccounts();
+      if (!d.accounts[userId]) return json(res, 404, { error: 'account_not_found', note: '这个账号不存在。' });
+      delete d.accounts[userId];
+      if (d.activeUserId === userId) {
+        const rest = Object.keys(d.accounts);
+        d.activeUserId = rest.length ? rest[0] : '';
+      }
+      writeAccounts(d);
+      etsyLog('已移除 Etsy 账号 userId=' + userId + '，当前账号=' + (d.activeUserId || '（无）'));
+      return json(res, 200, { ok: true, activeUserId: d.activeUserId });
+    } catch (e) { return json(res, 400, { error: 'bad_request', note: e.message }); }
+  }
+
+  /* 选中当前账号下的某一间店 */
+  if (p === '/api/etsy/accounts/shop' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const userId = String(b.userId || '') || (ensureAccounts().activeUserId || '');
+      const shopId = String(b.shopId || '');
+      const d = ensureAccounts();
+      if (!d.accounts[userId]) return json(res, 404, { error: 'account_not_found', note: '这个账号不存在。' });
+      if (shopId && !(d.accounts[userId].shops || []).some(s => s.shopId === shopId)) {
+        return json(res, 400, { error: 'shop_not_in_account',
+          note: '这间店不属于该 Etsy 账号。若要上架到别的账号的店，请先切换/授权那个账号。' });
+      }
+      d.accounts[userId].activeShopId = shopId;
+      d.activeUserId = userId;
+      writeAccounts(d);
+      etsyLog('切换店铺：账号=' + userId + ' → shop_id=' + shopId);
+      return json(res, 200, { ok: true, activeUserId: userId, activeShopId: shopId });
+    } catch (e) { return json(res, 400, { error: 'bad_request', note: e.message }); }
   }
 
   /* ---------- Etsy 提示词版本库 ----------
