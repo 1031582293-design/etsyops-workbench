@@ -242,6 +242,12 @@
         <div class="ph-sub">批量上新的起点。先把「事实数据」和「图片」一起丢进来，
           后面 AI 生成、字段填充、建草稿都基于这里解析出的条目 —— 不再先填表再传图。</div>
 
+        <div class="subhead">0. 店铺 Shop<span class="hint">列出「授权时登录的那个 Etsy 卖家账号」下的所有店</span></div>
+        <div class="row2">
+          <select id="fShopPick"><option value="">（读取中…）</option></select>
+          <div id="shopPickNote" class="msg info" style="margin:0"></div>
+        </div>
+
         <div class="subhead">1. 上架表格<span class="hint">从飞书 / Excel 复制整块粘进来，或选 CSV 文件。列名模板见「下载模板」。</span></div>
         <textarea id="importText" rows="6" class="hidden"
           placeholder="第一行是列名，之后每行一个商品&#10;图片文件名&#9;价格&#9;数量&#9;制作方&#9;制作时间&#9;材质&#9;产品净重&#9;长度&#9;宽度&#9;高度&#9;类目ID&#10;6-狼头套-1.jpg&#9;30.70&#9;10&#9;someone_else&#9;2020_2026&#9;EVA, 三明治网布&#9;2250&#9;50&#9;50&#9;30&#9;"></textarea>
@@ -1287,7 +1293,10 @@ window.fillFromJson = function(obj){
 toggleItemType();
 // 提示词版本库要等 boot 里 STATUS 就绪（拿到 shop_id）后才能按店铺取版本，
 // 所以挂在 boot 的 then 上；取不到店铺时后端会退到 _default 桶，不影响使用。
-boot().then(() => loadPromptVersions()).catch(() => {});
+boot().then(async () => {
+  await loadShops();          // 先列店铺，拿到 SELECTED_SHOP
+  await loadPromptVersions(); // 再按店铺取提示词版本
+}).catch(() => {});
 
 
 
@@ -1771,10 +1780,46 @@ function renderAiList() {
  * 这样多个店铺共用同一版提示词也不会把别家的店名写进文案。 */
 let PROMPT_SHOP = '';
 let PROMPT_CUR_ID = '';
+let SELECTED_SHOP = '';   // 第 1 步选中的店铺；为空时退回授权自动发现的那个
 
 function promptMsg(kind, html){
   showMsg(document.getElementById('msgPrompt'), kind, html);
 }
+
+/* ---------- 店铺选择（第 1 步） ----------
+ * 「账号下的所有店铺」= 授权时登录的那个 Etsy 卖家账号名下的店，不是 API App 本身。
+ * 一个卖家账号可以有多间店，所以一次授权就能列全；但如果是**不同** Etsy 账号开的店，
+ * 一个 token 只覆盖其中一个账号，得对另一个账号再授权一次（这版还没做多套 token）。 */
+async function loadShops(){
+  const sel = document.getElementById('fShopPick');
+  const note = document.getElementById('shopPickNote');
+  try {
+    const d = await apiCall('/api/etsy/shops', { timeout: 40000, label: '读取店铺列表' });
+    const list = d.shops || [];
+    sel.innerHTML = list.map(s =>
+      '<option value="' + esc(s.shopId) + '"' + (s.shopId === String(d.current) ? ' selected' : '') + '>'
+      + esc(s.shopName || ('shop_id=' + s.shopId)) + (s.currencyCode ? '（' + esc(s.currencyCode) + '）' : '')
+      + '</option>').join('') || '<option value="">（这个账号下没查到店铺）</option>';
+    SELECTED_SHOP = String(d.current || (list[0] ? list[0].shopId : ''));
+    if (SELECTED_SHOP) sel.value = SELECTED_SHOP;
+    note.innerHTML = list.length > 1
+      ? '<b>这个账号下有 ' + list.length + ' 间店。</b>选中的店铺决定用哪套提示词版本。'
+        + '<br><span style="color:var(--text-faint)">注意：建草稿会写进当前<b>授权账号</b>的店铺。'
+        + '如果你的几间店是不同 Etsy 账号开的，需要对另一个账号再授权一次才能切换写入目标。</span>'
+      : '当前授权账号下只有这一间店。';
+  } catch(e){
+    sel.innerHTML = '<option value="">（读取失败）</option>';
+    note.innerHTML = '<span style="color:var(--bad)">店铺列表读取失败：' + esc(e.message)
+      + '</span><br>未授权或授权过期时也会这样，先完成授权再看。';
+  }
+}
+
+document.getElementById('fShopPick').addEventListener('change', () => {
+  SELECTED_SHOP = document.getElementById('fShopPick').value;
+  log('切换店铺：shop_id=' + SELECTED_SHOP);
+  // 提示词是按店铺分桶的，换店要重新拉那个店的版本
+  loadPromptVersions();
+});
 
 function currentPrompt(){
   const t = (document.getElementById('promptBox').value || '').trim();
@@ -1803,7 +1848,8 @@ async function loadPromptContent(id){
 }
 
 async function loadPromptVersions(){
-  PROMPT_SHOP = (STATUS && STATUS.shopId) ? String(STATUS.shopId) : '';
+  // 店铺优先用第 1 步选的，没选就退回授权自动发现的那个
+  PROMPT_SHOP = SELECTED_SHOP || ((STATUS && STATUS.shopId) ? String(STATUS.shopId) : '');
   try {
     const d = await apiCall('/api/etsy/prompts?shop_id=' + encodeURIComponent(PROMPT_SHOP || '_default'),
       { timeout: 20000, label: '读取提示词版本' });

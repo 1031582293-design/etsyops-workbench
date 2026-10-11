@@ -1562,6 +1562,35 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
   }
 
   // 本地校验：能在建草稿之前拦下的错误，绝不浪费 API 额度（SOP 第 19 节）
+  /* 列出「当前授权账号」下的所有店铺。
+   * 注意这里的「账号」是店主授权时登录的那个 Etsy 卖家账号，不是 API App 本身：
+   * Etsy 的 token 代表登录的卖家，一个卖家账号可以同时拥有多间店，
+   * 所以一次授权就能拿到该账号下全部的 shop_id（见 discoverShopId）。
+   * ⚠️ 如果店主的几间店是**不同** Etsy 账号，那一个 token 只覆盖其中一个账号，
+   *   必须对另一个账号再授权一次 —— 这版还没做多套 token，页面上会明确说明。 */
+  if (p === '/api/etsy/shops' && req.method === 'GET') {
+    if (!etsyConfigured()) return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 Etsy 凭证。' });
+    const rec = etsyStore.read();
+    if (!rec || !rec.accessToken) {
+      return json(res, 401, { error: 'not_authorized', note: '还没完成 Etsy 授权，先去授权再来看店铺列表。' });
+    }
+    try {
+      const found = await etsy.discoverShopId(etsyClient, rec.accessToken);
+      return json(res, 200, {
+        ok: true,
+        current: etsyCurrentShopId(),
+        userId: found.userId,
+        shops: found.allShops,
+        note: found.allShops.length > 1
+          ? '这个账号下有多间店。选中的店铺决定用哪套提示词版本；'
+            + '建草稿写入哪家店，取决于当前授权账号（见下方说明）。'
+          : '',
+      });
+    } catch (e) {
+      return json(res, 502, { error: 'shop_list_failed', note: e.message });
+    }
+  }
+
   /* ---------- Etsy 提示词版本库 ----------
    * 列出时不返回正文（正文可能很长），要编辑再单独取；这样切版本时响应很小。 */
   if (p === '/api/etsy/prompts' && req.method === 'GET') {
