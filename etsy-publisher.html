@@ -274,16 +274,35 @@
           素材缺失时会拒绝生成 —— 凭空写出来的规格是 Etsy 的合规风险。</div>
 
         <details class="promptbox">
-          <summary>提示词（点开可现场修改，改完对下一次生成立即生效）</summary>
+          <summary>提示词（按店铺分版本保存，可现场改、可切换）</summary>
+
+          <div class="row2" style="margin-top:12px">
+            <div>
+              <label class="fld">当前版本<span class="hint">切换后立即载入正文</span></label>
+              <select id="promptVer"><option value="">加载中…</option></select>
+            </div>
+            <div>
+              <label class="fld">另存为<span class="hint">填名字后点「另存为新版本」</span></label>
+              <input type="text" id="promptNewName" placeholder="例如：陶瓷摆件 / 数字下载" />
+            </div>
+          </div>
+
           <div class="msg info" style="margin:10px 0">
-            留空则用服务器内置版本；也可写成文件
-            <code>data/etsy-prompt.txt</code>（每次生成时读盘，改完不用重启）。
+            版本存在服务器上（<code>data/etsy-prompts.json</code>），换电脑也在。
+            正文里的 <code>{shop_name}</code> 会在生成时替换成当前店铺名，
+            多店铺共用一版也不会把别家店名写进去。
           </div>
-          <textarea id="promptBox" rows="10" placeholder="留空 = 用内置提示词"></textarea>
+
+          <textarea id="promptBox" rows="10" placeholder="选一版，或自己写"></textarea>
+
           <div class="btnrow">
-            <button class="btn sm ghost" id="btnPromptReset">恢复内置提示词</button>
-            <span class="hint" style="align-self:center">提示词按品类调（毛绒玩具和服装的 SEO 策略不同）</span>
+            <button class="btn sm" id="btnPromptSave">保存当前版本</button>
+            <button class="btn sm ghost" id="btnPromptNew">另存为新版本</button>
+            <button class="btn sm ghost" id="btnPromptActivate">设为该店默认</button>
+            <button class="btn sm ghost" id="btnPromptDel">删除这版</button>
+            <button class="btn sm ghost" id="btnPromptReset">清空改写</button>
           </div>
+          <div id="msgPrompt" class="msg"></div>
         </details>
 
         <div class="btnrow" style="margin-top:16px">
@@ -1264,9 +1283,11 @@ window.fillFromJson = function(obj){
   log('已用 JSON 填充表单', 's');
 };
 
-boot();
 // 首屏按默认类型（physical）把字段显隐摆对
 toggleItemType();
+// 提示词版本库要等 boot 里 STATUS 就绪（拿到 shop_id）后才能按店铺取版本，
+// 所以挂在 boot 的 then 上；取不到店铺时后端会退到 _default 桶，不影响使用。
+boot().then(() => loadPromptVersions()).catch(() => {});
 
 
 
@@ -1556,7 +1577,7 @@ document.getElementById('btnAiBatch').addEventListener('click', async () => {
       method: 'POST',
       body: JSON.stringify({
         items: todo.map(factsOf),
-        prompt: (document.getElementById('promptBox').value || '').trim() || undefined,
+        prompt: currentPrompt() || undefined,
       }),
       timeout: 30000,
       label: 'AI 批量生成',
@@ -1720,7 +1741,7 @@ function renderAiList() {
         const r = await apiCall('/api/etsy/ai/copy', {
           method: 'POST',
           body: JSON.stringify(Object.assign(factsOf(it),
-            { prompt: (document.getElementById('promptBox').value || '').trim() || undefined })),
+            { prompt: currentPrompt() || undefined })),
           timeout: 120000,
           label: 'AI 文案生成',
         });
@@ -1744,9 +1765,114 @@ function renderAiList() {
   });
 }
 
+/* ---------- 提示词版本库 ----------
+ * 版本存在后端 data/etsy-prompts.json，按店铺分桶；换电脑、换浏览器都在。
+ * 生成时正文里的 {shop_name} 会被替换成当前店铺名，
+ * 这样多个店铺共用同一版提示词也不会把别家的店名写进文案。 */
+let PROMPT_SHOP = '';
+let PROMPT_CUR_ID = '';
+
+function promptMsg(kind, html){
+  showMsg(document.getElementById('msgPrompt'), kind, html);
+}
+
+function currentPrompt(){
+  const t = (document.getElementById('promptBox').value || '').trim();
+  if (!t) return '';
+  return t.replace(/\{shop_name\}/g, (STATUS && STATUS.shopName) || '');
+}
+
+function renderPromptVersions(list, active){
+  const sel = document.getElementById('promptVer');
+  sel.innerHTML = (list || []).map(v =>
+    '<option value="' + esc(v.id) + '"' + (v.id === active ? ' selected' : '') + '>'
+    + esc(v.name) + (v.id === active ? '（默认）' : '') + '</option>').join('');
+  PROMPT_CUR_ID = active || ((list && list[0]) ? list[0].id : '');
+  if (PROMPT_CUR_ID) sel.value = PROMPT_CUR_ID;
+}
+
+async function loadPromptContent(id){
+  if (!id) return;
+  try {
+    const d = await apiCall('/api/etsy/prompts/get?shop_id=' + encodeURIComponent(PROMPT_SHOP || '_default')
+      + '&id=' + encodeURIComponent(id), { timeout: 20000, label: '读取提示词正文' });
+    document.getElementById('promptBox').value = d.content || '';
+    PROMPT_CUR_ID = d.id;
+    document.getElementById('promptVer').value = d.id;
+  } catch(e){ promptMsg('err', '正文加载失败：' + esc(e.message)); }
+}
+
+async function loadPromptVersions(){
+  PROMPT_SHOP = (STATUS && STATUS.shopId) ? String(STATUS.shopId) : '';
+  try {
+    const d = await apiCall('/api/etsy/prompts?shop_id=' + encodeURIComponent(PROMPT_SHOP || '_default'),
+      { timeout: 20000, label: '读取提示词版本' });
+    renderPromptVersions(d.versions, d.active);
+    await loadPromptContent(PROMPT_CUR_ID);
+  } catch(e){ promptMsg('err', '提示词版本加载失败：' + esc(e.message)); }
+}
+
+document.getElementById('promptVer').addEventListener('change', () => {
+  loadPromptContent(document.getElementById('promptVer').value);
+});
+
+document.getElementById('btnPromptSave').addEventListener('click', async () => {
+  const content = document.getElementById('promptBox').value;
+  if (!content.trim()){ promptMsg('err', '内容是空的，没什么可保存。'); return; }
+  const opt = document.getElementById('promptVer').selectedOptions[0];
+  const name = ((opt && opt.textContent) || '').replace('（默认）', '').trim() || '未命名';
+  try {
+    const d = await apiCall('/api/etsy/prompts', { method: 'POST', timeout: 30000,
+      body: { shop_id: PROMPT_SHOP, id: PROMPT_CUR_ID, name, content }, label: '保存提示词' });
+    renderPromptVersions(d.versions, d.active);
+    promptMsg('ok', '已保存到「' + esc(name) + '」，下次生成就用这一版。');
+  } catch(e){ promptMsg('err', '保存失败：' + esc(e.message)); }
+});
+
+document.getElementById('btnPromptNew').addEventListener('click', async () => {
+  const name = document.getElementById('promptNewName').value.trim();
+  const content = document.getElementById('promptBox').value;
+  if (!name){ promptMsg('err', '先给这版起个名字，例如「陶瓷摆件」。'); return; }
+  if (!content.trim()){ promptMsg('err', '内容是空的，先写一版再另存。'); return; }
+  try {
+    const d = await apiCall('/api/etsy/prompts', { method: 'POST', timeout: 30000,
+      body: { shop_id: PROMPT_SHOP, name, content }, label: '另存提示词' });
+    document.getElementById('promptNewName').value = '';
+    PROMPT_CUR_ID = d.id;
+    renderPromptVersions(d.versions, d.active);
+    document.getElementById('promptVer').value = d.id;
+    promptMsg('ok', '已另存为「' + esc(name) + '」并设为当前店铺默认。');
+  } catch(e){ promptMsg('err', '另存失败：' + esc(e.message)); }
+});
+
+document.getElementById('btnPromptActivate').addEventListener('click', async () => {
+  if (!PROMPT_CUR_ID){ promptMsg('err', '还没有选中任何版本。'); return; }
+  try {
+    await apiCall('/api/etsy/prompts/activate', { method: 'POST', timeout: 20000,
+      body: { shop_id: PROMPT_SHOP, id: PROMPT_CUR_ID }, label: '设为默认提示词' });
+    promptMsg('ok', '已设为该店铺的默认版本。');
+    await loadPromptVersions();
+  } catch(e){ promptMsg('err', '设置失败：' + esc(e.message)); }
+});
+
+document.getElementById('btnPromptDel').addEventListener('click', async () => {
+  if (!PROMPT_CUR_ID) return;
+  const opt = document.getElementById('promptVer').selectedOptions[0];
+  const nm = ((opt && opt.textContent) || '').replace('（默认）', '').trim();
+  if (!confirm('确定删除「' + nm + '」这一版提示词？删掉就找不回来了。')) return;
+  try {
+    const d = await apiCall('/api/etsy/prompts/del', { method: 'POST', timeout: 20000,
+      body: { shop_id: PROMPT_SHOP, id: PROMPT_CUR_ID }, label: '删除提示词' });
+    renderPromptVersions(d.versions, d.active);
+    await loadPromptContent(d.active);
+    promptMsg('ok', '已删除「' + esc(nm) + '」。');
+  } catch(e){ promptMsg('err', '删除失败：' + esc(e.message)); }
+});
+
 document.getElementById('btnPromptReset').addEventListener('click', () => {
   document.getElementById('promptBox').value = '';
-  showAiMsg('info', '已清空编辑框，下次生成将使用服务器内置提示词（或 data/etsy-prompt.txt，若存在）。');
+  promptMsg('info', '已清空。留着空的话，生成时用服务器内置默认版本；'
+    + '也可以直接在上面改完点「保存当前版本」。');
 });
 </script>
 </body>

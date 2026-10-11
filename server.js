@@ -415,6 +415,85 @@ TITLE: <标题>
 DESCRIPTION: <描述正文>
 TAGS: <tag1, tag2, ...>`;
 
+/* Fursuit / 兽装店铺专用的内置种子版本。
+ * 这是工作台早期为一间 fursuit 店铺定制的写法，原样保留下来作为可选版本，
+ * 不再当全局默认 —— 运营有多间店铺，默认用哪版由前端按店铺决定。
+ * 店铺名写成了 {shop_name} 占位符，生成时由前端替换成当前店铺，
+ * 免得多店铺共用一版时把别家的店名写进去。 */
+const ETSY_AI_FURSUIT_PROMPT = `你是一名熟悉 Etsy SEO、欧美 Furry 市场和 Fursuit 产品的 Listing 文案助手。
+为目标店铺 {shop_name} 生成一套完整的英文 Etsy Listing。
+
+规则（务必遵守）：
+1. Title 不超过 140 个字符，把最重要的产品锚点词放在前面。
+2. Description 用自然、专业、易懂的美式英语，适合手机端阅读，段落简短。
+3. 使用清晰的大写小标题（如 MATERIALS、CARE、SIZING），不要过多Emoji。
+4. 不要反复说明 handmade、custom、high quality、soft 等相同信息。
+5. 不要使用营销套话（perfect、best、premium quality 等），除非产品信息支持。
+6. **不得使用事实资料里没有的词**。例如：没有响笛就不写 squeaky；不是脚爪就不写 feet paws；
+   未在资料中出现的物种、风格、配件一律不得提及。真实性优先于流量。
+7. TAGS 恰好 13 个，每个不超过 20 个字符，需覆盖：核心产品词、同义词、风格词、
+   物种词、颜色/结构特征、定制意图、使用场景、目标用户。彼此不要重复。
+8. 只输出三段，格式严格如下（不要加任何其它说明）：
+TITLE: <标题>
+DESCRIPTION: <描述正文>
+TAGS: <tag1, tag2, ...>`;
+
+/* ---------------- Etsy 提示词版本库 ----------------
+ * 为什么落盘到 data/ 而不是前端 localStorage：运营可能在多台机器上用，
+ * 也存在别的浏览器里，存在后端才能「改一次、到处生效」。
+ * 结构：按店铺分桶，每个店铺自己有一组版本 + 一个默认版本 id。
+ *   { version:1, shops: { "<shopId>": { active, versions:[{id,name,content,updatedAt}] }, "_default": {...} } }
+ * 空店铺首次访问时会复制一份种子进去，所以每个店都能独立改，互不干扰。 */
+const ETSY_PROMPTS_FILE = join(DATA_DIR, 'etsy-prompts.json');
+const PROMPT_SEEDS = [
+  { id: 'generic', name: '通用（多品类）', content: ETSY_AI_DEFAULT_PROMPT },
+  { id: 'fursuit', name: 'Fursuit / 兽装', content: ETSY_AI_FURSUIT_PROMPT },
+];
+const PROMPT_CONTENT_MAX = 20000;
+
+function readPrompts() {
+  try {
+    const d = JSON.parse(readFileSync(ETSY_PROMPTS_FILE, 'utf8'));
+    if (!d || typeof d !== 'object' || !d.shops || typeof d.shops !== 'object') return null;
+    return d;
+  } catch { return null; }
+}
+
+function writePrompts(obj) {
+  mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = ETSY_PROMPTS_FILE + '.tmp';
+  writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
+  renameSync(tmp, ETSY_PROMPTS_FILE);
+}
+
+function seedVersions() {
+  const now = Date.now();
+  return PROMPT_SEEDS.map(s => ({ id: s.id, name: s.name, content: s.content, updatedAt: now }));
+}
+
+/* 取某个店铺的版本桶。店铺第一次出现时，把两版种子复制给它 —— 之后它自己改自己的。 */
+function promptBucket(d, shopId) {
+  const key = String(shopId || '_default');
+  if (!d.shops[key]) {
+    d.shops[key] = { active: 'generic', versions: seedVersions() };
+    writePrompts(d);
+  }
+  return d.shops[key];
+}
+
+function ensurePrompts() {
+  let d = readPrompts();
+  if (!d) {
+    d = { version: 1, shops: { _default: { active: 'generic', versions: seedVersions() } } };
+    writePrompts(d);
+  }
+  return d;
+}
+
+function newPromptId() {
+  return 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
 async function aiGenerate(systemPrompt, userPrompt) {
   const r = await aiFetch()(`${AI_BASE_URL}/chat/completions`, {
     method: 'POST',
@@ -1483,6 +1562,103 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
   }
 
   // 本地校验：能在建草稿之前拦下的错误，绝不浪费 API 额度（SOP 第 19 节）
+  /* ---------- Etsy 提示词版本库 ----------
+   * 列出时不返回正文（正文可能很长），要编辑再单独取；这样切版本时响应很小。 */
+  if (p === '/api/etsy/prompts' && req.method === 'GET') {
+    const shopId = (new URL(req.url, 'http://x')).searchParams.get('shop_id') || '_default';
+    const d = ensurePrompts();
+    const b = promptBucket(d, shopId);
+    return json(res, 200, {
+      ok: true, shopId, active: b.active,
+      versions: b.versions.map(v => ({ id: v.id, name: v.name, updatedAt: v.updatedAt })),
+    });
+  }
+
+  if (p === '/api/etsy/prompts/get' && req.method === 'GET') {
+    const q = (new URL(req.url, 'http://x')).searchParams;
+    const shopId = q.get('shop_id') || '_default';
+    const id = q.get('id');
+    const d = ensurePrompts();
+    const b = promptBucket(d, shopId);
+    const v = b.versions.find(x => x.id === id)
+      || b.versions.find(x => x.id === b.active)
+      || b.versions[0];
+    if (!v) return json(res, 404, { error: 'prompt_not_found', note: '这个店铺下还没有任何提示词版本。' });
+    return json(res, 200, { ok: true, id: v.id, name: v.name, content: v.content });
+  }
+
+  if (p === '/api/etsy/prompts' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const shopId = String(b.shop_id || '_default');
+      const name = String(b.name || '').trim();
+      const content = String(b.content || '');
+      if (!name) return json(res, 400, { error: 'bad_request', note: '版本名不能为空。' });
+      if (!content.trim()) return json(res, 400, { error: 'bad_request', note: '提示词内容不能为空。' });
+      if (content.length > PROMPT_CONTENT_MAX) {
+        return json(res, 400, { error: 'bad_request', note: `提示词 ${content.length} 字符，超过 ${PROMPT_CONTENT_MAX} 上限。` });
+      }
+      const d = ensurePrompts();
+      const bucket = promptBucket(d, shopId);
+      const now = Date.now();
+      let id = String(b.id || '');
+      const hit = bucket.versions.find(x => x.id === id);
+      if (hit) {
+        hit.name = name; hit.content = content; hit.updatedAt = now;
+      } else {
+        id = newPromptId();
+        bucket.versions.push({ id, name, content, updatedAt: now });
+        // 新建的第一版直接设为默认，省一步操作
+        if (bucket.versions.length === 1) bucket.active = id;
+      }
+      writePrompts(d);
+      etsyLog('提示词已保存：店铺=' + shopId + ' 版本=' + id + '（' + name + '）');
+      return json(res, 200, { ok: true, id, active: bucket.active,
+        versions: bucket.versions.map(v => ({ id: v.id, name: v.name, updatedAt: v.updatedAt })) });
+    } catch (e) {
+      return json(res, 400, { error: 'bad_request', note: e.message });
+    }
+  }
+
+  if (p === '/api/etsy/prompts/activate' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const shopId = String(b.shop_id || '_default');
+      const id = String(b.id || '');
+      const d = ensurePrompts();
+      const bucket = promptBucket(d, shopId);
+      if (!bucket.versions.some(x => x.id === id)) {
+        return json(res, 404, { error: 'prompt_not_found', note: '这版提示词不存在，可能已被删除。' });
+      }
+      bucket.active = id;
+      writePrompts(d);
+      etsyLog('提示词默认版本切换：店铺=' + shopId + ' → ' + id);
+      return json(res, 200, { ok: true, active: id });
+    } catch (e) {
+      return json(res, 400, { error: 'bad_request', note: e.message });
+    }
+  }
+
+  if (p === '/api/etsy/prompts/del' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const shopId = String(b.shop_id || '_default');
+      const id = String(b.id || '');
+      const d = ensurePrompts();
+      const bucket = promptBucket(d, shopId);
+      if (bucket.versions.length <= 1) {
+        return json(res, 400, { error: 'cannot_delete_last', note: '至少要保留一版提示词。' });
+      }
+      bucket.versions = bucket.versions.filter(x => x.id !== id);
+      if (bucket.active === id) bucket.active = bucket.versions[0].id;
+      writePrompts(d);
+      return json(res, 200, { ok: true, active: bucket.active,
+        versions: bucket.versions.map(v => ({ id: v.id, name: v.name, updatedAt: v.updatedAt })) });
+    } catch (e) {
+      return json(res, 400, { error: 'bad_request', note: e.message });
+    }
+  }
+
   if (p === '/api/etsy/validate' && req.method === 'POST') {
     try {
       const b = await readJson(req);
