@@ -51,6 +51,12 @@ const IMPORT_ALIASES = {
   // 生产伙伴
   partner:'production_partner_ids', 生产伙伴:'production_partner_ids',
   'production partner':'production_partner_ids', 工厂:'production_partner_ids',
+  // 商品类型：physical（实物）/ digital（数字文件）
+  item_type:'item_type', 商品类型:'item_type', 类型:'item_type', type:'item_type',
+  'item type':'item_type', 实物或数字:'item_type',
+  // 交付文件名（仅数字商品；文件字节要在页面上传，表格只记名字便于对号）
+  files:'digital_file_names', 交付文件:'digital_file_names', 交付文件名:'digital_file_names',
+  'digital files':'digital_file_names',
   // 变体
   variations:'variations_json', 变体:'variations_json',
   // 其他
@@ -128,6 +134,16 @@ function parseWhenMade(v) {
   return '';
 }
 
+/* 解析 item_type：实物 physical / 数字文件 digital。
+ * 默认 physical —— 现在绝大多数链接是实物，空值按实物处理不会误伤老表格。 */
+function parseItemType(v) {
+  const t = String(v == null ? '' : v).trim().toLowerCase();
+  if (!t) return 'physical';
+  if (/digital|数字|虚拟|下载|电子/.test(t)) return 'digital';
+  if (/physical|实物|实体/.test(t)) return 'physical';
+  return 'physical';
+}
+
 /* 解析 is_supply：表格里常写「是/否」。 */
 function parseSupply(v) {
   const t = String(v == null ? '' : v).trim().toLowerCase();
@@ -201,6 +217,8 @@ function parseImportTable(text) {
       item_dimensions_unit: (get('item_dimensions_unit') || 'cm').trim().toLowerCase(),
       production_partner_ids: get('production_partner_ids').trim(),
       audience_note: get('audience_note').trim(),
+      item_type: parseItemType(get('item_type')),
+      digital_file_names: get('digital_file_names').trim(),
       shop_section_id: get('shop_section_id').trim(),
       return_policy_id: get('return_policy_id').trim(),
       variations_json: get('variations').trim(),

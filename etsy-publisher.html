@@ -302,6 +302,17 @@
         <h3>商品资料</h3>
         <div class="ph-sub">这一屏的内容全部来自你的事实资料卡。AI 不能猜材质、认证、价格与交期。</div>
 
+        <div class="row2" style="margin-bottom:6px">
+          <div>
+            <label class="fld">商品类型 Item type<span class="hint">先选类型，后面哪些字段生效由它决定</span></label>
+            <select id="fItemType">
+              <option value="physical">Physical item（实物商品）</option>
+              <option value="digital">Digital files（数字文件）</option>
+            </select>
+          </div>
+          <div id="typeTip" class="msg info" style="align-self:flex-end;margin:0"></div>
+        </div>
+
         <label class="fld">标题 Title <span class="counter" id="cntTitle">0 / 140</span></label>
         <input type="text" id="fTitle" maxlength="200" placeholder="Ceramic Horse Figurine with Kiln Fired Glaze" />
 
@@ -355,16 +366,16 @@
         </div>
 
         <div class="row3" style="margin-top:4px">
-          <div>
-            <label class="fld">配送模板</label>
+          <div id="wrapShip">
+            <label class="fld">配送模板 Shipping profile</label>
             <select id="fShip"><option value="">先在步骤 1 读取</option></select>
           </div>
-          <div>
-            <label class="fld">处理档案</label>
+          <div id="wrapReady">
+            <label class="fld">处理档案 Processing profile</label>
             <select id="fReady"><option value="">先在步骤 1 读取</option></select>
           </div>
           <div>
-            <label class="fld">店铺分区<span class="hint">可留空</span></label>
+            <label class="fld">店铺分区 Shop section<span class="hint">可留空</span></label>
             <select id="fSection"><option value="">未分类</option></select>
           </div>
         </div>
@@ -386,6 +397,7 @@
         </div>
         <div id="msgAi" class="msg"></div>
 
+        <div id="blockPhysical">
         <div class="subhead">物理属性与生产伙伴
           <span class="hint">Etsy 的API 层把这些标为可选，但 Shop Manager 界面会拦住不填的草稿。
           所以：不填不阻断提交，但强烈建议补齐，否则后台无法编辑或上架。</span>
@@ -433,6 +445,26 @@
           </div>
         </div>
 
+        </div>
+
+        <div id="blockDigital" style="display:none">
+          <div class="subhead">交付文件 Digital files
+            <span class="hint">买家付款后下载的那些文件，最多 5 个、每个 ≤20MB。
+            文件名上传后<b>不可改名</b>，限 70 字符内，只能用字母数字与 - _ .</span>
+          </div>
+          <input type="file" id="digitalFiles" multiple class="hidden" />
+          <div class="drop" id="digitalDrop">点击选择交付文件，或拖到这里
+            <span style="display:block;font-size:11.5px;color:var(--text-faint);margin-top:6px">
+            支持 bmp doc gif jpeg jpg mobi mov mp3 mpeg pdf png psp rtf stl txt zip ePUB iBook</span>
+          </div>
+          <div id="digitalFileList"></div>
+          <div id="msgDigital" class="msg"></div>
+          <div class="msg info" id="digitalMtoTip" style="display:none">
+            制作时间选了 <b>Made to order</b>：按单制作的数字商品<b>不需要</b>现在上传文件，
+            成交后在 Shop Manager → Orders → Complete order 里上传即可。
+          </div>
+        </div>
+
         <div class="btnrow">
           <button class="btn" id="btnValidate">本地校验（不消耗 Etsy 额度）</button>
           <button class="btn" data-goto="6">下一步：图片与库存 →</button>
@@ -449,7 +481,11 @@
         <div class="msg info" id="imgSummary">图片在第 1 步选定。</div>
 
 
-        <label class="fld" style="margin-top:20px">变体<span class="hint">无变体就留空，留空则用上面的主价格与数量</span></label>
+        <label class="fld" style="margin-top:20px">变体 Variations<span class="hint">无变体就留空，留空则用上面的主价格与数量</span></label>
+        <div id="varDigitalNote" class="msg warn" style="display:none">
+          <b>数字商品不支持变体。</b>官方原文：Variations are unavailable for digital listings。
+          需要多个规格就拆成几条独立链接。
+        </div>
         <div id="varBox"></div>
         <button class="btn sm ghost" id="btnAddVar" style="margin-top:10px">+ 添加一个变体</button>
         <div id="msgVar" class="msg"></div>
@@ -476,6 +512,7 @@
             <tr><td>图片</td><td id="dImg">—</td></tr>
             <tr><td>属性</td><td id="dProp">—</td></tr>
             <tr><td>库存</td><td id="dInv">—</td></tr>
+            <tr id="rowDFiles"><td>交付文件</td><td id="dFiles">—</td></tr>
           </table>
           <div class="msg warn" id="dWarn" style="display:block"></div>
         </div>
@@ -829,6 +866,88 @@ fPrice.addEventListener('input', () => {
   document.getElementById('cntPrice').textContent = isNaN(v) ? '→ ?' : ('→ ' + Math.round(v * 100));
 });
 
+/* ---------- 商品类型：physical / digital ----------
+ * 官方规则（help.etsy.com，2026-10 核对）：
+ *  - Digital listings don't have processing profiles（数字商品没有处理档案）
+ *  - Variations are unavailable for digital listings（数字商品不支持变体）
+ *  - 即时下载必须挂交付文件才能 publish / save draft；按单制作不用挂
+ * 所以类型一变，整屏字段的必填关系就变了，必须在前端先切干净。 */
+const DIGITAL_FILES = [];
+const DIGITAL_MAX = 5;
+const DIGITAL_MAX_BYTES = 20 * 1024 * 1024;
+const DIGITAL_EXT = ['bmp','doc','gif','jpeg','jpg','mobi','mov','mp3','mpeg','pdf','png','psp','rtf','stl','txt','zip','epub','ibook'];
+const DIGITAL_NAME_RE = /^[A-Za-z0-9._-]{1,70}$/;
+
+function isDigital(){ return document.getElementById('fItemType').value === 'digital'; }
+function isMadeToOrder(){ return document.getElementById('fWhen').value === 'made_to_order'; }
+
+function toggleItemType(){
+  const dig = isDigital();
+  document.getElementById('blockPhysical').style.display = dig ? 'none' : '';
+  document.getElementById('blockDigital').style.display  = dig ? '' : 'none';
+  document.getElementById('wrapShip').style.display      = dig ? 'none' : '';
+  document.getElementById('wrapReady').style.display     = dig ? 'none' : '';
+  const varNote = document.getElementById('varDigitalNote');
+  if (varNote) varNote.style.display = dig ? '' : 'none';
+  const addVar = document.getElementById('btnAddVar');
+  if (addVar) addVar.disabled = dig;
+  // 数字商品不支持变体：切过去时把已填的变体清掉，避免带着无效数据进草稿
+  if (dig && VARS.length){ VARS.length = 0; renderVars(); }
+  document.getElementById('typeTip').innerHTML = dig
+    ? '<b>数字商品：</b>不用填配送模板与处理档案，也不支持变体。即时下载必须挂交付文件，按单制作不用。'
+    : '<b>实物商品：</b>需要配送模板与处理档案，可填重量、尺寸与变体。';
+  toggleMtoTip();
+}
+
+function toggleMtoTip(){
+  const el = document.getElementById('digitalMtoTip');
+  if (el) el.style.display = (isDigital() && isMadeToOrder()) ? '' : 'none';
+}
+
+document.getElementById('fItemType').addEventListener('change', toggleItemType);
+document.getElementById('fWhen').addEventListener('change', toggleMtoTip);
+
+const digitalInput = document.getElementById('digitalFiles');
+document.getElementById('digitalDrop').addEventListener('click', () => digitalInput.click());
+digitalInput.addEventListener('change', () => addDigitalFiles(digitalInput.files));
+
+function addDigitalFiles(list){
+  const errs = [];
+  Array.from(list || []).forEach(f => {
+    if (DIGITAL_FILES.length >= DIGITAL_MAX){ errs.push('最多 ' + DIGITAL_MAX + ' 个文件，「' + f.name + '」没加进去'); return; }
+    if (f.size > DIGITAL_MAX_BYTES){ errs.push('「' + f.name + '」' + (f.size/1024/1024).toFixed(1) + 'MB，超过 20MB 上限'); return; }
+    const ext = (f.name.split('.').pop() || '').toLowerCase();
+    if (DIGITAL_EXT.indexOf(ext) < 0){ errs.push('「' + f.name + '」的 .' + ext + ' 不在 Etsy 允许的格式里'); return; }
+    if (!DIGITAL_NAME_RE.test(f.name)){ errs.push('「' + f.name + '」文件名不合规（≤70 字符，只能用字母数字与 - _ .，上传后改不了）'); return; }
+    const fr = new FileReader();
+    fr.onload = () => {
+      DIGITAL_FILES.push({ name: f.name, size: f.size, data: String(fr.result).split(',')[1] });
+      renderDigitalFiles();
+    };
+    fr.readAsDataURL(f);
+  });
+  renderDigitalFiles();
+  const m = document.getElementById('msgDigital');
+  if (errs.length) showMsg(m, 'err', errs.map(esc).join('<br>'));
+  else if (DIGITAL_FILES.length) showMsg(m, 'ok', DIGITAL_FILES.length + ' 个文件已就绪。');
+}
+
+function renderDigitalFiles(){
+  const box = document.getElementById('digitalFileList');
+  if (!DIGITAL_FILES.length){
+    box.innerHTML = '<div style="font-size:12.5px;color:var(--text-faint);padding:8px 0">还没有交付文件。</div>';
+    return;
+  }
+  box.innerHTML = DIGITAL_FILES.map((f, i) =>
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;font-size:12.5px">'
+    + '<span>' + esc(f.name) + ' <span style="color:var(--text-faint)">' + Math.round(f.size/1024) + ' KB</span></span>'
+    + '<button class="btn sm ghost" data-dig-del="' + i + '">移除</button></div>').join('');
+  box.querySelectorAll('[data-dig-del]').forEach(b => b.addEventListener('click', () => {
+    DIGITAL_FILES.splice(Number(b.dataset.digDel), 1);
+    renderDigitalFiles();
+  }));
+}
+
 /* ---------- 本地校验 ---------- */
 function collectForm(){
   return {
@@ -838,6 +957,7 @@ function collectForm(){
     price: fPrice.value,
     quantity: document.getElementById('fQty').value,
     taxonomy_id: PICKED_TAX ? PICKED_TAX.id : '',
+    item_type: document.getElementById('fItemType').value,
     who_made: document.getElementById('fWho').value,
     when_made: document.getElementById('fWhen').value,
     is_supply: document.getElementById('fSupply').value === 'true',
@@ -855,6 +975,10 @@ function collectForm(){
     item_dimensions_unit: document.getElementById('fDimUnit').value,
     production_partner_ids: document.getElementById('fPartner').value.trim(),
     audience_note: document.getElementById('fAudience').value.trim(),
+    // 交付文件只在数字商品时用；base64 只在真要建草稿时才带上
+    digital_files: isDigital()
+      ? DIGITAL_FILES.map(f => ({ name: f.name, size: f.size, data: f.data }))
+      : [],
   };
 }
 
@@ -1052,6 +1176,18 @@ document.getElementById('btnDraft').addEventListener('click', async () => {
     document.getElementById('dProp').textContent = (d.properties || []).length
       ? (d.properties || []).filter(x => x.ok).length + ' / ' + d.properties.length + ' 成功' : '未填写';
     document.getElementById('dInv').textContent = d.inventory ? '已写入' : '未写变体';
+    // 交付文件：数字商品才有；失败项要点名，否则运营会以为传上去了
+    const dfRow = document.getElementById('rowDFiles');
+    const dfs = d.digital_files || [];
+    dfRow.style.display = dfs.length ? '' : 'none';
+    if (dfs.length) {
+      const okD = dfs.filter(x => x.ok).length;
+      const bad = dfs.filter(x => !x.ok);
+      document.getElementById('dFiles').innerHTML = okD + ' / ' + dfs.length + ' 成功'
+        + (bad.length ? '<br><span style="color:var(--bad)">失败：'
+            + bad.map(x => esc(x.name) + '（' + esc(x.error) + '）').join('；')
+            + '<br>草稿已建好，请到 Shop Manager 手动补传文件。</span>' : '');
+    }
     document.getElementById('dWarn').innerHTML =
       '<b>草稿已建立，还没有发布。</b>Etsy 上架费 $0.20 只在发布时产生。<br>' +
       '请先到 Shop Manager → Listings 里核对：首图裁切、标题、描述、变体价格、库存、处理时间。<br>' +
@@ -1129,6 +1265,8 @@ window.fillFromJson = function(obj){
 };
 
 boot();
+// 首屏按默认类型（physical）把字段显隐摆对
+toggleItemType();
 
 
 

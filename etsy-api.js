@@ -699,6 +699,15 @@ function validateTags(tags) {
 }
 
 /** 建草稿前的本地校验：能提前拦下的绝不浪费 API 额度。 */
+/* 数字商品交付文件的硬上限（Etsy 官方：最多 5 个文件、每个最大 20MB） */
+const DIGITAL_FILE_MAX = 5;
+const DIGITAL_FILE_MAX_BYTES = 20 * 1024 * 1024;
+
+/* 输入是否为数字商品。空值按实物处理 —— 老表格没有 item_type 列时不改变原有行为。 */
+function isDigitalInput(inp) {
+  return String((inp && inp.item_type) || 'physical').toLowerCase() === 'digital';
+}
+
 function validateDraftInput(inp) {
   const errs = [];
   const push = (k, msg) => { if (!errs.some(e => e.startsWith(k))) errs.push(msg); };
@@ -728,9 +737,29 @@ function validateDraftInput(inp) {
     errs.push('缺少 is_supply（是否为手工材料/工具包，成品通常 false）');
   }
 
-  // 实物必填
-  if (!inp.shipping_profile_id) errs.push('缺少 shipping_profile_id（实物必填，先在 Shop Manager 建配送模板）');
-  if (!inp.readiness_state_id) errs.push('缺少 readiness_state_id（实物必填，先在 Shop Manager 建处理档案）');
+  // ★ 实物与数字商品的必填项完全不同（官方规则，2026-10 核对）：
+  //   - Digital listings don't have processing profiles
+  //   - Variations are unavailable for digital listings
+  //   - 即时下载没挂文件，publish 和 save draft 都会被拒
+  if (isDigitalInput(inp)) {
+    const mto = String(inp.when_made || '') === 'made_to_order';
+    const files = Array.isArray(inp.digital_files) ? inp.digital_files : [];
+    if (!mto && !files.length) {
+      errs.push('数字商品（即时下载）必须挂交付文件，否则 Etsy 不允许发布或存草稿。'
+        + '若属于按单制作，请把「when_made」改成 made_to_order');
+    }
+    if (files.length > DIGITAL_FILE_MAX) {
+      errs.push(`交付文件 ${files.length} 个，超过 Etsy 上限 ${DIGITAL_FILE_MAX} 个`);
+    }
+    files.forEach(f => {
+      if (f && f.size && f.size > DIGITAL_FILE_MAX_BYTES) {
+        errs.push(`交付文件「${f.name || '未命名'}」超过 ${DIGITAL_FILE_MAX_BYTES / 1024 / 1024}MB 上限`);
+      }
+    });
+  } else {
+    if (!inp.shipping_profile_id) errs.push('缺少 shipping_profile_id（实物必填，先在 Shop Manager 建配送模板）');
+    if (!inp.readiness_state_id) errs.push('缺少 readiness_state_id（实物必填，先在 Shop Manager 建处理档案）');
+  }
 
   return { ok: errs.length === 0, errors: errs };
 }
@@ -749,9 +778,12 @@ function buildDraftForm(inp) {
     when_made: String(inp.when_made),
     is_supply: inp.is_supply ? 'true' : 'false',
     taxonomy_id: String(inp.taxonomy_id),
-    shipping_profile_id: String(inp.shipping_profile_id),
-    readiness_state_id: String(inp.readiness_state_id),
   };
+  // 数字商品没有配送模板与处理档案，带了反而可能被拒
+  if (!isDigitalInput(inp)) {
+    if (inp.shipping_profile_id) form.shipping_profile_id = String(inp.shipping_profile_id);
+    if (inp.readiness_state_id) form.readiness_state_id = String(inp.readiness_state_id);
+  }
   if (inp.return_policy_id) form.return_policy_id = String(inp.return_policy_id);
   if (inp.shop_section_id) form.shop_section_id = String(inp.shop_section_id);
   // ★ tags / materials 必须转成逗号分隔的**字符串**再进 URLSearchParams。
@@ -805,6 +837,24 @@ async function draftListing(client, inp) {
     }
   }
 
+  // 交付文件（数字商品）：和图片一个道理，必须等 listing_id 出来才能挂上去。
+  // 端点为 uploadListingFile；失败时不回滚草稿 —— 草稿已经建好了，
+  // 明确告诉运营「文件没挂上、去后台补传」比静默丢掉更好排查。
+  const digitalFiles = [];
+  if (isDigitalInput(inp)) {
+    for (const f of inp.digital_files || []) {
+      if (!f || !f.data) continue;
+      const fd = new FormData();
+      fd.append('file', Buffer.from(f.data, 'base64'), f.name || 'file.pdf');
+      try {
+        const r = await client.post(`/shops/${sid}/listings/${listingId}/files`, { multipart: fd });
+        digitalFiles.push({ name: f.name, ok: true, listing_file_id: r.listing_file_id || '' });
+      } catch (e) {
+        digitalFiles.push({ name: f.name, ok: false, error: e.message });
+      }
+    }
+  }
+
   // 属性（Attributes）：必须在建完草稿后单独补，且 value_id 必须来自该taxonomy 的属性表
   const props = [];
   for (const p of inp.properties || []) {
@@ -832,7 +882,10 @@ async function draftListing(client, inp) {
     }
   }
 
-  return { listing_id: listingId, state: created.state, images, properties: props, inventory };
+  return {
+    listing_id: listingId, state: created.state, images,
+    properties: props, inventory, digital_files: digitalFiles,
+  };
 }
 
 function buildInventoryBody(inp) {
