@@ -1,6 +1,6 @@
 # 电商运营工作台 · 搭建总结
 
-> **本文按日期追加章节**（第一章是 10-02，最新进展见第十一章 2026-10-07 公众号前端迭代）。
+> **本文按日期追加章节**（第一章是 10-02，最新进展见第十二章 2026-10-11~12 Etsy 上架流程对齐与多账号改造）。
 > 每章记录该阶段**已完成的搭建步骤**，未完成的留作「下一步待办」。
 > 配套文档：`OPERATOR-GUIDE.md`（操作人 Windows 傻瓜指引）、`MAC-QUICKSTART.md`（Mac 傻瓜指引）、`DEPLOY.md`（总部署文档）、`PITFALLS.md`（坑与避坑清单）。
 
@@ -13,6 +13,7 @@
 | 九 | 10-06 | 稳定性改造、AI 生稿根因修复、部署通道厘清 |
 | **十** | **10-07** | **★ Etsy Open API v3 全链路打通 + 工作流重排为七步** |
 | **十一** | **10-07** | **公众号工作台前端专项迭代（预览卡顿根治 · 封面 · 排版引擎 · 画布 · iframe 隔离）** |
+| **十二** | **10-11 ~ 10-12** | **★ Etsy 上架流程三方对齐 + digital 商品类型 + 提示词多版本库 + 多 Etsy 账号基建** |
 
 ---
 
@@ -619,5 +620,122 @@ aiproxy 7 / batcfg 20
 
 ### 13. 自测规模（本轮累计）
 全套 **803 项全绿**，新增脚本：`selftest.preview / cover2 / lite / canvas2 / parse / cover3 / frame / layout / layout2 / perf`（含用户 etsy 161 项）。
+
+---
+
+## 十二、2026-10-11 ~ 10-12 进展补充（Etsy 上架流程三方对齐 + digital 类型 + 提示词多版本 + 多账号基建）
+
+### 12.1 起因
+
+用户反馈「工作台 Etsy 上架流程用起来很多问题，跟 SOP 对不上」，要求把 **SOP（`Etsy新手产品上架SOP.docx`，20 节 / 9 个主节点）**、**Etsy 官方后台上架页面**、**工作台现有 7 步流程**做三方逐项对照，找出不顺畅与漏掉的环节。
+
+### 12.2 三方对照的结论
+
+三者不是同一个维度的东西，这是理解全部差异的钥匙：
+
+- **官方后台** = 一张**要填完的表单**。它只管字段有没有填对，不管事实从哪来。
+- **SOP** = 在这张表单**前面加 6 个准备节点**（01 资料卡 / 02 资格与成本 / 03 关键词验证 / 04·06 文案 / 05·08·09 图片 / 07·10 审核），**后面加 2 个收尾节点**（17 验收 / 记录 / 复盘）。中间第 11~13 节的「十二步」与官方后台字段基本一一对应。
+- **工作台** = 只实现了中间那段（填表）+ 04·06 的 AI 文案。准备节点被压成「给料」一步，审核被压成 `Local validate`，收尾完全没有。
+
+结果：**SOP 有 4 个节点在工作台里完全没有对应环节**——02 资格·成本·履约、03 关键词验证、07 锁定与事实审核、17 验收·记录·复盘。另有 3 处「有但缺关键项」：01 资料卡字段不全、05·08·09 图片退化为拖图、10 联合审核只做机械校验。
+
+排查中还查出一个**真断点**：第 6 步填的变体**根本没写进 Etsy**。后端 `etsy-api.js` 的变体能力是完整的（`validateVariationPlan` / `expandVariationCombinations` / `buildVariationBody`，`validate` 与 `draft` 两个接口都收 `variation_dimensions`），但前端 `collectForm()` 从不提交这两个字段，建草稿时走的是「提示人工去后台补」分支。另外 **SKU 在页面上没有输入框**（`collectForm()` 里写的 `document.getElementById('fSku') ? ... : ''`，但 HTML 里没有这个元素），变体行的 `sku` 也没被渲染。
+
+### 12.3 两个必须分清的概念
+
+**（1）「上传文件」在 Etsy 上架语境里是两种完全不同的东西**
+
+| | 是什么 | 上限 | 什么时候用 |
+|---|---|---|---|
+| **Photos and video** | 商品展示图 | 20 图 + 1 个 5–15 秒视频 | 本地阶段就给 AI 看；传到 Etsy 靠 `POST /listings/{id}/images` |
+| **Digital files** | 买家付款后下载的那个 PDF / ZIP / STL，**是「货」本身** | 5 个、每个 ≤20MB | 仅数字商品；靠 `uploadListingFile` 上传 |
+
+两者**都必须先有 `listing_id`** 才能上传。建草稿（`Create draft`）只需要文字字段，一个文件都不需要——`draftListing()` 的现有实现就是这个顺序：先建草稿拿 id，再逐个挂图 / 属性 / 变体 / 交付文件。
+
+**（2）「账号下的所有店铺」指的是哪个账号**
+
+不是 API App / keystring（那只是应用的身份证），而是**授权时登录的那个 Etsy 卖家账号**。Etsy 的 token 代表登录的卖家，一个卖家账号可有多间店，一次授权即可列全（`discoverShopId` → `GET /users/{user_id}/shops`）。
+
+但店主的几间店若是**不同 Etsy 账号**，一个 token 只覆盖其中一个账号，必须分别授权。已确认用户属于这种情况。
+
+### 12.4 优化后的流程方案（9 步）
+
+按 SOP 补齐缺失节点、去掉「17 发布验收 + 记录 + 复盘」（用户确认这属于上架后的动作，不纳入上架流程）：
+
+1. 给料与商品类型 → 2. 事实与资格 → 3. 关键词 → 4. AI 文案 → 5. 审核与锁定 → 6. 店铺与类目 → 7. 商品资料 → 8. 价格·库存·变体 → 9. 写入与发布
+
+其中 2 / 3 / 5 为新增，6 由现有「店铺设置 + 类目与属性」合并而来。
+
+### 12.5 本轮已落地的改动（4 个 commit，github + gitee 均已同步）
+
+| commit | 内容 | 前端 | 后端 |
+|---|---|---|---|
+| `1a69744` | digital 商品类型支持 + AI 提示词去品类化 | ✅ | ✅ |
+| `04cfa92` | 提示词改为多版本库，按店铺分桶 | ✅ | ✅ |
+| `e2523b9` | 第 1 步店铺下拉 | ✅ | ✅ |
+| `40553c3` | 多 Etsy 账号基建（多套 token 存档 + 切换） | ✅ | ✅ |
+
+> ⚠️ **四个 commit 都动了后端，需要重启**：`cd ~/etsyops && ./start-mac.sh`
+
+**① digital 商品类型（`1a69744`）**
+
+官方规则（help.etsy.com 英文原文，已核实）：
+- *"Variations are unavailable for digital listings"* —— 数字商品不支持变体
+- *"Digital listings don't have processing profiles"* —— 数字商品没有处理档案
+- *"You will be unable to publish or save an instant digital listing if there is no file attached to it"* —— 即时下载没挂文件连草稿都存不了
+- 按单制作（`when_made` = Made to order）不需要现在传文件，成交后在 Orders → Complete order 里上传
+
+实现：`Item type` 下拉 → digital 时隐藏净重/尺寸与两个 profile、禁用变体、显示 `Digital files` 上传区（5 个 / 20MB / 格式白名单 / 文件名 `^[A-Za-z0-9._-]{1,70}$`，**上传后不可改名**）。后端 `validateDraftInput` 与 `buildDraftForm` 按类型分支，`draftListing()` 建完草稿后逐个 `POST /shops/{sid}/listings/{listing_id}/files`，失败不回滚草稿（草稿已建好，点名哪个文件失败比静默丢掉好排查）。
+
+**② 提示词多版本库（`04cfa92`）**
+
+背景：用户有**多间 Etsy 店铺**，一间卖 fursuit，其他店是别的品类，一版写死的提示词不够用。
+
+- 存储：`data/etsy-prompts.json`，按 `shop_id` 分桶，每桶一组版本 + 一个默认版本 id。存在**后端**而非 localStorage——运营可能在多台机器上用。
+- 预置两版种子：**通用（多品类）** + **Fursuit / 兽装**（早期为 fursuit 店定制的那版，保留为可选项，不再当全局默认）。
+- 原提示词里写死的店铺名 `AURENMORPH` 换成 **`{shop_name}` 占位符**，生成时由前端替换成当前店铺名——多店共用一版也不会串店名。
+- 接口：`GET /api/etsy/prompts`（列版本，不带正文）、`GET /api/etsy/prompts/get`、`POST /api/etsy/prompts`（保存/新建）、`POST /api/etsy/prompts/activate`（设为该店默认）、`POST /api/etsy/prompts/del`（删除，最后一版不让删）。
+- 前端：版本下拉 + 保存 / 另存为 / 设为该店默认 / 删除 / 清空。
+
+**③ 店铺下拉（`e2523b9`）**：`GET /api/etsy/shops` 列出当前授权账号下所有店，切换时重载该店的提示词版本。
+
+**④ 多账号基建（`40553c3`）**
+
+- 存储：`data/etsy-token.json`（单份）→ `data/etsy-accounts.json`
+  `{ activeUserId, accounts: { "<userId>": { token, label, shops[], activeShopId } } }`
+- **首次读取自动迁移旧 token，现有授权不会丢**（已测：accessToken + refreshToken 原样搬过去，`user_id` 从 token 前缀解析，迁移不联网）。
+- `etsyClient.store` 换成 `accountStore`（读写的都是「当前账号」那套）；`shopIdProvider` 返回「当前账号当前选中的店」。建草稿 / 读店铺配置 / 查类目全部自动跟着切，不用挨个改调用点。
+- 授权回调按 `userId` 归档：同账号重授权 = 更新槽位，换账号授权 = 新增槽位。授权后立刻 `discoverShopId` 把店铺记进槽位；**一个账号多间店时不自动选**，必须人在第 1 步挑（避免写错店）。
+- 接口：`GET /api/etsy/accounts`、`POST /activate`、`/label`、`/del`、`/shop`（选越权店会拒）。
+- 前端第 1 步两级下拉：账号在上、店铺在下。
+
+> 用户当前只有一家店的 API，另一家还没申请 → 这套是先搭好基建，申请后直接能用。
+
+### 12.6 自测情况（本轮）
+
+- `selftest.frontend` **22/0**、`selftest.import` **69/0**
+- `selftest.server` 与**改动前基线逐项 diff 完全一致**（7 项失败是沙盒副本没 `.env` 的老问题，非本次引入）
+- 新接口另写功能验证：提示词接口 14 项、多账号迁移与切换 16 项，**全绿**（含「迁移后 token 没丢」「选不属于当前账号的店被拒」「最后一版提示词不让删」）
+
+> **自测方法沉淀**：跑 `selftest.server` 前要先按 `test/README.md` 生成 `server.test.js`（跑完删掉）；判断失败是不是自己引入的，用 `git archive HEAD` 导出改动前版本跑一遍做**基线 diff**。
+
+### 12.7 下一步待办（未做，按优先级）
+
+| 项 | 说明 | 难度 |
+|---|---|---|
+| **变体接线** | 后端能力现成，前端没提交 `variation_dimensions` / `variation_rows` | 中 |
+| SKU 输入框 | 页面上根本没有这个元素 | 低 |
+| Custom options / Personalization | 完全没有 | 中 |
+| Renewal options | 自动/手动续期（SOP 特意提醒别把自动续期当免费） | 低 |
+| 图片 alt text | 官方 About tab 有此项 | 低 |
+| 资料卡字段 + 审核环节 | 补齐 CSV 列与「已确认/待确认」状态、事实审核与联合审核 | 大 |
+| 把第 1 步店铺选择接进写入目标 | 基建已就绪，等第二家店 API 申请下来后实测 | 中 |
+
+**上线前需实测**（数字商品写入路径）：① API 建数字草稿时是否仍强制要 `shipping_profile_id`；② `uploadListingFile` 端点在当前授权 scope 下能否调通。
+
+### 12.8 测试数据
+
+`testdata/` 下两份 **TSV**（physical 3 条 / digital 3 条），用于测试表格上传。
+用 TSV 而不是 CSV 的原因：导入器按分隔符直接切分、不处理引号，CSV 里英文描述的逗号会把列切坏。
 
 ---
