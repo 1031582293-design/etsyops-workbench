@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
-REM ★ 延迟展开：配置预检的 for 循环内要用 !VAR! 读当前迭代的值。
-REM   没有这行时 !K! 会被当字面量，循环里的判断全部静默失效。
+REM * delayed expansion: the config precheck for-loop needs !VAR! to read the current iteration value.
+REM   Without it, !K! is treated literally and every check inside the loop silently stops working.
 setlocal enabledelayedexpansion
 REM ============================================================
 REM  EtsyOps backend one-click launcher for Windows
@@ -33,33 +33,33 @@ echo   [提示] 可能是离线或无权限。可手动执行 git pull查看真�
 :step2
 echo [2/4] 检查配置（.env）...
 REM ============================================================
-REM  配置预检：在启动 Node **之前**检查 .env。
-REM  为什么必须前置：配置写错时后端直接崩（外部表现为 502），
-REM  而崩溃原因只在 backend.log 里 —— 不预检的话排查链路是
-REM  「外部 502 → 扒日志 → 猜是哪行配置错了」，绕一大圈。
-REM  （2026-10-07 加：当时加错一行 ETSY_PROXY 导致后端起不来，
-REM    现象是 502，启动窗口里什么都看不到。）
+REM Config precheck: check .env BEFORE starting Node.
+REM Why it must come first: a bad config crashes the backend (shows up as 502 from outside),
+REM and the crash reason only lands in backend.log. Without precheck the debugging path is
+REM "external 502 -> dig through logs -> guess which line is wrong", a big detour.
+REM (added 2026-10-07: one wrong ETSY_PROXY line stopped the backend from starting;
+REM  symptom was 502 with nothing visible in the launch window.)
 REM ============================================================
 if not exist .env goto noEnv
 set "CFG_WARN="
-REM ★ 逐行扫 .env 做格式预检。
+REM * Scan .env line by line for format validation.
 REM
-REM 【为什么要预检】配置写错时后端直接崩（外部表现为 502），
-REM 而崩溃原因只在 backend.log 里，启动窗口什么都看不到。
+REM [why precheck] A bad config crashes the backend (502 externally) and the reason is only
+REM in backend.log - the launch window shows nothing.
 REM
-REM 【三个必须避开的坑 —— 2026-10-07 全部踩过】
-REM   坑1「echo 与变量之间必须有空格」：
-REM        写 `echo !V!` 会被 cmd 拆成「echo」+「!V!」两截，
-REM        后半截被当成命令执行 → 窗口刷出一堆
-REM        「xxx is not recognized as an internal or external command」。
-REM        正确写法：`echo(!V!` —— 用括号而非空格，值以任意字符开头都安全。
-REM   坑 2「不要用 call :trim 子程序」：
-REM        call 会另开作用域，delayed expansion 不会回传；
-REM        且 %~1 收到的参数仍带引号。这里改为**完全不修改变量**，
-REM        只做「有值就必须能通过格式检查」的判断 —— 留空是合法的。
-REM   坑 3「格式判定要精确」：
-REM        只判前缀 http:// 会把 https://、http://abc 之类一起放行。
-REM        用 findstr /R 精确匹配 ^http://数字.数字:数字$。
+REM [three pitfalls - all hit on 2026-10-07]
+REM   Pit 1 "a space is required between echo and the variable":
+REM     `echo !V!` gets split by cmd into "echo" + "!V!"; the second half runs as a command,
+REM     flooding the window with "xxx is not recognized as an internal or external command".
+REM     Correct form: `echo(!V!` - use a paren instead of a space, safe for any leading char.
+REM
+REM   Pit 2 "do not use a call :trim sub-routine":
+REM     call opens a separate scope and delayed expansion does not propagate back;
+REM     and %~1 still arrives quoted. So we never modify the variable here - we only check
+REM     "if it has a value it must pass the format check". Leaving it empty is legal.
+REM   Pit 3 "format checks must be exact":
+REM     Checking only the http:// prefix lets https:// and http://abc through.
+REM     Use findstr /R with ^http://digits.digits:digits$ instead.
 for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
   set "K=%%A"
   if not "!K!"=="" (
@@ -88,10 +88,10 @@ echo   [ok] 配置格式检查通过
 echo [3/4] 启动 Node 后端（server.js :3000）...
 where node >nul 2>nul
 if errorlevel 1 goto noNode
-REM /t 连子进程一起杀干净，否则旧的 node 会残留占着 3000 端口
+REM /t kills child processes too, otherwise the old node lingers holding port 3000.
 taskkill /fi "WINDOWTITLE eq EtsyOps-Backend" /f /t >nul 2>nul
-REM 输出重定向到 backend.log：进程崩溃的真实原因（uncaughtException 等）会落盘，
-REM 不用守着窗口截图。窗口标题仍是 EtsyOps-Backend，taskkill 与 /min 均照旧生效。
+REM Redirect output to backend.log so crash reasons (uncaughtException etc.) are captured;
+REM no need to watch the window. Title stays EtsyOps-Backend so taskkill and /min still work.
 echo.>> backend.log
 echo ==== 启动 %date% %time% ====>> backend.log
 start "EtsyOps-Backend" /min cmd /c "node server.js >> backend.log 2>&1"
@@ -100,45 +100,45 @@ echo   [ok] 日志已写入 backend.log，崩溃原因看这个文件
 :step3
 echo [4/4] Cloudflare Tunnel 检查...
 REM ============================================================
-REM  设计原则：直接起隧道优先，系统服务只作回退。
+REM  Design: run the tunnel directly; the system service is only a fallback.
 REM
-REM  为什么不用服务当首选（2026-10-07 凌晨的实际教训）：
-REM    服务这条路会静默失败 —— sc query 只要服务已注册就返回 0，
-REM    不管它是 RUNNING 还是 STOPPED；net start 的错误又被吞掉。
-REM    结果是「启动窗口显示一切正常，外部访问全是 Error 1033」。
-REM    实测操作者电脑上服务处于「已禁用」状态（sc start 返回 1058），
-REM    而服务化在这里带来的复杂度远大于收益。
-REM    直接起隧道只要一个 token + 一个 exe，状态一目了然。
+REM  Why the service is not the first choice (real lesson, early 2026-10-07):
+REM    The service path fails silently - sc query returns 0 as long as the service exists,
+REM    whether it is RUNNING or STOPPED, and net start errors get swallowed.
+REM    Result: launch window looks fine while external access returns Error 1033.
+REM    On the operator machine the service was DISABLED (sc start returned 1058).
+REM    A direct tunnel needs only a token + one exe and its state is obvious.
+REM (comment translated to English; see SETUP-SUMMARY.md and PITFALLS.md)
 REM ============================================================
 
-REM ---- 第1 步：找到可用的 cloudflared 可执行文件 ----
+REM ---- Step 1: find a usable cloudflared executable ----
 set "CF_EXE="
 where cloudflared >nul 2>nul && set "CF_EXE=cloudflared"
 if not defined CF_EXE if exist "%ProgramFiles%\cloudflared\cloudflared.exe" set "CF_EXE=%ProgramFiles%\cloudflared\cloudflared.exe"
 if not defined CF_EXE if exist "%ProgramFiles(x86)%\cloudflared\cloudflared.exe" set "CF_EXE=%ProgramFiles(x86)%\cloudflared\cloudflared.exe"
 if not defined CF_EXE goto noCloudflared
 
-REM ---- 第 2 步：拿 token ----
+REM ---- Step 2: read the token ----
 if not exist tunnel-token.txt goto noToken
 set /p TUNNEL_TOKEN=<tunnel-token.txt
-REM 去掉可能存在的首尾空格与 CRLF —— token 末尾多一个换行就会鉴权失败，
-REM 这是「明明复制对了却提示 token 无效」最常见的原因。
+REM Strip leading/trailing spaces and CRLF - a trailing newline in the token fails auth;
+REM this is the most common cause of "token looks right but is rejected".
 for /f "tokens=* delims= " %%A in ("%TUNNEL_TOKEN%") do set "TUNNEL_TOKEN=%%A"
 set "TUNNEL_TOKEN=%TUNNEL_TOKEN: =%"
 if not defined TUNNEL_TOKEN goto noToken
 
-REM ---- 第 3 步：杀掉所有残留的 cloudflared，不只是本脚本起的那个 ----
-REM 2026-10-13 实战教训：原先只按窗口标题杀（WINDOWTITLE eq EtsyOps-Tunnel），
-REM 杀不掉计划任务/服务/手工启动/launchd 拉起的实例。残留实例会「假活」——
-REM 进程在、日志里一直重试、但 QUIC 连不上边缘，新起的实例也抢不回域名，
-REM 结果就是「重启后端隧道还是不通」。所以这里按映像名全杀，本次启动保证干净。
+REM ---- Step 3: kill ALL leftover cloudflared, not just the one this script started ----
+REM 2026-10-13 real failure: the old code only killed by window title, which left instances
+REM started by launchd / Task Scheduler / by hand running. Those go "zombie": the process
+REM is alive, keeps retrying in the log, but QUIC never reaches the edge, and the new
+REM instance cannot win the domain back. So we kill by image name - a clean start every time.
 taskkill /fi "IMAGENAME eq cloudflared.exe" /f >nul 2>nul
 timeout /t 2 >nul
 
-REM ---- 第 4 步：启动隧道，最多 3 次，第 3 次降级到 http2 ----
-REM 日志先轮转一份再启动：后面验证只看本次的 tunnel.log。
-REM 老代码直接 findstr 整个 tunnel.log，会匹配到上一次留下的
-REM 「Registered tunnel connection」→ 本次明明没连上却判定成功，这条验证形同虚设。
+REM ---- Step 4: start the tunnel, up to 3 tries, 3rd falls back to http2 ----
+REM Rotate the log first so verification only ever sees THIS run.
+REM The old code ran findstr over the whole tunnel.log and matched the "Registered tunnel
+REM connection" line left over from the previous run -> it declared success even when this
 set "TUNNEL_TRY=0"
 set "TUNNEL_OK=0"
 
@@ -159,9 +159,9 @@ start "EtsyOps-Tunnel" /min cmd /c ""%CF_EXE%" tunnel --no-autoupdate --protocol
 :tunnelAfterStart
 echo   [提示] 正在启动隧道（窗口标题：EtsyOps-Tunnel），最多等待 20 秒...
 
-REM ---- 第 5 步：轮询验证本次真的注册成功了 ----
-REM 只看本次的 tunnel.log（上一份已轮转走），每 2 秒查一次，最多 10 轮。
-REM 不能信「命令返回 0」——start 几乎总是返回 0，那不代表连上了边缘。
+REM run never connected, so that check was effectively dead.
+REM ---- Step 5: poll until this run is really registered ----
+REM Only the rotated-in tunnel.log counts; check every 2s for up to 10 rounds (20s).
 set "TUNNEL_WAIT=0"
 
 :tunnelWait
@@ -184,9 +184,9 @@ goto tunnelFail
 
 :tunnelReady
 
-REM 多实例检查：启动前已按映像名全杀 cloudflared，正常情况下不会再残留。
-REM 若你曾用别的方式手工起过隧道，多 connector 同挂一个域名时 Cloudflare 会轮询转发，
-REM 表现为「同一 URL 有时新代码有时旧代码」，即「刚修好的问题又复现」。
+REM Multi-instance check: we killed every cloudflared by image name before starting, so
+REM normally nothing lingers. If you started a tunnel by other means, several connectors on
+REM one domain make Cloudflare round-robin, which looks like "my fix did not take effect".
 echo   [提示] 以后若出现「改完不生效」，打开 /api/etsy/whoami 多刷几次：
 echo          hostname 一致 = 单实例；不一致 = 有多个后端在抢这个域名。
 echo          手动清残留：taskkill /fi "IMAGENAME eq cloudflared.exe" /f
