@@ -569,6 +569,7 @@
           <tr><td>已授权</td><td id="svAuth">—</td></tr>
           <tr><td>写操作</td><td id="svWrite">—</td></tr>
           <tr><td>回调地址</td><td id="svCb">—</td></tr>
+          <tr><td>Etsy API 今日用量</td><td id="svQuota">—</td></tr>
         </table>
       </div>
 
@@ -759,6 +760,24 @@ function renderStatus(){
     ? '<span style="color:var(--warn)">已开启（真实写入）</span>'
     : '<span style="color:var(--good)">关闭（只读）</span>';
   document.getElementById('svCb').innerHTML = '<code>' + esc(STATUS.redirectUri || '未配置') + '</code>';
+  loadQuota();
+}
+
+/* Etsy API 当日用量：Etsy 限额 10,000 次/天（按 API Key，UTC 午夜重置）。
+ * 批量上架很烧额度，侧栏常显，做到一半也能看到还剩多少。 */
+async function loadQuota(){
+  const el = document.getElementById('svQuota');
+  if (!el) return;
+  try {
+    const d = await apiCall('/api/etsy/quota', { timeout: 15000, label: '读取 API 用量' });
+    const q = d.quota || {};
+    const pct = q.limit ? Math.round((q.count / q.limit) * 100) : 0;
+    const color = q.count >= q.stopAt ? 'var(--bad)' : (q.count >= q.warnAt ? 'var(--warn)' : 'var(--good)');
+    el.innerHTML = '<span style="color:' + color + '">' + q.count + ' / ' + q.limit
+      + '（' + pct + '%）</span>';
+  } catch(e){
+    el.textContent = '读取失败';
+  }
 }
 
 /* ---------- 步骤切换 ---------- */
@@ -1237,6 +1256,7 @@ document.getElementById('btnDraft').addEventListener('click', async () => {
     document.getElementById('btnDeact').disabled = false;
     showMsg(m, 'ok', '<b>草稿写入成功。</b>listing_id = ' + d.listing_id + '（耗时 ' +
       ((Date.now() - t0) / 1000).toFixed(1) + 's）。' + esc(d.note));
+    loadQuota();   // 建草稿 + 传图会消耗不少 Etsy 额度，刷一下侧栏用量
     log('★草稿已建 listing_id=' + d.listing_id + '，图片 ' + okImg + ' 张，耗时 ' +
         ((Date.now() - t0) / 1000).toFixed(1) + 's', 's');
   } catch(e){

@@ -259,10 +259,46 @@ function attachAccountShops(userId, shops, forceActiveShopId) {
   return d.accounts[userId];
 }
 
+/* ---------------- Etsy API 速率限制（每日额度） ----------------
+ * Etsy 限额：10,000 次/天/API Key（按 Key 不按 Token），UTC 午夜重置；单端点 10 次/秒。
+ * 计数落盘到 data/etsy-quota.json，重启不丢。 */
+const ETSY_QUOTA_FILE = join(DATA_DIR, 'etsy-quota.json');
+function readQuotaSeed() {
+  try { return JSON.parse(readFileSync(ETSY_QUOTA_FILE, 'utf8')); } catch { return null; }
+}
+// 落盘节流：批量任务一次会打几百个请求，每个都写盘太浪费 —— 5 秒最多写一次。
+// 进程被 kill 时最多丢 5 秒的计数，可接受（额度判断宁少不多）。
+let _quotaDirty = false;
+let _quotaLastWrite = 0;
+function flushQuota() {
+  if (!_quotaDirty) return false;
+  const st = etsyQuota && etsyQuota.state;
+  if (!st) return false;
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = ETSY_QUOTA_FILE + '.tmp';
+    writeFileSync(tmp, JSON.stringify({ day: st.day, count: st.count }, null, 2), 'utf8');
+    renameSync(tmp, ETSY_QUOTA_FILE);
+    _quotaDirty = false;
+    return true;
+  } catch (e) { etsyLog('额度计数落盘失败：' + (e && e.message)); return false; }
+}
+function persistQuota(state) {
+  _quotaDirty = true;
+  if (Date.now() - _quotaLastWrite < 5000) return;
+  _quotaLastWrite = Date.now();
+  flushQuota();
+}
+// 定时兜底：把最后 5 秒内累积的计数写下去
+setInterval(flushQuota, 5000).unref?.();
+
+const etsyQuota = etsy.createQuota({ seed: readQuotaSeed(), persist: persistQuota });
+
 const etsyClient = etsy.createClient({
   config: ETSY_CFG,
   store: accountStore,
   log: etsyLog,
+  quota: etsyQuota,
   // shop_id 动态取：客户端不再缓存配置里的值，而是每次问这个函数。
   // 这样授权后即使 .env 里没填 ETSY_SHOP_ID，后续调用也能自动用上。
   // 多账号时优先用「当前账号当前选中的店」。
@@ -1810,6 +1846,13 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
       etsyLog('切换店铺：账号=' + userId + ' → shop_id=' + shopId);
       return json(res, 200, { ok: true, activeUserId: userId, activeShopId: shopId });
     } catch (e) { return json(res, 400, { error: 'bad_request', note: e.message }); }
+  }
+
+  /* Etsy API 当日用量（速率限制保护）。前端侧栏实时显示，
+   * 批量任务做到一半看到这个数就知道还剩多少额度。 */
+  if (p === '/api/etsy/quota' && req.method === 'GET') {
+    flushQuota();
+    return json(res, 200, { ok: true, quota: etsyQuota.snapshot() });
   }
 
   /* ---------- Etsy 提示词版本库 ----------

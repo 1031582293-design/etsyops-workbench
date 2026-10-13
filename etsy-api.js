@@ -448,7 +448,64 @@ function normalizeTokenResponse(d, now = Date.now()) {
    - access token 临近过期自动刷新一次，并处理 refresh token 轮换；
    - 401 自动重试一次（刷新后重试），避免并发请求撞在一起导致重复刷新；
    - 429 按 retry-after 退避（指数退避，封顶 8 秒，只重试可重试的写操作）。 */
-function createClient({ config, store, fetchImpl = null, now = () => Date.now(), sleep = (ms) => new Promise(r => setTimeout(r, ms)), log = () => {}, shopIdProvider = null }) {
+/* ---------------- 速率限制保护 ----------------
+ * Etsy 官方限额（developer.etsy.com / 帮助文档，2026-10 核对）：
+ *   - 10,000 次请求 / 天 / API Key（按 Key 计算，不按 Token），UTC 午夜重置
+ *   - 单端点 10 次请求 / 秒
+ * 为什么要主动拦：批量上架时一次任务会打很多请求（建草稿 + 逐张传图 + 查类目属性），
+ * 20 个商品 × 10 张图轻松超过 200 次。撞上限时 Etsy 直接拒，表现为「批量做到一半全挂」，
+ * 而当天剩下的额度就全废了。所以在 request 入口统一计数 + 节流 + 到量拦截。 */
+const ETSY_QUOTA_PER_DAY = 10000;
+const ETSY_QUOTA_WARN_AT = 8000;   // 80%：开始提示
+const ETSY_QUOTA_STOP_AT = 9800;   // 留 200 次余量给人工补救，到这就直接拦
+const ETSY_MIN_INTERVAL_MS = 120;  // 单端点最小间隔（10 次/秒 = 100ms 一次，留点余量）
+
+const utcDay = () => new Date().toISOString().slice(0, 10);
+
+function createQuota({ seed = null, persist = null } = {}) {
+  // 跨天自动重置。seed 是从磁盘读回来的上次状态，day 不一致就作废。
+  const state = (seed && typeof seed === 'object')
+    ? { day: utcDay(), count: 0, ...seed }
+    : { day: utcDay(), count: 0 };
+  if (state.day !== utcDay()) { state.day = utcDay(); state.count = 0; }
+  const lastAt = Object.create(null);
+
+  return {
+    state,
+    snapshot() {
+      return {
+        day: state.day, count: state.count,
+        limit: ETSY_QUOTA_PER_DAY, warnAt: ETSY_QUOTA_WARN_AT, stopAt: ETSY_QUOTA_STOP_AT,
+      };
+    },
+    /* 请求前调用。超量时 ok=false —— 调用方应该抛错，而不是继续往 Etsy 发。 */
+    check() {
+      if (state.count >= ETSY_QUOTA_STOP_AT) {
+        return {
+          ok: false,
+          note: `今日 Etsy API 请求已用 ${state.count} 次（上限 ${ETSY_QUOTA_PER_DAY} 次/天，UTC 午夜重置）。`
+            + `已停止继续请求，避免批量任务中途全挂。请明天再做，或到 Shop Manager 手工处理剩余商品。`,
+        };
+      }
+      return { ok: true };
+    },
+    hit(path) {
+      state.count += 1;
+      if (persist) persist(state);
+      return state.count;
+    },
+    /* 单端点节流：同一个 path 两次请求至少隔 ETSY_MIN_INTERVAL_MS。
+     * sleep 由调用方注入，自测可以传空实现避免拖慢。 */
+    async throttle(path, sleep) {
+      const last = lastAt[path] || 0;
+      const wait = ETSY_MIN_INTERVAL_MS - (Date.now() - last);
+      if (wait > 0 && sleep) await sleep(wait);
+      lastAt[path] = Date.now();
+    },
+  };
+}
+
+function createClient({ config, store, fetchImpl = null, now = () => Date.now(), sleep = (ms) => new Promise(r => setTimeout(r, ms)), log = () => {}, shopIdProvider = null, quota = null }) {
   // ★ 代理决策点（全模块唯一一处）：没显式给 fetchImpl 时，看 config.proxy 决定出口。
   //   优先级：显式传入的 fetchImpl > ETSY_PROXY 指定的代理 > 原生 fetch。
   //   自测注入的 mock fetchImpl 因此仍完全生效，不会被代理劫持。
@@ -460,6 +517,8 @@ function createClient({ config, store, fetchImpl = null, now = () => Date.now(),
   }
   if (!fetchImplResolved) fetchImplResolved = fetch;
   let refreshing = null;
+  // 没显式传 quota 时用内存态（自测 / 不需要持久化的场景），行为完全一致
+  const quotaStore = quota || createQuota();
 
   async function accessToken() {
     const t = store.read();
@@ -490,6 +549,15 @@ function createClient({ config, store, fetchImpl = null, now = () => Date.now(),
   async function request(method, path, opts = {}) {
     if (!config.apiKeyHeader) {
       throw new Error('服务端未配置 ETSY_KEYSTRING / ETSY_SHARED_SECRET（.env），无法调用 Etsy 接口。');
+    }
+    // 速率限制：先查当日额度 → 再按端点节流 → 最后计数。
+    // 顺序很重要：额度不够时直接抛错，不发请求（省额度、也避免批量任务半路全挂）。
+    const q = quotaStore.check();
+    if (!q.ok) throw new Error(q.note);
+    await quotaStore.throttle(path, sleep);
+    const used = quotaStore.hit(path);
+    if (used === ETSY_QUOTA_WARN_AT) {
+      log(`今日 Etsy API 请求已用 ${used} 次（上限 ${ETSY_QUOTA_PER_DAY} 次/天），接近限额，注意剩余批量任务量`);
     }
     if ((opts.write || method === 'POST' || method === 'PUT' || method === 'DELETE') && !config.allowWrite) {
       throw new Error('写操作已被安全开关关闭（.env 里没有 ETSY_ALLOW_WRITE=1）。确认要写店铺时再打开。');
@@ -1179,6 +1247,10 @@ export {
   exchangeCode,
   refreshAccessToken,
   createTokenStore,
+  createQuota,
+  ETSY_QUOTA_PER_DAY,
+  ETSY_QUOTA_WARN_AT,
+  ETSY_QUOTA_STOP_AT,
   normalizeTokenResponse,
   createClient,
   createPreflight,
