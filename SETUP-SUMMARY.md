@@ -14,6 +14,7 @@
 | **十** | **10-07** | **★ Etsy Open API v3 全链路打通 + 工作流重排为七步** |
 | **十一** | **10-07** | **公众号工作台前端专项迭代（预览卡顿根治 · 封面 · 排版引擎 · 画布 · iframe 隔离）** |
 | **十二** | **10-11 ~ 10-12** | **★ Etsy 上架流程三方对齐 + digital 商品类型 + 提示词多版本库 + 多 Etsy 账号基建** |
+| **十三** | **10-11 ~ 10-12** | **后端守护（launchd）上线 + 双机接管模型厘清 + Mac 实际接管公网** |
 
 ---
 
@@ -737,5 +738,79 @@ aiproxy 7 / batcfg 20
 
 `testdata/` 下两份 **TSV**（physical 3 条 / digital 3 条），用于测试表格上传。
 用 TSV 而不是 CSV 的原因：导入器按分隔符直接切分、不处理引号，CSV 里英文描述的逗号会把列切坏。
+
+---
+
+## 十三、2026-10-11 ~ 10-12 进展补充（后端守护上线 + 双机接管模型 + Mac 实际接管公网）
+
+> 本章由工作区记忆日志还原（该阶段由另一个会话完成），内容已与记录核对。
+
+### 13.1 起因：机器一休眠，后端就消失，但看着像"隧道闪断"
+
+`start-mac.sh` 用 `nohup node server.js &` 起后端，**没有任何守护**。Mac 休眠唤醒后 node 进程会被回收，而 cloudflared 隧道自己会重连——于是公网表现为「隧道闪断、连不上」，实际是**源站没人监听**。
+
+当晚的误判链条值得记住：先猜电脑休眠，又猜架构不行建议上云主机，最后才定位到是 Node 进程重启窗口 + AI 失控输出拖崩进程。**排查纪律：先取决定性证据（版本号 / 时间线 / 连续采样）再下结论。**
+
+### 13.2 两个 launchd plist
+
+**后端（`com.etsyops.backend.plist`）常驻是安全的**，保持 `RunAtLoad=true` + `KeepAlive=true` + `ThrottleInterval=10`：
+
+- server.js 唯一的 `setInterval` 是 30 秒清理 `_genJobs` Map，**没有任何定时发布/推送**，不会重复执行
+- 后端起来本身不接外部流量（流量入口是隧道），所以本地 `127.0.0.1:3000` 开发调试随时可用
+
+配置要点（几个容易漏的）：
+
+| 项 | 值 | 为什么 |
+|---|---|---|
+| ProgramArguments | `/usr/local/bin/node` + server.js | 用**系统 node**，不用沙盒管理的那个，避免沙盒清理后失效 |
+| WorkingDirectory | `~/etsyops` | server.js 读 .env 和 execSync 跑 git 都靠它 |
+| EnvironmentVariables PATH | 含 `/usr/local/bin:/usr/bin:/bin` | launchd 默认 PATH 极窄，server.js 用 `git rev-parse`，git 在 `/usr/bin/git` |
+| 日志 | 仍写 `backend.log` | launchd 是追加写，和 start-mac.sh 的 `>>` 不冲突 |
+
+**隧道（`com.etsyops.tunnel.plist`）按需接管**，`RunAtLoad=false` + `KeepAlive={SuccessfulExit=false}`：接管期崩了自动拉起，收到 SIGTERM 正常退出则不复活。
+
+### 13.3 双机角色与「同一 tunnel token = 两个 replica」
+
+**主用后端 = 操作者 Windows；Mac（~/etsyops）= 备用**，只在操作者出故障或本地开发调试时顶上。
+
+两台共用同一个 Cloudflare Tunnel token → 同时在线就是两个 replica。Cloudflare 官方原文：*"Traffic will be sent to all cloudflared processes associated with the tunnel"*，且 replicas **不支持流量调度**、按就近选、无保证 → **会分摊流量**。server.js 注释里已记着 10-06 的同类坑（「同一个 URL 有时是新代码」）。
+
+**因此：流量的开关是隧道，不是后端。**
+
+### 13.4 launchd 实测行为（纠正了当晚的设计）
+
+**注册命令执行后发现的实际情况**：plist 里只要 `KeepAlive` 非 false（包括 `{SuccessfulExit=false}`），**`bootstrap` 时就会立即启动 job**——「注册但待命」这个状态不存在，`RunAtLoad=false` 挡不住。
+
+所以实际操作口诀比设计时更简单：
+
+- **后端**：注册一次永久放着（开机自启 + 崩了自动拉）
+- **隧道**：**注册 = 接管，卸载 = 交还**
+  - 接管 `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.etsyops.tunnel.plist`
+  - 交还 `launchctl bootout gui/$UID/com.etsyops.tunnel`
+- plist 里的 `RunAtLoad=false` + `KeepAlive={SuccessfulExit=false}` 保留：接管期崩了自动拉，SIGTERM 不复活
+
+### 13.5 接管 / 交还的正确姿势
+
+- 装了守护后**别再跑 `./start-mac.sh`**：它会 `lsof -ti tcp:3000 | xargs kill` 杀掉 launchd 的进程，launchd 立刻拉起，两边抢端口打架。重启后端用 `launchctl kickstart -k gui/$UID/com.etsyops.backend`。
+- 接管隧道前**必须先确认操作者 Windows 的 cloudflared 已停**，否则两边分摊流量。
+- 交还顺序：**先接后断**（Windows 先起它的隧道，再 `bootout` Mac 的），避免空窗。
+
+### 13.6 10-12 00:25 实测验证结果
+
+- `com.etsyops.backend`：running，3000 端口监听，`/api/ping` 返回 ok，commit 与 origin/main 一致
+- `com.etsyops.tunnel`：**也 running**（计划外，因为上面第 4 条的原因——注册即启动）
+- 公网 `/api/etsy/whoami` 连续 6 次采样，hostname 全是 Mac，0 次落 Windows → **操作者 Windows 那晚不在线**，公网当前就是 Mac 在接管服务
+
+### 13.7 Mac 接管的限制（备用顶上前必须知道）
+
+- **判断授权状态要看 `data/etsy-token.json` 是否存在，不是看 `.env`**。Mac 目前没有这个文件 → **从未授权过 Etsy** → Mac 接管期间 Etsy 上架功能不可用，需在页面点一次「连接 Etsy 店铺」。
+- `data/` 目录不入库 → **两台机器的授权状态不共享**。Windows 授权过不代表 Mac 能用；反过来也一样。
+- 微信草稿 + AI 文案功能正常（WECHAT_* / AI_* 凭证两边都有）。
+- `data/runs.json` 是运行记录，两台各记各的，不互通。
+
+### 13.8 待办
+
+- 操作者 Windows 恢复后：先起他那边的隧道，再 `bootout` Mac 的隧道完成交还。
+- Windows 侧目前 `start-backend.bat` **无守护**（启动一次就退出），且 taskkill 只杀窗口标题匹配的进程、杀不掉别的来源占用 3000 的残留 → 新 node 可能 EADDRINUSE 崩掉，用户只看到窗口一闪而过。对应方案是「任务计划程序」建任务（触发器=启动时 + 失败自动重启），不是 launchd。
 
 ---
