@@ -181,18 +181,18 @@ else
       mv -f tunnel.log tunnel.log.prev
     fi
 
-    if [ "$TUNNEL_TRY" -eq 3 ]; then
-      say "第 3 次改用 http2 协议（TCP 443，穿透性更好）..."
-      nohup cloudflared tunnel --no-autoupdate --protocol http2 run --token "$TOKEN" --url "http://localhost:$PORT" >> tunnel.log 2>&1 &
-    else
-      nohup cloudflared tunnel --no-autoupdate run --token "$TOKEN" --url "http://localhost:$PORT" >> tunnel.log 2>&1 &
-    fi
+    # 2026-10-13 实测证据：隧道专用端口 7844 在大陆网络极不稳定 ——
+    # QUIC（UDP 7844）完全超时；http2（TCP 7844）也只是间歇可用，
+    # 日志里同时存在 "dial tcp 198.41.x.x:7844: i/o timeout" 和偶尔的
+    # "Registered tunnel connection ... protocol=http2"。
+    # 所以第一次就用 http2，并且把等待拉长：窗口是随机出现的，耐心比换协议有用。
+    nohup cloudflared tunnel --no-autoupdate --protocol http2 run --token "$TOKEN" --url "http://localhost:$PORT" >> tunnel.log 2>&1 &
     TUNPID=$!
 
-    # 轮询等待注册成功：每 2 秒查一次，最多 10 轮（20 秒）。
-    # 进程已退出就别等了（启动即崩，重试也没意义，直接换协议试）。
+    # 轮询等待注册成功：每 2 秒查一次，最多 30 轮（60 秒）。
+    # 进程已退出就别等了（启动即崩，重试也没意义）。
     WAITED=0
-    while [ "$WAITED" -lt 10 ]; do
+    while [ "$WAITED" -lt 30 ]; do
       sleep 2
       WAITED=$((WAITED + 1))
       if grep -q "Registered tunnel connection" tunnel.log 2>/dev/null; then
@@ -205,7 +205,7 @@ else
     if [ "$TUNNEL_OK" -eq 1 ]; then
       ok "隧道已注册（第 ${TUNNEL_TRY} 次尝试，PID ${TUNPID}），日志 tunnel.log"
     elif [ "$TUNNEL_TRY" -lt 3 ]; then
-      warn "第 ${TUNNEL_TRY} 次尝试 20 秒内未连上，杀掉重试..."
+      warn "第 ${TUNNEL_TRY} 次尝试 60 秒内未连上，杀掉重试..."
     fi
   done
 

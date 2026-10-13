@@ -148,20 +148,20 @@ if exist tunnel.log move /y tunnel.log tunnel.log.prev >nul 2>nul
 echo.>> tunnel.log
 echo ==== 启动尝试 %TUNNEL_TRY% %date% %time% ====>> tunnel.log
 
-if "%TUNNEL_TRY%"=="3" goto tunnelStartHttp2
-start "EtsyOps-Tunnel" /min cmd /c ""%CF_EXE%" tunnel --no-autoupdate run --token %TUNNEL_TOKEN% --url http://localhost:3000 >> tunnel.log 2>&1"
-goto tunnelAfterStart
-
-:tunnelStartHttp2
-echo   [提示] 前两次未连上，第 3 次改用 http2 协议走 TCP 443，穿透性更好...
+REM 2026-10-13 evidence (operator machine + this Mac): the tunnel's dedicated port 7844 is
+REM unreliable on mainland networks. QUIC (UDP 7844) times out completely; http2 (TCP 7844)
+REM only connects intermittently - logs show both "dial tcp 198.41.x.x:7844: i/o timeout"
+REM and occasional "Registered tunnel connection ... protocol=http2". So go http2 from the
+REM first try and wait longer: the window opens at random, patience beats switching protocols.
 start "EtsyOps-Tunnel" /min cmd /c ""%CF_EXE%" tunnel --no-autoupdate --protocol http2 run --token %TUNNEL_TOKEN% --url http://localhost:3000 >> tunnel.log 2>&1"
 
 :tunnelAfterStart
-echo   [提示] 正在启动隧道（窗口标题：EtsyOps-Tunnel），最多等待 20 秒...
+echo   [提示] 正在启动隧道（http2 协议），最多等待 60 秒...
 
 REM run never connected, so that check was effectively dead.
 REM ---- Step 5: poll until this run is really registered ----
-REM Only the rotated-in tunnel.log counts; check every 2s for up to 10 rounds (20s).
+REM Only the rotated-in tunnel.log counts; check every 2s for up to 30 rounds (60s).
+REM The window opens at random, so 60s per try and 3 tries gives it a real chance.
 set "TUNNEL_WAIT=0"
 
 :tunnelWait
@@ -172,11 +172,11 @@ if errorlevel 1 goto tunnelNotYet
 goto tunnelReady
 
 :tunnelNotYet
-if %TUNNEL_WAIT% GEQ 10 goto tunnelKill
+if %TUNNEL_WAIT% GEQ 30 goto tunnelKill
 goto tunnelWait
 
 :tunnelKill
-echo   [警告] 第 %TUNNEL_TRY% 次尝试 20 秒内未连上，杀掉重来...
+echo   [警告] 第 %TUNNEL_TRY% 次尝试 60 秒内未连上，杀掉重来...
 taskkill /fi "IMAGENAME eq cloudflared.exe" /f >nul 2>nul
 timeout /t 2 >nul
 if %TUNNEL_TRY% LSS 3 goto tunnelStart
@@ -205,7 +205,7 @@ exit /b 0
 :tunnelFail
 echo.
 echo [错误] 隧道启动失败，外部访问会报 Error 1033。
-echo        已自动重试 3 次（第 3 次已降级为 http2 协议），仍未注册成功。
+echo        已用 http2 协议自动重试 3 次（每次等 60 秒），仍未注册成功。
 echo        后端本身已启动，但无法被外部访问。
 echo.
 echo        真正的原因在 tunnel.log 最后几行，请打开看：
@@ -213,7 +213,8 @@ echo          notepad tunnel.log
 echo.
 echo        常见原因：
 echo          Invalid tunnel token = tunnel-token.txt 内容不对（多了换行/空格）
-echo          failed to dial        = 网络不通，或 UDP/QUIC 被拦截（http2 也已试过）
+echo          dial tcp ...:7844: i/o timeout = 到 Cloudflare 边缘的隧道端口不通
+echo             （大陆网络常见，TCP 7844 间歇可用，多试几次或换网络）
 echo          cannot find exe        = cloudflared 不在 PATH，请装或用完整路径
 echo.
 echo        若需手动起（在此目录下打开 PowerShell 窗口）：
