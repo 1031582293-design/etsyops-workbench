@@ -96,36 +96,51 @@ fi
 # ---------- [4/5] 停掉旧进程 + 启动后端 ----------
 say ""
 say "[4/5] 启动后端（端口 ${PORT}）…"
-# 结束本目录上旧的 server.js（先试 lsof，失败再用 pkill 兜底）
-if command -v lsof >/dev/null 2>&1; then
-  OLD=$(lsof -ti tcp:"$PORT" 2>/dev/null || true)
-  if [ -n "$OLD" ]; then
-    kill $OLD 2>/dev/null || true
-    sleep 1
-    kill -9 $OLD 2>/dev/null || true
-    ok "已关闭占用 $PORT 端口的旧进程"
+
+# 这台 Mac 如果装了 launchd 守护，就交给守护管，别自己起进程。
+# 自己起会和守护抢 3000 端口：脚本 kill 掉守护的进程 → 守护立刻拉起 →
+# 端口被占 → 表现为「日志显示启动成功，几秒后进程消失、隧道 connection refused」。
+if launchctl print "gui/$UID/com.etsyops.backend" >/dev/null 2>&1; then
+  say "  检测到后端由 launchd 托管，改走守护重启…"
+  launchctl kickstart -k "gui/$UID/com.etsyops.backend"
+  sleep 3
+  if curl -s -m 3 "http://127.0.0.1:$PORT/api/ping" >/dev/null 2>&1; then
+    ok "后端已由 launchd 重启并响应（守护会保它常驻）"
   else
-    ok "${PORT} 端口干净，无需清理"
+    say "  守护刚拉起，可能还在初始化；稍后可再跑一次本脚本确认"
   fi
-fi
-# ⚠️ 不要再用 pkill -f 匹配绝对路径来杀旧后端：
-#   模式 "node .*/abs/path/server.js" 会把**刚启动的新进程**也匹配上（命令行同样含该路径），
-#   容易把新后端误杀 → 表现为「日志显示启动成功，几秒后进程消失、隧道 connection refused」。
-# 只按端口清理，安全可靠。
+else
+  # 结束本目录上旧的 server.js（先试 lsof，失败再用 pkill 兜底）
+  if command -v lsof >/dev/null 2>&1; then
+    OLD=$(lsof -ti tcp:"$PORT" 2>/dev/null || true)
+    if [ -n "$OLD" ]; then
+      kill $OLD 2>/dev/null || true
+      sleep 1
+      kill -9 $OLD 2>/dev/null || true
+      ok "已关闭占用 $PORT 端口的旧进程"
+    else
+      ok "${PORT} 端口干净，无需清理"
+    fi
+  fi
+  # ⚠️ 不要再用 pkill -f 匹配绝对路径来杀旧后端：
+  #   模式 "node .*/abs/path/server.js" 会把**刚启动的新进程**也匹配上（命令行同样含该路径），
+  #   容易把新后端误杀 → 表现为「日志显示启动成功，几秒后进程消失、隧道 connection refused」。
+  # 只按端口清理，安全可靠。
 
-printf '\n==== 启动 %s ====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG"
-PORT="$PORT" nohup node server.js >> "$LOG" 2>&1 &
-NEWPID=$!
-# 等 3 秒再确认存活：有些失败是「起来后立刻退出」，只等 2 秒可能漏判
-sleep 3
+  printf '\n==== 启动 %s ====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG"
+  PORT="$PORT" nohup node server.js >> "$LOG" 2>&1 &
+  NEWPID=$!
+  # 等 3 秒再确认存活：有些失败是「起来后立刻退出」，只等 2 秒可能漏判
+  sleep 3
 
-if ! kill -0 "$NEWPID" 2>/dev/null; then
-  say ""
-  say "—— $LOG 最后 15 行 ——"
-  tail -n 15 "$LOG"
-  die "后端启动失败，进程已退出。上面是日志内容。"
+  if ! kill -0 "$NEWPID" 2>/dev/null; then
+    say ""
+    say "—— $LOG 最后 15 行 ——"
+    tail -n 15 "$LOG"
+    die "后端启动失败，进程已退出。上面是日志内容。"
+  fi
+  ok "后端已启动（PID ${NEWPID}），日志写入 $LOG"
 fi
-ok "后端已启动（PID ${NEWPID}），日志写入 $LOG"
 
 # 探活确认真的起来了
 for i in 1 2 3 4 5; do
@@ -161,6 +176,21 @@ fi
 TOKEN=$(tr -d ' \t\n\r' < tunnel-token.txt)
 if [ -z "$TOKEN" ]; then
   warn "tunnel-token.txt 是空的（跳过隧道）。"
+elif launchctl print "gui/$UID/com.etsyops.tunnel" >/dev/null 2>&1; then
+  # 这台 Mac 装了 launchd 守护 → 交给守护管，别自己起进程（会和守护抢）。
+  # 必须 bootout + bootstrap，不能只 kickstart：kickstart 用的是「已加载的旧配置」，
+  # 改了 plist 里的 --protocol 之类不生效；bootout+bootstrap 会重新读 plist 文件。
+  say "[5/5] 检测到隧道由 launchd 托管，改走守护重启…"
+  PLIST="$HOME/Library/LaunchAgents/com.etsyops.tunnel.plist"
+  launchctl bootout "gui/$UID/com.etsyops.tunnel" 2>/dev/null
+  sleep 2
+  if launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null; then
+    ok "已重新注册 com.etsyops.tunnel，守护会保它常驻（崩了自动拉起）"
+    say "     以后想单独重启隧道，双击文件夹里的「重启隧道.command」即可"
+  else
+    warn "launchd 注册失败。请确认这个文件存在："
+    warn "  $PLIST"
+  fi
 else
   # 2026-10-13 实战教训：旧的 pkill -f "cloudflared tunnel" 只杀命令行匹配的进程，
   # 杀不掉 launchd / 计划任务起的实例；且启动后只 kill -0 检查「进程在不在」，
