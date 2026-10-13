@@ -127,29 +127,66 @@ for /f "tokens=* delims= " %%A in ("%TUNNEL_TOKEN%") do set "TUNNEL_TOKEN=%%A"
 set "TUNNEL_TOKEN=%TUNNEL_TOKEN: =%"
 if not defined TUNNEL_TOKEN goto noToken
 
-REM ---- 第 3 步：先杀掉残留的旧隧道，避免多实例抢同一域名 ----
-REM 同一个 Cloudflare 域名挂了多个 connector 时，Cloudflare 会轮询转发，
-REM 于是同一个 URL 有时是新代码有时是旧代码，表现为「刚修好的问题又复现」。
-taskkill /fi "WINDOWTITLE eq EtsyOps-Tunnel" /f /t >nul 2>nul
+REM ---- 第 3 步：杀掉所有残留的 cloudflared，不只是本脚本起的那个 ----
+REM 2026-10-13 实战教训：原先只按窗口标题杀（WINDOWTITLE eq EtsyOps-Tunnel），
+REM 杀不掉计划任务/服务/手工启动/launchd 拉起的实例。残留实例会「假活」——
+REM 进程在、日志里一直重试、但 QUIC 连不上边缘，新起的实例也抢不回域名，
+REM 结果就是「重启后端隧道还是不通」。所以这里按映像名全杀，本次启动保证干净。
+taskkill /fi "IMAGENAME eq cloudflared.exe" /f >nul 2>nul
+timeout /t 2 >nul
 
-REM ---- 第 4 步：启动隧道 ----
-echo   [提示] 正在启动隧道（窗口标题：EtsyOps-Tunnel）...
-REM 输出重定向到 tunnel.log：连接失败的真实原因（token 无效/网络不通）会落盘，
-REM 不用守着窗口截图。窗口标题保持 EtsyOps-Tunnel，taskkill 与 /min 才有效。
+REM ---- 第 4 步：启动隧道，最多 3 次，第 3 次降级到 http2 ----
+REM 日志先轮转一份再启动：后面验证只看本次的 tunnel.log。
+REM 老代码直接 findstr 整个 tunnel.log，会匹配到上一次留下的
+REM 「Registered tunnel connection」→ 本次明明没连上却判定成功，这条验证形同虚设。
+set "TUNNEL_TRY=0"
+set "TUNNEL_OK=0"
+
+:tunnelStart
+set /a TUNNEL_TRY+=1
+if exist tunnel.log move /y tunnel.log tunnel.log.prev >nul 2>nul
 echo.>> tunnel.log
-echo ==== 启动 %date% %time% ====>> tunnel.log
+echo ==== 启动尝试 %TUNNEL_TRY% %date% %time% ====>> tunnel.log
+
+if "%TUNNEL_TRY%"=="3" goto tunnelStartHttp2
 start "EtsyOps-Tunnel" /min cmd /c ""%CF_EXE%" tunnel --no-autoupdate run --token %TUNNEL_TOKEN% --url http://localhost:3000 >> tunnel.log 2>&1"
+goto tunnelAfterStart
 
-REM ---- 第 5 步：验证它真的起来了 ----
-REM 相信「命令返回 0」是没用的（今晚就栽在这）：必须回读 tunnel.log 确认，
-REM 只有看到成功注册的痕迹才算就绪。
-timeout /t 6 >nul
+:tunnelStartHttp2
+echo   [提示] 前两次未连上，第 3 次改用 http2 协议走 TCP 443，穿透性更好...
+start "EtsyOps-Tunnel" /min cmd /c ""%CF_EXE%" tunnel --no-autoupdate --protocol http2 run --token %TUNNEL_TOKEN% --url http://localhost:3000 >> tunnel.log 2>&1"
+
+:tunnelAfterStart
+echo   [提示] 正在启动隧道（窗口标题：EtsyOps-Tunnel），最多等待 20 秒...
+
+REM ---- 第 5 步：轮询验证本次真的注册成功了 ----
+REM 只看本次的 tunnel.log（上一份已轮转走），每 2 秒查一次，最多 10 轮。
+REM 不能信「命令返回 0」——start 几乎总是返回 0，那不代表连上了边缘。
+set "TUNNEL_WAIT=0"
+
+:tunnelWait
+timeout /t 2 >nul
+set /a TUNNEL_WAIT+=1
 findstr /C:"Registered tunnel connection" tunnel.log >nul 2>nul
-if errorlevel 1 goto tunnelFail
+if errorlevel 1 goto tunnelNotYet
+goto tunnelReady
 
-REM 多实例提醒：上面的 taskkill 只杀窗口标题为 EtsyOps-Tunnel 的（即本脚本启动的）。
-REM 此刻手动启动过的隧道窗口标题不同会残留 —— 多个 connector 同挂一个域名时，
-REM Cloudflare 会轮询转发 → 同一 URL 有时新代码有时旧代码，表现为「刚修好的问题又复现」。
+:tunnelNotYet
+if %TUNNEL_WAIT% GEQ 10 goto tunnelKill
+goto tunnelWait
+
+:tunnelKill
+echo   [警告] 第 %TUNNEL_TRY% 次尝试 20 秒内未连上，杀掉重来...
+taskkill /fi "IMAGENAME eq cloudflared.exe" /f >nul 2>nul
+timeout /t 2 >nul
+if %TUNNEL_TRY% LSS 3 goto tunnelStart
+goto tunnelFail
+
+:tunnelReady
+
+REM 多实例检查：启动前已按映像名全杀 cloudflared，正常情况下不会再残留。
+REM 若你曾用别的方式手工起过隧道，多 connector 同挂一个域名时 Cloudflare 会轮询转发，
+REM 表现为「同一 URL 有时新代码有时旧代码」，即「刚修好的问题又复现」。
 echo   [提示] 以后若出现「改完不生效」，打开 /api/etsy/whoami 多刷几次：
 echo          hostname 一致 = 单实例；不一致 = 有多个后端在抢这个域名。
 echo          手动清残留：taskkill /fi "IMAGENAME eq cloudflared.exe" /f
@@ -168,6 +205,7 @@ exit /b 0
 :tunnelFail
 echo.
 echo [错误] 隧道启动失败，外部访问会报 Error 1033。
+echo        已自动重试 3 次（第 3 次已降级为 http2 协议），仍未注册成功。
 echo        后端本身已启动，但无法被外部访问。
 echo.
 echo        真正的原因在 tunnel.log 最后几行，请打开看：
@@ -175,7 +213,7 @@ echo          notepad tunnel.log
 echo.
 echo        常见原因：
 echo          Invalid tunnel token = tunnel-token.txt 内容不对（多了换行/空格）
-echo          Unable to establish  = 网络不通（如需代理才能访问并非 Cloudflare）
+echo          failed to dial        = 网络不通，或 UDP/QUIC 被拦截（http2 也已试过）
 echo          cannot find exe        = cloudflared 不在 PATH，请装或用完整路径
 echo.
 echo        若需手动起（在此目录下打开 PowerShell 窗口）：

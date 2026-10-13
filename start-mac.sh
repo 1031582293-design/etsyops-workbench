@@ -162,21 +162,55 @@ TOKEN=$(tr -d ' \t\n\r' < tunnel-token.txt)
 if [ -z "$TOKEN" ]; then
   warn "tunnel-token.txt 是空的（跳过隧道）。"
 else
-  # 先清掉旧隧道，避免越积越多（实测会同时跑两三个，白占连接、日志互相污染）
-  if pgrep -f "cloudflared tunnel" >/dev/null 2>&1; then
-    pkill -f "cloudflared tunnel" 2>/dev/null || true
+  # 2026-10-13 实战教训：旧的 pkill -f "cloudflared tunnel" 只杀命令行匹配的进程，
+  # 杀不掉 launchd / 计划任务起的实例；且启动后只 kill -0 检查「进程在不在」，
+  # 不检查「连没连上」——cloudflared 休眠后会假活：进程在、日志里一直重试、
+  # 但 QUIC 连不上边缘。旧逻辑此时判定「隧道已启动」，外部访问实际不通。
+  # 新逻辑：按进程名全杀 + 轮询日志确认真的注册成功 + 最多 3 次，第 3 次降级 http2。
+  TUNNEL_TRY=0
+  TUNNEL_OK=0
+  while [ "$TUNNEL_TRY" -lt 3 ] && [ "$TUNNEL_OK" -eq 0 ]; do
+    TUNNEL_TRY=$((TUNNEL_TRY + 1))
+
+    # 按进程名精确杀掉所有残留 cloudflared（含 launchd 起的），不只是本脚本起的
+    pkill -x cloudflared 2>/dev/null || true
     sleep 2
-    ok "已关闭旧隧道进程"
-  fi
-  # 隧道同样放后台，日志写 tunnel.log
-  printf '\n==== 启动 %s ====\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> tunnel.log
-  nohup cloudflared tunnel --no-autoupdate run --token "$TOKEN" --url "http://localhost:$PORT" >> tunnel.log 2>&1 &
-  TUNPID=$!
-  sleep 4
-  if kill -0 "$TUNPID" 2>/dev/null; then
-    ok "隧道已启动（PID ${TUNPID}），日志 tunnel.log"
-  else
-    warn "隧道进程已退出，请看 tunnel.log 最后几行。"
+
+    # 日志轮转，保证后面的验证只看本次记录，不会匹配到上次的成功痕迹
+    if [ -f tunnel.log ]; then
+      mv -f tunnel.log tunnel.log.prev
+    fi
+
+    if [ "$TUNNEL_TRY" -eq 3 ]; then
+      say "第 3 次改用 http2 协议（TCP 443，穿透性更好）..."
+      nohup cloudflared tunnel --no-autoupdate --protocol http2 run --token "$TOKEN" --url "http://localhost:$PORT" >> tunnel.log 2>&1 &
+    else
+      nohup cloudflared tunnel --no-autoupdate run --token "$TOKEN" --url "http://localhost:$PORT" >> tunnel.log 2>&1 &
+    fi
+    TUNPID=$!
+
+    # 轮询等待注册成功：每 2 秒查一次，最多 10 轮（20 秒）。
+    # 进程已退出就别等了（启动即崩，重试也没意义，直接换协议试）。
+    WAITED=0
+    while [ "$WAITED" -lt 10 ]; do
+      sleep 2
+      WAITED=$((WAITED + 1))
+      if grep -q "Registered tunnel connection" tunnel.log 2>/dev/null; then
+        TUNNEL_OK=1
+        break
+      fi
+      kill -0 "$TUNPID" 2>/dev/null || break
+    done
+
+    if [ "$TUNNEL_OK" -eq 1 ]; then
+      ok "隧道已注册（第 ${TUNNEL_TRY} 次尝试，PID ${TUNPID}），日志 tunnel.log"
+    elif [ "$TUNNEL_TRY" -lt 3 ]; then
+      warn "第 ${TUNNEL_TRY} 次尝试 20 秒内未连上，杀掉重试..."
+    fi
+  done
+
+  if [ "$TUNNEL_OK" -eq 0 ]; then
+    warn "隧道 3 次尝试均未注册成功（第 3 次已用 http2）。原因看 tunnel.log 最后 10 行："
     tail -n 10 tunnel.log 2>/dev/null | sed 's/^/    /'
   fi
 fi
