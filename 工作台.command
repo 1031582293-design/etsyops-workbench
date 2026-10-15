@@ -96,7 +96,34 @@ show_status(){
   printf ' 公网  %s\n' "$PUBLIC"
   printf '   /api/ping → HTTP %s\n' "$(curl -s -m 8 -o /dev/null -w '%{http_code}' "$PUBLIC/api/ping")"
   printf '   （200 = 正常；530 = 隧道没连上；000 = 完全没响应）\n'
+  show_version
   hr
+}
+
+# 代码版本核对 —— 专治「虚假拉新」。
+# 三个号必须一致：本地硬盘（git HEAD）、远程最新（git ls-remote）、后端在跑（whoami 自报）。
+# 任何不一致都会明确报警，不用靠猜。
+show_version(){
+  local_head=$(git rev-parse --short HEAD 2>/dev/null || echo "?")
+  remote_head=$(git ls-remote origin main 2>/dev/null | head -1 | cut -c1-7)
+  [ -z "$remote_head" ] && remote_head="?"
+  running=$(curl -s -m 3 http://127.0.0.1:3000/api/etsy/whoami 2>/dev/null \
+    | grep -oE '"repoCommit":"[^"]*"' | cut -d'"' -f4)
+  [ -z "$running" ] && running="?"
+  printf ' 代码版本（三个号必须一致，不一致就是「虚假更新」）\n'
+  printf '   本地硬盘： %s\n' "$local_head"
+  printf '   远程最新： %s\n' "$remote_head"
+  printf '   后端在跑： %s\n' "$running"
+  if [ "$local_head" != "?" ] && [ "$local_head" = "$remote_head" ]; then
+    printf '   [ok] 代码已是最新\n'
+  else
+    printf '   [警告] 本地落后于远程 —— 刚才的 git pull 多半没成功\n'
+  fi
+  if [ "$running" != "?" ] && [ "$running" != "$local_head" ]; then
+    printf '   [警告] 后端跑的不是硬盘上这份代码！必须重启后端才生效\n'
+  elif [ "$running" = "$local_head" ] && [ "$local_head" != "?" ]; then
+    printf '   [ok] 后端跑的就是这份代码\n'
+  fi
 }
 
 while true; do
@@ -144,6 +171,8 @@ while true; do
         printf '  没找到 %s，改用 start-mac.sh 启动…\n' "$PLIST_T"
         ./start-mac.sh
       fi
+      # 收尾必须核对三个 commit 号，让「以为更新了其实没有」当场暴露
+      show_version
       ;;
     2)
       hr; printf ' 重启隧道\n'
