@@ -100,9 +100,10 @@ say "[4/5] 启动后端（端口 ${PORT}）…"
 # 这台 Mac 如果装了 launchd 守护，就交给守护管，别自己起进程。
 # 自己起会和守护抢 3000 端口：脚本 kill 掉守护的进程 → 守护立刻拉起 →
 # 端口被占 → 表现为「日志显示启动成功，几秒后进程消失、隧道 connection refused」。
-if launchctl print "gui/$UID/com.etsyops.backend" >/dev/null 2>&1; then
+# 用 $(id -u) 而不是 $UID：$UID 是 bash 内置变量，被 /bin/sh 执行时是空的
+if launchctl print "gui/$(id -u)/com.etsyops.backend" >/dev/null 2>&1; then
   say "  检测到后端由 launchd 托管，改走守护重启…"
-  launchctl kickstart -k "gui/$UID/com.etsyops.backend"
+  launchctl kickstart -k "gui/$(id -u)/com.etsyops.backend"
   sleep 3
   if curl -s -m 3 "http://127.0.0.1:$PORT/api/ping" >/dev/null 2>&1; then
     ok "后端已由 launchd 重启并响应（守护会保它常驻）"
@@ -176,20 +177,25 @@ fi
 TOKEN=$(tr -d ' \t\n\r' < tunnel-token.txt)
 if [ -z "$TOKEN" ]; then
   warn "tunnel-token.txt 是空的（跳过隧道）。"
-elif launchctl print "gui/$UID/com.etsyops.tunnel" >/dev/null 2>&1; then
+elif launchctl print "gui/$(id -u)/com.etsyops.tunnel" >/dev/null 2>&1; then
   # 这台 Mac 装了 launchd 守护 → 交给守护管，别自己起进程（会和守护抢）。
   # 必须 bootout + bootstrap，不能只 kickstart：kickstart 用的是「已加载的旧配置」，
   # 改了 plist 里的 --protocol 之类不生效；bootout+bootstrap 会重新读 plist 文件。
+  # 用 $(id -u) 而不是 $UID：后者被 /bin/sh 执行时是空的，会导致注册静默失败。
   say "[5/5] 检测到隧道由 launchd 托管，改走守护重启…"
   PLIST="$HOME/Library/LaunchAgents/com.etsyops.tunnel.plist"
-  launchctl bootout "gui/$UID/com.etsyops.tunnel" 2>/dev/null
+  launchctl bootout "gui/$(id -u)/com.etsyops.tunnel" 2>/dev/null
   sleep 2
-  if launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null; then
+  if launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
     ok "已重新注册 com.etsyops.tunnel，守护会保它常驻（崩了自动拉起）"
     say "     以后想单独重启隧道，双击文件夹里的「重启隧道.command」即可"
   else
-    warn "launchd 注册失败。请确认这个文件存在："
-    warn "  $PLIST"
+    warn "launchd 注册失败（上面是它的真实报错）。已改用直接启动兜底，服务不中断。"
+    pkill -x cloudflared 2>/dev/null || true
+    sleep 1
+    nohup cloudflared tunnel --no-autoupdate --protocol http2 run \
+      --token "$TOKEN" --url "http://localhost:$PORT" >> tunnel.log 2>&1 &
+    ok "已直接启动 cloudflared（PID $!），日志写入 tunnel.log"
   fi
 else
   # 2026-10-13 实战教训：旧的 pkill -f "cloudflared tunnel" 只杀命令行匹配的进程，

@@ -29,14 +29,33 @@ fi
 # 用 bootout + bootstrap 而不是 kickstart：
 #   kickstart -k 用的是「已加载的旧配置」，改了 plist 不生效；
 #   bootout + bootstrap 会重新读 plist 文件，改什么都不会漏。
+#
+# ⚠️ UID_NUM 用 $(id -u) 而不是 $UID：$UID 是 bash 的内置变量，
+#    万一脚本被 /bin/sh（dash）执行它就是空的，于是 "gui/" 变成非法域、
+#    bootstrap 静默失败 —— 2026-10-15 双击后隧道没起来就是这么发生的。
+UID_NUM=$(id -u)
 printf '  [1/2] 重新注册 launchd 任务...\n'
-launchctl bootout "gui/$UID/$LABEL" 2>/dev/null
+launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null
 sleep 2
-if ! launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null; then
-  printf '  [错误] 注册失败，请把上面的提示记下来。\n'
-  printf '\n按任意键关闭...'
-  read -n 1 -s -r
-  exit 1
+
+# 不再用 2>/dev/null 吞掉报错：注册失败时必须让用户看到 launchctl 的真实原因
+if launchctl bootstrap "gui/$UID_NUM" "$PLIST"; then
+  ok_launchd=1
+else
+  ok_launchd=0
+  printf '  [提示] launchd 注册失败（上面是 launchctl 的真实报错）\n'
+  printf '         自动改用「直接启动」兜底，保证服务不中断...\n'
+  TOKEN=$(tr -d ' \t\n\r' < tunnel-token.txt 2>/dev/null || true)
+  if [ -n "$TOKEN" ]; then
+    nohup cloudflared tunnel --no-autoupdate --protocol http2 run \
+      --token "$TOKEN" --url http://localhost:3000 >> tunnel.log 2>&1 &
+    printf '         已直接启动 cloudflared（PID %s），日志同样写 tunnel.log\n' "$!"
+  else
+    printf '  [错误] 连 tunnel-token.txt 也读不到，无法兜底。\n'
+    printf '\n按任意键关闭...'
+    read -n 1 -s -r
+    exit 1
+  fi
 fi
 
 # 记住当前日志行数，之后只检查新增部分 ——
