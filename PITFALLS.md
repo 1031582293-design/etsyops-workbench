@@ -225,7 +225,7 @@
 - **本来的目的**：后端在操作人 Windows 常驻，前端随时能连。
 - **现象**：两页（工作台 + 看板）同时偶发「后端不可达 / 检测中」，时好时坏。
 - **根因**：Cloudflare Tunnel（`cloudflared`）在间歇性掉线/重连，不是后端逻辑 bug，也不是电脑休眠（用户就在机器旁、窗口没关）。
-- **解法**：前端加**自动重连（3 次，1.5s）+ 手动重试按钮**自愈；新增 `start-robust.bat` 让 cloudflared / server.js 崩溃即 3s 自动重拉。
+- **解法**：前端加**自动重连（3 次，1.5s）+ 手动重试按钮**自愈；新增 `start-backend.bat` 让 cloudflared / server.js 崩溃即 3s 自动重拉。
 
 ### 17. 误判「操作人电脑休眠」——用户就在机器旁
 - **本来的目的**：两页偶发不可达，想当然猜是后端挂了。
@@ -250,10 +250,10 @@
 
 | 现象 | 可能原因 | 怎么办 |
 |---|---|---|
-| 工作台/看板偶发「后端不可达」 | cloudflared 隧道闪断 | 前端已自动重连；点「↻ 重试连接」；操作人跑 `start-robust.bat` 保活 |
+| 工作台/看板偶发「后端不可达」 | cloudflared 隧道闪断 | 前端已自动重连；点「↻ 重试连接」；操作人跑 `start-backend.bat` 保活 |
 | 徽章永久「检测绑定状态…」 | 旧版缓存（旧版无超时） | 私人窗口 `Cmd+Shift+N` 开；看版本号是否 `v20261005d`；清 pages.dev 网站数据 |
 | AI 生稿报错「模型不存在」 | `.env` 写了 `deepseek-chat` | 改为 `deepseek-v4-flash`（或 `deepseek-v4-pro`） |
-| AI 生稿显示「未就绪」 | `.env` 没填 `AI_API_KEY` | 填硅基流动/百炼免费 key 三行，重开 `start-robust.bat`，看日志 `ai: <model>` |
+| AI 生稿显示「未就绪」 | `.env` 没填 `AI_API_KEY` | 填硅基流动/百炼免费 key 三行，重开 `start-backend.bat`，看日志 `ai: <model>` |
 | 微信发布报 40164 | 出口 IP 没加白名单 | 开发者平台 → 我的业务 → 公众号 → 基础信息 → API IP 白名单加 IP |
 | 加白名单页误点「重置」 | AppSecret 失效 | 切勿点；若已点，需重新生成 Secret 并重发操作人填 `.env` |
 

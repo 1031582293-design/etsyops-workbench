@@ -223,7 +223,7 @@ WorkBuddy 自带"沙箱发布"能力（如 CloudStudio 等，把静态站一键�
 
 ## 八、2026-10-05 进展补充（工作台四步流 + AI 生稿 + 稳定地址已打通）
 
-> 本次轮次完成：① 稳定公网地址 `api.mailili-agency.com` 正式生效、后端真绑定公众号；② 工作台升级为四步工作流并新增 AI 生稿；③ 一连串稳定性/兼容性修复。**改动全部在 `etsyops` 仓库，推 GitHub 即 Pages 自动部署 + 操作人 `start-robust.bat` 自动 git pull。**
+> 本次轮次完成：① 稳定公网地址 `api.mailili-agency.com` 正式生效、后端真绑定公众号；② 工作台升级为四步工作流并新增 AI 生稿；③ 一连串稳定性/兼容性修复。**改动全部在 `etsyops` 仓库，推 GitHub 即 Pages 自动部署 + 操作人 `start-backend.bat` 自动 git pull。**
 
 ### 1. 稳定地址已就绪 + 后端真绑定公众号（此前卡点已解除）
 - 域名 `mailili-agency.com` 已绑 Cloudflare，隧道配公共主机名 `api.mailili-agency.com`，实测 `/api/wechat/status` 返回：
@@ -259,7 +259,9 @@ WorkBuddy 自带"沙箱发布"能力（如 CloudStudio 等，把静态站一键�
 - 超时写法兼容旧 Safari（`AbortSignal.timeout` 需 16.4+，改为 `AbortController`+`setTimeout`），并加 10s 兜底强提示。
 - **前端自愈**：工作台 + 数据看板后端状态检测加**自动重连（3 次，间隔 1.5s）+ 手动「↻ 重试连接」按钮**；隧道闪断瞬间自愈，不再钉死「不可达」。
 - 两页加**可见版本号**（`build v20261005d`），一眼判断是否部署到最新、是否还在跑旧缓存。
-- 新增 **`start-robust.bat`**（替换 `start-backend.bat`）：git pull + cloudflared 独立窗口崩溃 3s 重连 + server.js 崩溃 3s 重启循环 + 接电源禁睡眠。**任一阵列崩溃自动拉起，不用人点。**
+- **`start-backend.bat`（Windows 唯一启动入口）**：git pull + cloudflared 崩溃自动重连 + server.js 崩溃自动重启 + 隧道 3 次重试并降级 http2。**任一阵列崩溃自动拉起，不用人点。**
+  > 早期曾有个 `start-robust.bat`（自带循环 + 改电源禁睡眠），功能已并入本文件，
+  > 该文件已于 2026-10-16 删除，文档里提到它的地方统一改回 `start-backend.bat`。
 
 ### 6. 免费 AI key（2026-10-05 核实，已修正此前过时信息）
 > ⚠️ 此前写的"硅基流动送 2000~3000 万 Tokens 永久"已过时（2026 年中已缩水）。以下为 2026-10 实测政策。**两家免费额度/免费模型都需先「实名认证」，且百炼需「开通服务」，否则看不到额度——这是"好像没有"的最常见原因。**
@@ -283,10 +285,10 @@ WorkBuddy 自带"沙箱发布"能力（如 CloudStudio 等，把静态站一键�
 | AI 生稿 | ⚠️ 代码就绪 | 待操作人 `.env` 填 AI_API_KEY（硅基流动/百炼免费 key）后亮「✅ 已就绪」 |
 | 微信 IP 白名单 | ⚠️ 待加 | 出口 IP 已可探测，加白后真实发布不再 40164 |
 | 数据看板 | ✅ 可用 | 真实粉丝/草稿/已发布（图文分析需认证服务号+数据权限） |
-| 稳定性 | ✅ 强化 | 前端自动重试 + start-robust.bat 崩溃自拉 |
+| 稳定性 | ✅ 强化 | 前端自动重试 + start-backend.bat 崩溃自拉 |
 
 ### 9. 下一步待办（明天校验用）
-1. 操作人 `.env` 填 `AI_API_KEY` 等三行（硅基流动/百炼免费 key），重开 `start-robust.bat`，确认日志 `ai: <model>`。
+1. 操作人 `.env` 填 `AI_API_KEY` 等三行（硅基流动/百炼免费 key），重开 `start-backend.bat`，确认日志 `ai: <model>`。
 2. 微信开发者平台把出口 IP 加进「API IP 白名单」，保存（管理员扫码）。
 3. 浏览器用 `?api=https://api.mailili-agency.com` 打开工作台，确认顶部 `✅ 已绑定真实公众号` + 版本号 `v20261005d`。
 4. 试跑四步流：上传素材 → AI 生稿 → 排版 → 发布草稿箱，核对微信后台草稿箱出现该图文。
@@ -298,9 +300,9 @@ WorkBuddy 自带"沙箱发布"能力（如 CloudStudio 等，把静态站一键�
 | `wechat-publisher.html` | 3 步→4 步；加多格式/多选上传、AI 生稿面板、自动重连/重试、版本号 |
 | `wechat-dashboard.html` | 加自动重连/重试按钮、版本号 |
 | `server.js` | 新增 `/api/ai/status`、`/api/ai/generate`、`/api/wechat/ip` 多镜像兜底；启动日志带 `ai:` |
-| `start-robust.bat` | **新增**：崩溃自动重启的常驻启动器 |
+| `start-backend.bat` | **新增**：崩溃自动重启的常驻启动器 |
 | `.env.example` | 新增 `AI_API_KEY`/`AI_BASE_URL`/`AI_MODEL` 段与注释 |
-| 最新提交 | `d0e4e6f`（四步流）→ `2f0261e`（模型修正）→ `5a35f5f`/`4dd09a3`（卡死修复/兼容）→ `8488fa8`（重试自愈 + start-robust.bat + v20261005d） |
+| 最新提交 | `d0e4e6f`（四步流）→ `2f0261e`（模型修正）→ `5a35f5f`/`4dd09a3`（卡死修复/兼容）→ `8488fa8`（重试自愈 + start-backend.bat + v20261005d） |
 
 ---
 

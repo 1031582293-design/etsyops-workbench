@@ -188,7 +188,7 @@ elif launchctl print "gui/$(id -u)/com.etsyops.tunnel" >/dev/null 2>&1; then
   sleep 2
   if launchctl bootstrap "gui/$(id -u)" "$PLIST"; then
     ok "已重新注册 com.etsyops.tunnel，守护会保它常驻（崩了自动拉起）"
-    say "     以后想单独重启隧道，双击文件夹里的「重启隧道.command」即可"
+    say "     以后想单独重启隧道，双击文件夹里的「工作台.command」即可"
   else
     warn "launchd 注册失败（上面是它的真实报错）。已改用直接启动兜底，服务不中断。"
     pkill -x cloudflared 2>/dev/null || true
