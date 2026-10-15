@@ -278,7 +278,12 @@
         <input type="file" id="file" accept="image/*" multiple class="hidden" />
         <div class="drop" id="drop">点击选择图片，或把图片拖到这里<span style="display:block;font-size:11.5px;color:var(--text-faint);margin-top:6px">支持 JPG / PNG，建议短边≥2000px。表格里的文件名会按名对上号</span></div>
         <div class="thumbs" id="thumbs"></div>
+        <div id="imgPurposes"></div>
         <div id="msgImg" class="msg"></div>
+        <div class="btnrow" style="margin-top:8px">
+          <button class="btn sm" id="btnImgPlan">AI 生成图片处理计划（SOP 09）</button>
+        </div>
+        <div id="imgPlanBox"></div>
 
         <div id="importList"></div>
 
@@ -332,6 +337,16 @@
         </div>
         <div id="msgAiBatch" class="msg"></div>
         <div class="progress hidden" id="aiProg"><div class="bar"><i id="aiBar"></i></div><span id="aiProgTxt"></span></div>
+
+        <div class="subhead" style="margin-top:20px">关键词候选池（SOP 03）
+          <span class="hint">AI 只出候选词，验证靠你 —— 到 Etsy 搜索框 / Marketplace Insights 查过再改状态；「已验证 / 采纳」的词生成文案时优先使用</span>
+        </div>
+        <div class="row2">
+          <select id="kwSku"><option value="">（先在第 1 步解析表格）</option></select>
+          <button class="btn" id="btnKwGen">AI 生成候选词池</button>
+        </div>
+        <div id="kwMsg" class="msg"></div>
+        <div id="kwTable"></div>
 
         <div id="aiList"></div>
       </section>
@@ -1149,6 +1164,14 @@ function readAsImage(file) {
     fr.readAsDataURL(file);
   });
 }
+/* SOP 09：8 类图的用途。标记存内存（IMAGES[].purpose），生成「图片处理计划」时用。 */
+const IMG_PURPOSES = [
+  ['main', '01 首图'], ['angle', '02 侧/背面'], ['craft', '03 工艺近照'],
+  ['size', '04 尺寸图'], ['variant', '05 选款图'], ['included', '06 包含物'],
+  ['scene', '07 使用/场景'], ['package', '08 包装/定制'],
+];
+function purposeLabel(k){ const p = IMG_PURPOSES.find(x => x[0] === k); return p ? p[1] : '未标记'; }
+
 function renderThumbs(){
   const box = document.getElementById('thumbs');
   box.innerHTML = IMAGES.map((im, i) =>
@@ -1170,9 +1193,73 @@ function renderThumbs(){
       log('主图已换为原第 ' + (i + 1) + ' 张');
     });
   });
+  // 用途标记行（SOP 09）：每张图一行，方便 AI 出处理计划时对号
+  const mark = document.getElementById('imgPurposes');
+  if (mark) {
+    mark.innerHTML = IMAGES.length
+      ? '<div style="font-size:12px;color:var(--text-faint);margin:10px 0 4px">图片用途标记（SOP 09 的 8 类图，标记后点「AI 生成图片处理计划」）：</div>'
+        + IMAGES.map((im, i) =>
+          '<div style="display:flex;gap:8px;align-items:center;margin:4px 0;font-size:12.5px">'
+          + '<span style="width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+          + esc(im.filename || ('图 ' + (i + 1))) + '</span>'
+          + '<select data-img-p="' + i + '" style="flex:1">'
+          + IMG_PURPOSES.map(([k, label]) =>
+              '<option value="' + k + '"' + (im.purpose === k ? ' selected' : '') + '>'
+              + (i === 0 ? '01 首图（第 1 张自动为主图）' : label) + '</option>').join('')
+          + '</select></div>').join('')
+      : '';
+    mark.querySelectorAll('[data-img-p]').forEach(sel => sel.addEventListener('change', () => {
+      IMAGES[Number(sel.dataset.imgP)].purpose = sel.value;
+    }));
+  }
   if (IMAGES.length) showMsg(document.getElementById('msgImg'), 'info',
     IMAGES.length + ' 张图片，第 1 张为主图。Etsy 要求实物商品展示真实成品照片，渲染图不能替代实拍。');
 }
+
+document.getElementById('btnImgPlan').addEventListener('click', async () => {
+  const btn = document.getElementById('btnImgPlan');
+  const box = document.getElementById('imgPlanBox');
+  if (!IMAGES.length){
+    showMsg(document.getElementById('msgImg'), 'err', '先上传图片再生成处理计划。');
+    return;
+  }
+  // 处理计划针对一个产品 —— 用第一个有事实的条目
+  const it = IMPORT_BATCH.find(aiRunnable) || IMPORT_BATCH[0];
+  btn.disabled = true;
+  box.innerHTML = '<div class="msg info">AI 正在逐张给处理建议（约 20~40 秒）…</div>';
+  try {
+    const r = await apiCall('/api/etsy/ai/image-plan', { method: 'POST', timeout: 150000,
+      body: Object.assign(factsOf(it || {}), {
+        images: IMAGES.map((im, i) => ({
+          filename: im.filename || ('图' + (i + 1)),
+          purpose: im.purpose || (i === 0 ? 'main' : ''),
+          purposeLabel: purposeLabel(im.purpose || (i === 0 ? 'main' : '')),
+        })),
+      }),
+      label: '生成图片处理计划' });
+    box.innerHTML = '<div class="msg ok">' + esc(r.note) + '</div>'
+      + '<pre style="white-space:pre-wrap;font-size:12.5px;line-height:1.7;background:var(--bg-soft,rgba(127,127,127,.08));'
+      + 'padding:12px;border-radius:10px;overflow:auto">' + esc(r.plan) + '</pre>'
+      + '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12.5px">'
+      + 'SOP 09 提示词 D：保留实拍主体的图片处理（复制去你的修图工具用）</summary>'
+      + '<pre style="white-space:pre-wrap;font-size:12px;line-height:1.7;background:var(--bg-soft,rgba(127,127,127,.08));'
+      + 'padding:12px;border-radius:10px;overflow:auto">' + esc(SOP_PROMPT_D) + '</pre></details>';
+    log('图片处理计划已生成（' + IMAGES.length + ' 张图）', 's');
+  } catch(e){
+    box.innerHTML = '<div class="msg err">生成失败：' + esc(e.message || e) + '</div>';
+  } finally { btn.disabled = false; }
+});
+
+/* SOP 09 提示词 D 原文。注意：当前生图模型是文生图、做不了保留实拍主体的修图，
+ * 所以这段是给用户复制到专业修图工具（抠图/遮罩类）用的，工作台不代跑。 */
+const SOP_PROMPT_D = [
+  '请处理我上传的真实产品照片，目标是 Etsy 商品展示。',
+  '保留产品主体原始像素、形状、比例、实际颜色、图案、缝线、毛发、釉面、配件数量及真实瑕疵。',
+  '只调整背景、构图和轻微曝光白平衡，背景使用干净的暖白色。',
+  '禁止重新绘制产品，禁止改变材质或工艺，禁止增减零件，禁止补造看不见的结构，禁止生成不同角度冒充实拍。',
+  '主体居中并保留周围裁切空间，不加广告词、水印或 logo；不透明背景，建议横向输出。',
+  '如果你无法保留实拍主体，请先说明限制并给出抠图或补拍方案，不要返回看似相同的重绘商品。',
+].join('\n');
 
 /* ---------- 步骤 4：变体 ---------- */
 document.getElementById('btnAddVar').addEventListener('click', () => {
@@ -1331,6 +1418,7 @@ boot().then(async () => {
   await loadAccounts();        // 1. 列出已授权的 Etsy 账号
   await loadShops();           // 2. 列当前账号下的店铺，拿到 SELECTED_SHOP
   await loadPromptVersions();  // 3. 再按店铺取提示词版本
+  await loadKeywords();        // 4. 关键词候选池（SOP 03，按 SKU 分桶）
 }).catch(() => {});
 
 
@@ -1351,6 +1439,9 @@ document.getElementById('btnAiCopy').addEventListener('click', async () => {
     item_height: numOrNull(document.getElementById('fHgt').value),
     item_dimensions_unit: document.getElementById('fDimUnit').value,
     price: document.getElementById('fPrice').value.trim(),
+    // SOP 03：验证过的关键词优先使用（从候选池取，SKU 为空时取不到就传空数组）
+    verified_keywords: adoptedKeywords(document.getElementById('fSku')
+      ? document.getElementById('fSku').value.trim() : ''),
   };
   if (!facts.materials.length && !facts.audience_note && !facts.item_weight) {
     showMsg(msg, 'err', '请先填「材质」或「适合人群」或「净重」至少一项，再让 AI 生成。'
@@ -1489,6 +1580,7 @@ function doParseImport() {
   renderImportList();
   refreshGiveNext();
   renderAiList();
+  renderKwSkuOptions();   // 新解析的条目同步进关键词池的 SKU 下拉
 }
 
 function renderImportList() {
@@ -1571,6 +1663,99 @@ function factsOf(it) {
   };
 }
 
+/* ---------- 关键词候选池（SOP 03） ----------
+ * AI 出候选词 → 人去 Etsy 搜索验证 → 改状态 → 生成文案时把「已验证/采纳」的词
+ * 传给后端（factsToText 会拼成「已验证关键词（优先使用）」）。
+ * 词池按 SKU 存后端 data/etsy-keywords.json。 */
+const KW_STATUS_LABEL = { candidate: '候选，未验证', verified: '已搜索验证', adopted: '采纳' };
+let KW_POOL = {};   // sku -> words[]
+
+function kwMsg(kind, html){ showMsg(document.getElementById('kwMsg'), kind, html); }
+
+async function loadKeywords(){
+  try {
+    const d = await apiCall('/api/etsy/keywords', { timeout: 20000, label: '读取关键词池' });
+    KW_POOL = d.skus || {};
+  } catch(e){ KW_POOL = {}; }
+  renderKwSkuOptions();
+}
+
+function renderKwSkuOptions(){
+  const sel = document.getElementById('kwSku');
+  if (!sel) return;
+  const skus = new Set([...IMPORT_BATCH.map(it => it.sku || ('第 ' + it._row + ' 行')), ...Object.keys(KW_POOL)]);
+  const cur = sel.value;
+  sel.innerHTML = [...skus].map(s => '<option value="' + esc(s) + '">' + esc(s) + '</option>').join('')
+    || '<option value="">（先在第 1 步解析表格）</option>';
+  if (cur && [...skus].includes(cur)) sel.value = cur;
+}
+
+function renderKwTable(){
+  const box = document.getElementById('kwTable');
+  const sku = document.getElementById('kwSku').value;
+  const words = (KW_POOL[sku] || {}).words || [];
+  if (!words.length){
+    box.innerHTML = '<div style="font-size:12.5px;color:var(--text-faint);padding:8px 0">'
+      + '这个 SKU 还没有候选词。点「AI 生成候选词池」开始，或先填好产品事实再生成。</div>';
+    return;
+  }
+  box.innerHTML = '<div style="font-size:12px;color:var(--text-faint);margin:6px 0">'
+    + words.length + ' 个候选词 · 改状态下拉即自动保存</div>'
+    + '<table class="kv" style="width:100%">'
+    + words.map((w, i) =>
+      '<tr><td style="width:34%"><b>' + esc(w.en) + '</b>'
+      + (w.en.length > 20 ? ' <span style="color:var(--bad)">' + w.en.length + '字符</span>' : '')
+      + '</td><td style="width:22%">' + esc(w.zh || '')
+      + '</td><td style="width:12%">' + esc(w.w || '')
+      + '</td><td style="width:32%"><select data-kw-i="' + i + '">'
+      + ['candidate','verified','adopted'].map(s =>
+          '<option value="' + s + '"' + ((w.status || 'candidate') === s ? ' selected' : '') + '>'
+          + KW_STATUS_LABEL[s] + '</option>').join('')
+      + '</select></td></tr>').join('')
+    + '</table>';
+  box.querySelectorAll('[data-kw-i]').forEach(sel => sel.addEventListener('change', () => {
+    const i = Number(sel.dataset.kwI);
+    KW_POOL[sku].words[i].status = sel.value;
+    saveKeywords(sku);
+  }));
+}
+
+async function saveKeywords(sku){
+  if (!sku || !KW_POOL[sku]) return;
+  try {
+    await apiCall('/api/etsy/keywords', { method: 'POST', timeout: 20000,
+      body: { sku, words: KW_POOL[sku].words }, label: '保存关键词池' });
+  } catch(e){ kwMsg('err', '词池保存失败：' + esc(e.message)); }
+}
+
+/** 该 SKU 已验证/采纳的词（生成文案时优先使用） */
+function adoptedKeywords(sku){
+  const words = (KW_POOL[sku] || {}).words || [];
+  return words.filter(w => w.status === 'verified' || w.status === 'adopted').map(w => w.en);
+}
+
+document.getElementById('kwSku').addEventListener('change', renderKwTable);
+document.getElementById('btnKwGen').addEventListener('click', async () => {
+  const sku = document.getElementById('kwSku').value;
+  const it = IMPORT_BATCH.find(x => (x.sku || ('第 ' + x._row + ' 行')) === sku);
+  const btn = document.getElementById('btnKwGen');
+  if (!it){ kwMsg('err', '先回第 1 步解析表格，选出要生成关键词的条目。'); return; }
+  btn.disabled = true;
+  kwMsg('info', 'AI 正在按产品事实生成候选词池（约 20~40 秒）…');
+  try {
+    const r = await apiCall('/api/etsy/ai/keywords', { method: 'POST', timeout: 150000,
+      body: factsOf(it), label: '生成关键词候选池' });
+    KW_POOL[sku] = { words: r.words, updatedAt: Date.now() };
+    await saveKeywords(sku);
+    renderKwTable();
+    kwMsg('ok', esc(r.note));
+    log('关键词候选池（' + sku + '）：' + r.words.length + ' 个候选词，待人工验证', 's');
+  } catch(e){
+    kwMsg('err', '生成失败：' + esc(e.message || e)
+      + '<br><span style="color:var(--text-faint)">如果提示 AI 未配置/连不上，看「AI 连通检查」的说明 —— 与文案生成是同一个出口。</span>');
+  } finally { btn.disabled = false; }
+});
+
 /** 事实不足的条目直接拒绝 —— 凭空写规格是 Etsy 的合规风险 */
 function aiRunnable(it) {
   const f = factsOf(it);
@@ -1608,6 +1793,25 @@ document.getElementById('btnAiBatch').addEventListener('click', async () => {
     title: '', description: '', tags: [],
   }));
 
+  // ★ 开跑前先 ping 一次 AI。受理成功但出口不通时，第一条要等满超时才报错，
+  //   用户只能对着「0/N 排队中」干等 —— 这里当场给出明确原因。
+  showAiMsg('info', '先检查 AI 连通…');
+  try {
+    const chk = await apiCall('/api/etsy/ai/check', { timeout: 30000, label: 'AI 连通检查' });
+    if (!chk.ok) {
+      btn.disabled = false; stop.disabled = true;
+      setAiProgress(0, 0);
+      showAiMsg('err', '<b>AI 连不上，没有开始生成。</b>' + esc(chk.note));
+      log('AI 连通检查失败：' + chk.note, 'e');
+      return;
+    }
+    log('AI 连通正常（' + chk.latencyMs + 'ms，模型 ' + chk.model + '）', 's');
+  } catch (e) {
+    btn.disabled = false; stop.disabled = true;
+    showAiMsg('err', 'AI 连通检查失败：' + esc(e.message || e));
+    return;
+  }
+
   const warn = skip.length
     ? '<br><b>' + skip.length + ' 条被跳过</b>（缺材质/尺寸/适合人群，AI 没有事实可用），下方以灰色标出。'
     : '';
@@ -1620,7 +1824,8 @@ document.getElementById('btnAiBatch').addEventListener('click', async () => {
     const r = await apiCall('/api/etsy/ai/batch', {
       method: 'POST',
       body: JSON.stringify({
-        items: todo.map(factsOf),
+        items: todo.map(it => Object.assign(factsOf(it),
+          { verified_keywords: adoptedKeywords(it.sku || ('第 ' + it._row + ' 行')) })),
         prompt: currentPrompt() || undefined,
       }),
       timeout: 30000,
@@ -1657,6 +1862,16 @@ function pollAiBatch(jobId, total) {
       const r = await apiCall('/api/etsy/ai/batch?jobId=' + encodeURIComponent(jobId),
         { timeout: 30000, label: '查询 AI 进度' });
       const done = Number(r.done || 0);
+      // 进度写进运行日志：批量生成在后台跑时日志区原本完全静默，
+      // 用户无法区分「在跑」和「卡死」。done 每变化就记一行。
+      if (done !== lastDone) {
+        const okNow = AI_RESULTS.filter(x => x.status === 'done').length;
+        const errNow = AI_RESULTS.filter(x => x.status === 'error').length;
+        log('AI 进度 ' + done + '/' + total
+          + (okNow ? '，成功 ' + okNow : '')
+          + (errNow ? '，失败 ' + errNow : ''), errNow ? 'e' : 's');
+        loadQuota();   // 每条生成会消耗 Etsy/AI 额度，顺手刷新侧栏用量
+      }
       lastDone = done;
       setAiProgress(done, total, r.note || '');
       // 用后端返回的 results 覆盖（断点续跑：刷新页面后接着看）

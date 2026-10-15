@@ -263,6 +263,7 @@ function attachAccountShops(userId, shops, forceActiveShopId) {
  * Etsy 限额：10,000 次/天/API Key（按 Key 不按 Token），UTC 午夜重置；单端点 10 次/秒。
  * 计数落盘到 data/etsy-quota.json，重启不丢。 */
 const ETSY_QUOTA_FILE = join(DATA_DIR, 'etsy-quota.json');
+const ETSY_KEYWORDS_FILE = join(DATA_DIR, 'etsy-keywords.json');
 function readQuotaSeed() {
   try { return JSON.parse(readFileSync(ETSY_QUOTA_FILE, 'utf8')); } catch { return null; }
 }
@@ -539,7 +540,7 @@ const ETSY_AI_MODEL = (process.env.ETSY_AI_MODEL || '').trim() || AI_MODEL;
  * 这样配的好处是：公众号直连最快，Etsy 走代理，两边互不拖累。 */
 const AI_PROXY = (process.env.AI_PROXY || '').trim();
 const ETSY_AI_PROXY = (process.env.ETSY_AI_PROXY || '').trim() || AI_PROXY;
-const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 300000; // 长文生稿可能要 1~3 分钟
+const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 120000; // 文案生成一般 20~60 秒；120s 兜底
 
 function aiConfigured() {
   return Boolean(AI_API_KEY);
@@ -742,7 +743,7 @@ async function handleApi(req, res) {
   const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status', '/api/etsy/connectivity', '/api/etsy/whoami', '/api/diag/logs'];
   // ★ AI 队列的三个路径也免key：AI 没配好时队列根本跑不起来，
   //   那正是最需要看它报什么的时候（2026-10-07 加，之前只写了注释没真加，队列在排查时完全不可见）。
-  const ETSY_AI_BATCH_OPEN = p === '/api/etsy/ai/batch' || p === '/api/etsy/ai/batch/stop';
+  const ETSY_AI_BATCH_OPEN = p === '/api/etsy/ai/batch' || p === '/api/etsy/ai/batch/stop' || p === '/api/etsy/ai/check';
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status'
       && !ETSY_OPEN_PATHS.includes(p) && !ETSY_AI_BATCH_OPEN) {
     const url = new URL(req.url, 'http://localhost');
@@ -1066,6 +1067,166 @@ async function handleApi(req, res) {
    * 失败策略：单条失败**跳过并记录原因**，不中断整批 —— 用户按你选的
    * 「跳过失败项+ 列清单」实现。跑完后返回 failures 数组。
    */
+  /* ---------- AI 图片处理计划（SOP 05/08/09） ----------
+   * 注意边界：当前生图模型（CogView）是文生图，做不了「保留实拍主体的修图」，
+   * SOP 09 也明确禁止用重绘冒充实拍。所以这里让 AI 输出的是**文字处理计划** ——
+   * 每张图的用途是否合适、该修什么、是否该补拍；真正的修图用抠图/遮罩类工具做。 */
+  if (p === '/api/etsy/ai/image-plan' && req.method === 'POST') {
+    // 参数校验放在 AI 配置检查之前 —— 否则「没传图」会被误报成「AI 未配置」
+    try {
+      const b0 = await readJson(req);
+      if (!Array.isArray(b0.images) || !b0.images.length) {
+        return json(res, 400, { error: 'no_images', note: '先在第 1 步上传图片并标记用途。' });
+      }
+    } catch (e) {
+      return json(res, 400, { error: 'bad_request', note: e.message });
+    }
+    if (!etsyAiConfigured()) {
+      return json(res, 400, { error: 'etsy_ai_not_configured', note: 'AI 未配置。' });
+    }
+    try {
+      const b = await readJson(req);
+      const facts = factsToText(b);
+      const images = Array.isArray(b.images) ? b.images.slice(0, 20) : [];
+      const list = images.map((im, i) =>
+        `${i + 1}. ${im.filename || ('图' + (i + 1))} —— 已标记用途：${im.purposeLabel || '未标记'}`).join('\n');
+      const content = await etsyAiGenerate(
+        '你是 Etsy 商品图片审核助手。依据产品事实与用户的图片用途标记，逐张给出处理计划。\n'
+        + '每张图输出：①用途是否合适（首图要一眼看清成品、缩略图不裁掉关键部位）；'
+        + '②背景/曝光/构图该修什么（只允许清理背景与轻微校正，禁止重绘产品）；'
+        + '③是否必须补拍（缺背面/缺款式/主体模糊时必须补拍，不能靠 AI 补）；'
+        + '④尺寸图/选款图需要叠加的英文文字建议。\n'
+        + '最后给一段「补拍清单」（没有就写「无」）与「Etsy 图片规格提醒」'
+        + '（JPG、sRGB、短边至少 2000px、上传后检查方形与横向缩略图裁切）。\n'
+        + '用简短中文，每张图 2~3 行。\n产品事实：\n' + facts.join('\n') + '\n\n图片清单：\n' + list,
+        '请逐张给出处理计划。');
+      return json(res, 200, { ok: true, plan: content, model: ETSY_AI_MODEL,
+        note: '处理计划已生成。AI 只做文字建议，不能替你修图 —— 重绘产品违反 Etsy 实拍要求。' });
+    } catch (e) {
+      return json(res, 400, { error: 'image_plan_failed', note: e.message });
+    }
+  }
+
+  /* ---------- 关键词候选池（SOP 03） ----------
+   * SOP 流程：AI 出 5W 候选词池（全部标「候选，未验证」）→ 人到 Etsy 搜索 /
+   * Marketplace Insights 验证 → 在工作台标状态 → 验证过的词在生成文案时优先使用。
+   * 落盘 data/etsy-keywords.json，按 SKU 分桶。 */
+  if (p === '/api/etsy/keywords' && req.method === 'GET') {
+    try {
+      const d = JSON.parse(readFileSync(ETSY_KEYWORDS_FILE, 'utf8'));
+      return json(res, 200, { ok: true, skus: d.skus || {} });
+    } catch { return json(res, 200, { ok: true, skus: {} }); }
+  }
+  if (p === '/api/etsy/keywords' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const sku = String(b.sku || '').trim();
+      if (!sku) return json(res, 400, { error: 'bad_request', note: '缺少 sku。' });
+      if (!Array.isArray(b.words)) return json(res, 400, { error: 'bad_request', note: 'words 必须是数组。' });
+      let d;
+      try { d = JSON.parse(readFileSync(ETSY_KEYWORDS_FILE, 'utf8')); }
+      catch { d = { skus: {} }; }
+      if (!d.skus) d.skus = {};
+      d.skus[sku] = { words: b.words.slice(0, 40), updatedAt: Date.now() };
+      mkdirSync(DATA_DIR, { recursive: true });
+      const tmp = ETSY_KEYWORDS_FILE + '.tmp';
+      writeFileSync(tmp, JSON.stringify(d, null, 2), 'utf8');
+      renameSync(tmp, ETSY_KEYWORDS_FILE);
+      return json(res, 200, { ok: true, sku, count: d.skus[sku].words.length });
+    } catch (e) {
+      return json(res, 400, { error: 'bad_request', note: e.message });
+    }
+  }
+
+  /* AI 生成 5W 关键词候选池（SOP 提示词 B 的自动化版）。
+   * ★ 全部输出都标「候选，未验证」—— AI 不能检索 Etsy 实时搜索量，
+   *   编造搜索量是 SOP 明令禁止的。验证靠人去 Etsy 搜索框 / Marketplace Insights。 */
+  if (p === '/api/etsy/ai/keywords' && req.method === 'POST') {
+    if (!etsyAiConfigured()) {
+      return json(res, 400, { error: 'etsy_ai_not_configured',
+        note: 'AI 未配置。请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL。' });
+    }
+    try {
+      const b = await readJson(req);
+      const facts = factsToText(b);
+      if (!facts.length) return json(res, 400, { error: 'no_facts', note: '没有产品事实，先回第 1 步填表格。' });
+      const content = await etsyAiGenerate(
+        '你是 Etsy 搜索关键词研究员。依据产品事实，用 What(是什么)/Who(谁会买)/Where(放哪)/When(何时买)/Why(为什么买) '
+        + '整理 15~25 个美国英语买家会用的搜索短语。\n'
+        + '硬性规则：\n'
+        + '1. 先给物品词，再给材质形态词、真实用途词；不逐字翻译中文促销词（爆款/高端/厂家直供等）。\n'
+        + '2. 排除无关节日、未经授权的品牌/角色、产品资料未支持的特征。\n'
+        + '3. 每个短语 ≤20 字符（含空格）。\n'
+        + '4. 全部是候选词：你没有 Etsy 实时数据，不得编造搜索量、竞争度或销量。\n'
+        + '5. 只输出 JSON 数组，不要任何解释。格式：'
+        + '[{"en":"ceramic horse","zh":"陶瓷马","w":"What","basis":"产品是陶瓷马摆件"}]',
+        '产品事实（只能依据这些）：\n' + facts.join('\n'));
+      // 容错解析：模型偶尔会在 JSON 外面包说明文字，截取第一个 [ 到最后一个 ]
+      const m = content.match(/\[[\s\S]*\]/);
+      if (!m) throw new Error('AI 返回的内容里找不到 JSON 数组，可重试一次。');
+      let words;
+      try { words = JSON.parse(m[0]); } catch (pe) {
+        throw new Error('AI 返回的 JSON 解析失败：' + pe.message + '（可重试一次）');
+      }
+      if (!Array.isArray(words) || !words.length) throw new Error('AI 返回的候选词为空，可重试一次。');
+      const clean = words.slice(0, 40).map(w => ({
+        en: String(w.en || '').trim().slice(0, 20),
+        zh: String(w.zh || '').trim(),
+        w: String(w.w || '').trim(),
+        basis: String(w.basis || '').trim(),
+        status: 'candidate',   // candidate=候选未验证 | verified=已搜索验证 | adopted=采纳
+      })).filter(w => w.en);
+      if (!clean.length) throw new Error('AI 返回的候选词全部为空，可重试一次。');
+      etsyLog(`关键词候选池生成成功：${clean.length} 个（全部标记为候选未验证）`);
+      return json(res, 200, { ok: true, words: clean, model: ETSY_AI_MODEL,
+        note: `生成 ${clean.length} 个候选词，全部是「候选，未验证」。请到 Etsy 搜索框验证后再把状态改为已验证/采纳。` });
+    } catch (e) {
+      return json(res, 400, { error: 'keywords_failed', note: e.message });
+    }
+  }
+
+  /* ★ Etsy AI 连通性实测：真发一个 8 token 的探测请求。
+   * 为什么需要它：批量生成受理后会挂在后台跑，AI 出口不通时要等满超时才报错，
+   * 用户只能对着「0/N 排队中」干等。开跑前先 ping 一次，连不上当场给出明确原因。 */
+  if (p === '/api/etsy/ai/check' && req.method === 'GET') {
+    if (!etsyAiConfigured()) {
+      return json(res, 200, { ok: false, reason: 'not_configured',
+        note: 'Etsy AI 未配置：.env 需要 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL（留空则复用公众号那套 AI_*）。' });
+    }
+    const t0 = Date.now();
+    try {
+      const r = await etsyAiFetch()(`${ETSY_AI_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ETSY_AI_API_KEY}` },
+        body: JSON.stringify({ model: ETSY_AI_MODEL, max_tokens: 8,
+          messages: [{ role: 'user', content: 'ping' }] }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const latency = Date.now() - t0;
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.choices) {
+        return json(res, 200, { ok: true, latencyMs: latency, model: ETSY_AI_MODEL,
+          note: `AI 连通正常（${latency}ms，模型 ${ETSY_AI_MODEL}）` });
+      }
+      if (r.status === 401 || r.status === 403) {
+        return json(res, 200, { ok: false, reason: 'auth',
+          note: `AI 鉴权失败（HTTP ${r.status}）：检查 ETSY_AI_API_KEY 是否正确、是否过期。` });
+      }
+      if (r.status === 404) {
+        return json(res, 200, { ok: false, reason: 'model',
+          note: `模型名不存在（HTTP 404）：ETSY_AI_MODEL=${ETSY_AI_MODEL} 不是该服务支持的模型名。` });
+      }
+      return json(res, 200, { ok: false, reason: 'http_' + r.status,
+        note: `AI 服务返回 HTTP ${r.status}：` + JSON.stringify(d).slice(0, 200) });
+    } catch (e) {
+      const isTimeout = e.name === 'TimeoutError' || /timeout|aborted/i.test(e.message || '');
+      return json(res, 200, { ok: false, reason: 'network',
+        note: isTimeout
+          ? 'AI 连接超时（20 秒无响应）：检查 ETSY_AI_BASE_URL 是否可达；换 OpenAI 等海外服务时 ETSY_AI_PROXY 必填。'
+          : 'AI 连接失败：' + (e.message || e) + '（检查网络 / 代理配置）' });
+    }
+  }
+
   if (p === '/api/etsy/ai/batch' && req.method === 'POST') {
     if (!etsyAiConfigured()) {
       return json(res, 400, { error: 'etsy_ai_not_configured',
@@ -1297,6 +1458,10 @@ function factsToText(b) {
       ? `尺寸：${b.item_length}×${b.item_width}×${b.item_height} ${b.item_dimensions_unit || 'cm'}` : '',
     b.price ? `售价：$${b.price}` : '',
     b.taxonomy_name ? `Etsy 类目：${b.taxonomy_name}` : '',
+    // SOP 03：人工验证过的关键词要传给 AI —— 生成文案时优先用这些词，
+    // 而不是让 AI 再自己发明一遍（验证记录在 data/etsy-keywords.json）
+    Array.isArray(b.verified_keywords) && b.verified_keywords.length
+      ? `已验证关键词（优先使用）：${b.verified_keywords.join(', ')}` : '',
   ].filter(Boolean);
 }
 
