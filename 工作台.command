@@ -119,10 +119,17 @@ show_version(){
   else
     printf '   [警告] 本地落后于远程 —— 刚才的 git pull 多半没成功\n'
   fi
-  if [ "$running" != "?" ] && [ "$running" != "$local_head" ]; then
-    printf '   [警告] 后端跑的不是硬盘上这份代码！必须重启后端才生效\n'
-  elif [ "$running" = "$local_head" ] && [ "$local_head" != "?" ]; then
-    printf '   [ok] 后端跑的就是这份代码\n'
+  # 只有拿到合法的 commit 哈希才能比对；拿不到（例如 launchd 环境下 git 不可用）
+  # 就明说「跳过这项核对」，不能反过来误报「后端跑的不是这份代码」——那是误导。
+  if printf '%s' "$running" | grep -qE '^[0-9a-f]{7,40}$'; then
+    if [ "$running" != "$local_head" ]; then
+      printf '   [警告] 后端跑的不是硬盘上这份代码！必须重启后端才生效\n'
+    else
+      printf '   [ok] 后端跑的就是这份代码\n'
+    fi
+  else
+    printf '   [提示] 后端自报不了 commit（%s），跳过这项核对\n' "$running"
+    printf '         想看真实原因： tail -n 5 backend.log\n'
   fi
 }
 

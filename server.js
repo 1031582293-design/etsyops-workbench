@@ -5,7 +5,7 @@
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
-import { join, normalize, extname, resolve } from 'node:path';
+import { join, normalize, extname, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname as osHostname } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -128,12 +128,28 @@ function updateRun(id, patch) {
 const SERVER_ID = (() => {
   let commit = '(未知)';
   let dirty = null;
+  // ★ 两个 git 调用必须分开 try/catch。
+  //   曾经合成一个 try：`git status --porcelain` 一旦失败，catch 会把上面已经拿到的
+  //   commit 一起覆盖成「非 git 目录或 git 不可用」——于是 /api/etsy/whoami 永远看不到
+  //   版本号，排查时还会误判成「代码没更新」。
+  // ★ 用绝对路径 /usr/bin/git：launchd 的 PATH 与交互式 shell 不同，不依赖 PATH 更稳。
+  //   失败原因打到日志（backend.log），不要静默——沙盒里复现不了 launchd 环境的差异，
+  //   只能让真实环境自己把原因说出来。
+  const REPO_DIR = dirname(fileURLToPath(import.meta.url));
+  const GIT_BIN = '/usr/bin/git';
   try {
-    commit = execSync('git rev-parse --short HEAD', { cwd: dirname(fileURLToPath(import.meta.url)), stdio: ['ignore', 'pipe', 'ignore'] })
+    commit = execSync(`${GIT_BIN} rev-parse --short HEAD`, { cwd: REPO_DIR, stdio: ['ignore', 'pipe', 'ignore'] })
       .toString().trim();
-    dirty = /\M/.test(execSync('git status --porcelain', { cwd: dirname(fileURLToPath(import.meta.url)), stdio: ['ignore', 'pipe', 'ignore'] }).toString());
-  } catch {
+  } catch (e) {
     commit = '(非 git 目录或 git 不可用)';
+    console.warn('[server] git rev-parse 失败：', String((e && e.message) || e).split('\n')[0]);
+  }
+  try {
+    dirty = /\M/.test(execSync(`${GIT_BIN} status --porcelain`, { cwd: REPO_DIR, stdio: ['ignore', 'pipe', 'ignore'] }).toString());
+  } catch (e) {
+    // dirty 拿不到不影响 commit，只是「有没有未提交改动」这一项显示不出来
+    dirty = null;
+    console.warn('[server] git status 失败（不影响 commit）：', String((e && e.message) || e).split('\n')[0]);
   }
   return { hostname: osHostname(), pid: process.pid, startedAt: Date.now(), commit, dirty };
 })();
