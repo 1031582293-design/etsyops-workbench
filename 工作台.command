@@ -103,23 +103,33 @@ while true; do
   printf '\n========================================\n'
   printf ' EtsyOps 工作台   %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
   printf '========================================\n'
-  printf '  1) 启动后端 + 隧道\n'
+  printf '  1) 启动 / 更新（拉最新代码 + 重启后端 + 隧道）\n'
+  printf '      ↑ 日常就用这一个，服务没起来时也是它\n'
   printf '  2) 只重启隧道\n'
   printf '  3) 只重启后端\n'
   printf '  4) 查看当前状态\n'
-  printf '  5) 拉取最新代码并重启（更新后必做）\n'
   printf '  0) 退出\n'
-  printf '\n请选择 [0-5]：'
+  printf '\n请选择 [0-4]：'
   read -r choice
 
   case "$choice" in
     1)
-      hr; printf ' [1/2] 后端\n'
+      # 日常就用这一项：拉最新代码 → 重启后端（让新代码生效）→ 重启隧道。
+      # 不用再选别的：启动和更新是同一件事，服务没起来时也是选它。
+      hr; printf ' [1/3] 拉取最新代码\n'
+      if git pull; then
+        printf '  [ok] 代码已是最新\n'
+      else
+        printf '  [提示] git pull 没成功（上面是真实报错）\n'
+        printf '         本次用本地已有代码启动，可能不是最新版\n'
+      fi
+      printf ' [2/3] 后端\n'
       if has_job "$BACKEND"; then
+        # 必须重启：node 启动时就把 server.js 读进内存，不重启跑的是旧代码
         launchctl kickstart -k "gui/$UID_NUM/$BACKEND"
         sleep 3
         if curl -s -m 3 http://127.0.0.1:3000/api/ping >/dev/null 2>&1; then
-          printf '  [ok] 后端已启动并响应\n'
+          printf '  [ok] 后端已用最新代码启动并响应\n'
         else
           printf '  [提示] 后端刚拉起，稍后用菜单 4 确认\n'
         fi
@@ -127,7 +137,7 @@ while true; do
         printf '  没装守护，改用 start-mac.sh 启动…\n'
         ./start-mac.sh
       fi
-      printf ' [2/2] 隧道\n'
+      printf ' [3/3] 隧道\n'
       if [ -f "$PLIST_T" ]; then
         reregister_tunnel && wait_tunnel
       else
@@ -142,31 +152,6 @@ while true; do
       else
         printf '  [错误] 没找到 %s\n' "$PLIST_T"
       fi
-      ;;
-    5)
-      # 拉完代码必须重启后端才生效：node 进程启动时就把 server.js 读进内存了，
-      # git pull 换掉磁盘上的文件，跑着的进程还是旧代码。
-      hr; printf ' [1/3] 拉取最新代码\n'
-      if git pull; then
-        printf '  [ok] 代码已更新\n'
-      else
-        printf '  [提示] git pull 没成功（上面是真实报错），本次不重启，先用菜单 4 看状态\n'
-        pause
-        continue
-      fi
-      printf ' [2/3] 重启后端（让新代码生效）\n'
-      if has_job "$BACKEND"; then
-        launchctl kickstart -k "gui/$UID_NUM/$BACKEND"
-        sleep 3
-        curl -s -m 3 http://127.0.0.1:3000/api/ping >/dev/null 2>&1 \
-          && printf '  [ok] 后端已用新代码启动\n' \
-          || printf '  [提示] 没响应，看 backend.log 最后 15 行：\n' && tail -n 15 backend.log 2>/dev/null | sed 's/^/     /'
-      else
-        printf '  没装守护，改用 start-mac.sh 启动…\n'
-        ./start-mac.sh
-      fi
-      printf ' [3/3] 隧道（顺带重启，确保走的是最新 plist）\n'
-      [ -f "$PLIST_T" ] && reregister_tunnel && wait_tunnel
       ;;
     3)
       hr; printf ' 重启后端\n'
@@ -191,7 +176,7 @@ while true; do
       exit 0
       ;;
     *)
-      printf '\n请输入 0 到 5\n'
+      printf '\n请输入 0 到 4\n'
       ;;
   esac
   pause
