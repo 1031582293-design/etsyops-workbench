@@ -184,7 +184,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">da0ebdb</span>
+  <span class="vtag" id="verTag">1b9a5bd</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -2346,6 +2346,15 @@ function socStatePill(state){
   return el;
 }
 
+/* 后端还是旧代码时，新接口会落到路由末尾的 404 {error:'not_found'}。
+ * 这个报错对使用者没有任何信息量（看起来像数据坏了），所以这里直接点名真因。 */
+function socErrText(msg){
+  const m0 = String(msg == null ? '' : msg);
+  return esc(m0) + (/not_found/.test(m0)
+    ? '<br>后端看起来跑的还是旧代码 —— 社媒接口是本次新增的，<b>重启后端（start-backend.bat）</b>后再试。'
+    : '');
+}
+
 async function socLoadListings(){
   const btn = document.getElementById('btnSocLoad');
   btn.disabled = true; btn.textContent = '读取中…';
@@ -2368,7 +2377,7 @@ async function socLoadListings(){
       socMsg('ok', '读到 <b>' + total + '</b> 个在售商品。选一个开始 —— 老商品和新上架的一样能发。');
     }
   } catch(e){
-    socMsg('err', '读取失败：' + esc(e.message));
+    socMsg('err', '读取失败：' + socErrText(e.message));
   } finally {
     btn.disabled = false; btn.textContent = '读取在售商品';
   }
@@ -2383,7 +2392,7 @@ async function socLoadListing(id){
     SOC_CUR = d.listing || null;
   } catch(e){
     SOC_CUR = null;
-    socMsg('err', '读取商品失败：' + esc(e.message));
+    socMsg('err', '读取商品失败：' + socErrText(e.message));
     document.getElementById('socBox').classList.add('hidden');
     return;
   }
