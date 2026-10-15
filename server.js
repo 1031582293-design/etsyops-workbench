@@ -49,6 +49,31 @@ const DATA_DIR = join(ROOT, 'data');
 const RUNS_FILE = join(DATA_DIR, 'runs.json');
 const RUNS_MAX = 500;                 // 最多保留 500 条，超出丢最旧的
 
+/* 社媒发布记录（步骤 8）。
+   为什么要落盘：深链方案的天然短板是「我们不知道对方到底发了没有」——
+   没有回调、没有 API 响应。所以只能靠人点一下「已发布」记一笔，用来
+   ①避免同一个商品重复发 ②知道某商品发过哪些平台。
+   ⚠️ data/ 不入库，且两台机器的进度不共享（和 Etsy token 同理），各记各的。 */
+const SOCIAL_LOG_FILE = join(DATA_DIR, 'social-posts.json');
+const SOCIAL_LOG_MAX = 1000;
+
+function readSocialLog() {
+  try {
+    const arr = JSON.parse(readFileSync(SOCIAL_LOG_FILE, 'utf8'));
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+function writeSocialLog(arr) {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = SOCIAL_LOG_FILE + '.tmp';
+    writeFileSync(tmp, JSON.stringify(arr.slice(-SOCIAL_LOG_MAX), null, 2), 'utf8');
+    renameSync(tmp, SOCIAL_LOG_FILE);
+  } catch (e) {
+    console.error('[social] 写入失败：', e && e.message);
+  }
+}
+
 function readRuns() {
   try {
     const txt = readFileSync(RUNS_FILE, 'utf8');
@@ -2252,7 +2277,9 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
       etsyLog('★发布 listing ' + lid + '（上架费 $0.20 在这一步产生）');
       const r = await etsy.publishListing(etsyClient, lid);
       etsyLog('发布完成 state=' + r.state + ' 耗时 ' + ((Date.now() - _tp) / 1000).toFixed(1) + 's');
-      return json(res, 200, { ok: true, listing_id: lid, state: r.state, url: 'https://www.etsy.com/listing/' + lid, note: '已发布。Etsy 最多需要 48 小时才把它收录进搜索，这期间去买家端页面自查一遍首图裁切、变体价格与库存。' });
+      // ★ 优先用 Etsy 返回的 url（含 slug 的规范地址）；自己拼的 /listing/<id> 虽然也能跳转，
+      //   但它不是规范链接，抓预览/统计时表现不一致，所以只作兜底。
+      return json(res, 200, { ok: true, listing_id: lid, state: r.state, url: r.url || ('https://www.etsy.com/listing/' + lid), note: '已发布。Etsy 最多需要 48 小时才把它收录进搜索，这期间去买家端页面自查一遍首图裁切、变体价格与库存。' });
     } catch (e) {
       return json(res, 502, { error: 'etsy_error', note: e.message, status: e.status || 0 });
     }
@@ -2340,6 +2367,126 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
   }
 
   // 上传封面图（永久素材）
+  /* ---------- 社媒发布（步骤 8）----------
+   * 设计前提：本方案不接任何社媒 API（无 OAuth、无 token、无审核），
+   * 所以后端只需要两件只读的事：把店铺里「已上架」的商品列出来、把某个商品的公开信息读出来。
+   * 发布动作由店主在平台自己的页面上完成（前端负责拼官方发布页深链）。 */
+  if (p === '/api/etsy/listings/active' && req.method === 'GET') {
+    if (!etsyConfigured()) {
+      return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 Etsy 凭证（ETSY_KEYSTRING / ETSY_SHARED_SECRET / ETSY_REDIRECT_URI）。' });
+    }
+    const shopId = etsyCurrentShopId();
+    if (!shopId) {
+      return json(res, 400, { error: 'no_shop', note: '还没确定用哪个店铺。先完成授权，或在第 1 步选择账号与店铺。' });
+    }
+    const _u = new URL(req.url, 'http://localhost');
+    const limit = Math.min(Math.max(parseInt(_u.searchParams.get('limit') || '50', 10) || 50, 1), 100);
+    const offset = Math.max(parseInt(_u.searchParams.get('offset') || '0', 10) || 0, 0);
+    try {
+      const d = await etsyClient.get('/shops/' + shopId + '/listings/active', {
+        limit: String(limit),
+        offset: String(offset),
+        sort_on: 'updated',
+        sort_order: 'desc',
+      });
+      const results = Array.isArray(d.results) ? d.results : [];
+      return json(res, 200, {
+        ok: true,
+        shop_id: String(shopId),
+        count: results.length,
+        total: d.count != null ? d.count : results.length,
+        listings: results.map(l => ({
+          listing_id: l.listing_id,
+          title: l.title,
+          state: l.state,
+          url: l.url,
+          price: l.price && l.price.amount != null ? Math.round((l.price.amount / (l.price.divisor || 100)) * 100) / 100 : null,
+          currency_code: l.currency_code,
+          quantity: l.quantity,
+          views: l.views,
+          num_favorers: l.num_favorers,
+        })),
+        note: '这里只列「已上架(active)」的商品。草稿不在其中 —— 草稿没有公开链接，发到社媒别人点开是 404。',
+      });
+    } catch (e) {
+      return json(res, 502, { error: 'etsy_error', note: e.message, status: e.status || 0 });
+    }
+  }
+
+  /* 读单个商品的公开信息（含图片）。
+   * ★ 前端拿到后必须校验 state 再开放社媒按钮；这里如实返回状态，不替前端做判断。 */
+  if (p === '/api/etsy/listing' && req.method === 'GET') {
+    if (!etsyConfigured()) {
+      return json(res, 400, { error: 'etsy_not_configured', note: '服务端未配置 Etsy 凭证（ETSY_KEYSTRING / ETSY_SHARED_SECRET / ETSY_REDIRECT_URI）。' });
+    }
+    const _u = new URL(req.url, 'http://localhost');
+    const lid = Number(_u.searchParams.get('id') || 0);
+    if (!lid) return json(res, 400, { error: 'bad_request', note: '缺少 id（listing_id）' });
+    try {
+      const d = await etsyClient.get('/listings/' + lid, { includes: 'Images' });
+      const imgs = (d.images || [])
+        .map(im => im.url_fullxfull || im.url_570xN || im.url_75x75)
+        .filter(Boolean);
+      return json(res, 200, {
+        ok: true,
+        listing: {
+          listing_id: d.listing_id,
+          title: d.title,
+          description: d.description || '',
+          state: d.state,
+          url: d.url,                       // ★ 一律用 API 返回的 url，别自己拼 slug 路径
+          tags: Array.isArray(d.tags) ? d.tags : [],
+          price: d.price && d.price.amount != null ? Math.round((d.price.amount / (d.price.divisor || 100)) * 100) / 100 : null,
+          currency_code: d.currency_code,
+          images: imgs,
+          views: d.views,
+          num_favorers: d.num_favorers,
+        },
+      });
+    } catch (e) {
+      return json(res, 502, { error: 'etsy_error', note: e.message, status: e.status || 0 });
+    }
+  }
+
+  /* 社媒发布记录：纯本地账本（不涉及任何平台）。
+   * 存在的意义是「避免重复发」和「知道发过哪些平台」，因为深链方案拿不到平台的发布结果。 */
+  if (p === '/api/social/log' && req.method === 'GET') {
+    try {
+      const _u = new URL(req.url, 'http://localhost');
+      const lid = Number(_u.searchParams.get('listing_id') || 0);
+      let arr = readSocialLog();
+      if (lid) arr = arr.filter(r => Number(r.listing_id) === lid);
+      return json(res, 200, { ok: true, total: arr.length, items: arr.slice(-200).reverse() });
+    } catch (e) {
+      return json(res, 500, { error: 'social_log_read_failed', note: e.message });
+    }
+  }
+
+  if (p === '/api/social/log' && req.method === 'POST') {
+    try {
+      const b = await readJson(req);
+      const lid = Number(b.listing_id || 0);
+      const platform = String(b.platform || '').slice(0, 20);
+      if (!lid || !platform) return json(res, 400, { error: 'bad_request', note: '缺少 listing_id 或 platform' });
+      const done = b.done !== false;
+      // 同一商品+平台只留最新一条，避免勾来勾去堆历史
+      const arr = readSocialLog().filter(r => !(Number(r.listing_id) === lid && r.platform === platform));
+      if (done) {
+        arr.push({
+          listing_id: lid,
+          platform,
+          done: true,
+          url: String(b.url || '').slice(0, 300),
+          at: Date.now(),
+        });
+      }
+      writeSocialLog(arr);
+      return json(res, 200, { ok: true, listing_id: lid, platform, done });
+    } catch (e) {
+      return json(res, 500, { error: 'social_log_write_failed', note: e.message });
+    }
+  }
+
   if (p === '/api/wechat/upload' && req.method === 'POST') {
     const _tu = Date.now();
     try {
