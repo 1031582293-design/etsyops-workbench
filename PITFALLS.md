@@ -758,3 +758,119 @@
 - **根因**：边查边给方案，没有先取决定性证据。
 - **解法**：固定排查纪律——**先取决定性证据（版本号 / 时间线 / 连续多次采样）再下结论；不确定就明说「还没确认」**，不要顺着用户的猜测跑。
 - **教训**：写错的长文档比不写更糟。用户明确说过「我没有空看你的文档，真是太不高效了」。
+---
+
+# 十八、2026-10-13 ~ 10-16 新增坑（隧道稳定性 · 启动脚本 · launchd · 虚假拉新）
+
+## 18.1 架构级：Cloudflare Tunnel 在大陆网络下不可靠（最重要的一个坑）
+
+**现象**：公网间歇 502 / 530 / 000，"重启后端也没用"，用户原话
+「完全无法交付给店主使用，总是卡在工作台使用前的第一步」。
+
+**根因**（官方文档 `Tunnel with firewall` 原话）：
+> "cloudflared connects to Cloudflare's global network on **port 7844**"
+> "Opening port 443 enables some **optional** features"（443 只用于查更新，不跑隧道）
+
+→ **没有 443 退路**。实测该端口在本网络：QUIC（UDP 7844）完全不通；
+http2（TCP 7844）间歇通，日志同时存在 `dial tcp 198.41.x.x:7844: i/o timeout`
+与 `Registered tunnel connection ... protocol=http2`。
+
+**教训**：这是**架构选型问题**，不是脚本能修的。所有"降级协议 / 加重试 / 保活"
+都只是提高碰运气的命中率。**该早点说破，不该反复打补丁。**
+
+**后续方向**（未实施）：后端上云（香港轻量免备案），彻底去掉隧道。
+
+## 18.2 cmd 的 REM 跟中文会被当命令执行（chcp 65001 也挡不住）
+
+**现象**：跑 `start-backend.bat` 时窗口刷出几十行
+`' is not recognized as an internal or external command`。
+
+**根因**：bat 是 UTF-8、开头也有 `chcp 65001`，**`echo` 的中文显示完全正常**，
+但 **`REM` 后面跟 UTF-8 中文会被 cmd 当成命令执行**。原有文件的中文 REM
+一直有这个隐患，只是没人注意；新增的重试逻辑注释量大，把问题暴露得很明显。
+
+**修法**：bat 里 REM 注释**只用英文**，中文只放 echo（已实测显示正常）。
+**长期规则：`.bat` 里 REM 注释只用英文。**
+
+## 18.3 launchd 的 `KeepAlive={SuccessfulExit=false}` 会把服务弄断
+
+**现象**：服务从 200 突然变 530，cloudflared 进程消失，launchd job 也没了。
+
+**根因**：cloudflared 连不上边缘时会**体面退出**（日志
+`initial tunnel connection failed → Tunnel server stopped → Initiating shutdown`，
+退出码算正常）。而 `SuccessfulExit=false` 的语义是"只在异常退出时重启"
+→ 连接失败 → 它退出 → 退出码正常 → **launchd 不拉起 → 服务断**。
+
+在端口间歇可用的网络下，这个设计等于自杀。
+
+**修法**：隧道改 `KeepAlive=true` + `ThrottleInterval=10`（无条件保活）。
+代价：停隧道只能用 `launchctl bootout`，`kill TERM` 会被立刻拉起。
+
+## 18.4 改了 plist 不重新注册 = 没改
+
+**现象**：给 plist 加了 `--protocol http2`，跑起来还是 QUIC。
+
+**根因**：launchd **不会热加载** plist 文件。`kickstart -k` 用的是"已加载的旧配置"。
+
+**修法**：必须 `launchctl bootout gui/$UID/<label>` 再 `bootstrap`。
+→ 所以 `工作台.command` 的隧道重启一律走 bootout+bootstrap，不用 kickstart。
+
+**连带坑**：用编辑器改 plist 的键值对时，插入新键没删旧键会留下**两个同名键**，
+XML 直接损坏（`plutil -lint` 报 `Close tag does not match open tag dict`）。
+→ **改 plist 要么精确替换整段，要么重写整个文件，改完必须 `plutil -lint`。**
+
+## 18.5 启动脚本的四个静默失效坑
+
+1. **findstr 匹配到旧日志**：老代码 `findstr "Registered tunnel connection" tunnel.log`
+   匹配的是**整个追加式日志**，会命中上一次的成功记录 → 本次明明没连上却判定成功。
+   → 修法：启动前把 `tunnel.log` 轮转成 `tunnel.log.prev`，只查本次。
+2. **taskkill 只杀窗口标题**：`taskkill /fi "WINDOWTITLE eq EtsyOps-Tunnel"` 杀不掉
+   launchd / 计划任务 / 手工起的实例 → 假活进程占着隧道名额。
+   → 修法：按映像名全杀（`taskkill /fi "IMAGENAME eq cloudflared.exe"` / `pkill -x cloudflared`）。
+3. **`$UID` 在 dash 下是空的**：`$UID` 是 bash 内置变量，脚本若被 `/bin/sh` 执行就是空的，
+   `"gui/"` 成非法域 → `bootstrap` 静默失败（2026-10-15 双击后隧道没起来的真因）。
+   → 修法：一律用 `$(id -u)`。
+4. **关键命令吞 stderr**：`launchctl bootstrap ... 2>/dev/null` 失败时看不到真实原因，
+   且脚本直接退出 → 服务中断。
+   → 修法：不吞报错；失败时用 `nohup cloudflared ...` 直接启动兜底，保证服务不中断。
+
+## 18.6 「虚假拉新」的三个成因
+
+用户原话「代码虚假拉新」。
+
+1. **git pull 后没重启**：node 进程启动时就把 server.js 读进内存，pull 换的是磁盘文件
+   → 跑的还是旧代码。→ 修法：菜单 1 把 pull + 重启合并成一步。
+2. **git pull 本身失败但界面看着跑过了**：本地有未跟踪文件与远程同名时会报
+   `would be overwritten by merge` 被直接拒绝（实测：本地落后 15 个 commit，
+   `工作台.command` 未跟踪 → pull 失败）。
+   → 修法：版本核对（三个 commit 号比对，见下）。
+3. **`repoCommit` 字段从来没拿到过**：`server.js` import 漏了 `dirname`，
+   `dirname(fileURLToPath(import.meta.url))` 抛 ReferenceError 被 catch 吞掉
+   → 永远是 `(非 git 目录或 git 不可用)`。**从 10-06 加 SERVER_ID 那天就在。**
+   → 修法：补 import + 两个 git 调用拆独立 try/catch + 绝对路径 `/usr/bin/git`
+   + 失败原因打 `backend.log`。
+
+**验收标准**：菜单 4 里「本地硬盘 / 远程最新 / 后端在跑」三个号一致，才算真的更新成功。
+
+## 18.7 其他零碎坑
+
+- **Etsy 授权依赖代理**：`ETSY_PROXY` / `ETSY_AI_PROXY` 指向本机代理
+  （如 `http://127.0.0.1:10080`）。代理软件不开 → `ECONNREFUSED 127.0.0.1:10080`，
+  Etsy 功能全废（10-13 授权时前两次失败就是这个原因）。
+  **Mac 要顶上 Etsy 功能，代理必须常开。** 另：代理只影响 Etsy/OpenAI 出口，
+  微信走国内直连（`.env` 里没有微信代理项）。
+- **沙盒不能跑后端**：CloudStudio 部署只支持纯静态站点，官方明确
+  "Node.js server apps are NOT supported" → 后端必须有独立公网环境。
+- **`test/selftest.batcfg.sh` 硬编码 `/tmp/etsyops-work/start-backend.bat`**：
+  该目录不存在会误报 3 项失败，看着像代码坏了。
+  补 `mkdir -p /tmp/etsyops-work && cp start-backend.bat /tmp/etsyops-work/` 即可。
+- **git SSH 22 端口可能整个不通**（与 Cloudflare 7844 同一类网络问题）：
+  表现为 `Connection to 20.205.243.166 port 22 timed out`。
+  → 改走 HTTPS：`git push https://gitee.com/fu-po-fa-cai/etsyops-workbench.git main`
+  （gitee 有缓存凭证；github HTTPS 要 token，沙盒里做不了）。
+  → **双远程推送后必须 `git ls-remote` 复核两边 hash**，不能只看 push 没报错。
+- **新 clone 的副本没有 gitee remote**，push 前要
+  `git remote add gitee git@gitee.com:fu-po-fa-cai/etsyops-workbench.git`。
+- **判断"后端有没有挂"看 `/api/ping` 的本机响应**，不要看公网：
+  公网 502/530 多半是隧道问题，后端进程可能好着（10-15 那次"无法启动后端"
+  实际后端 45 小时没退过）。

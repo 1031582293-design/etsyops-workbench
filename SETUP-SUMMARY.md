@@ -816,3 +816,113 @@ aiproxy 7 / batcfg 20
 - Windows 侧目前 `start-backend.bat` **无守护**（启动一次就退出），且 taskkill 只杀窗口标题匹配的进程、杀不掉别的来源占用 3000 的残留 → 新 node 可能 EADDRINUSE 崩掉，用户只看到窗口一闪而过。对应方案是「任务计划程序」建任务（触发器=启动时 + 失败自动重启），不是 launchd。
 
 ---
+---
+
+# 第十四章 2026-10-13 ~ 10-16：隧道稳定性攻坚 + 启动脚本重构 + 架构结论
+
+## 14.0 当前状态速览（新对话先读这段，不用再问用户）
+
+**架构**：
+- 前端：Cloudflare Pages（`etsyops-workbench.pages.dev`），推 github main 自动构建
+- 后端：`server.js`（Node，零 npm 依赖），跑在 **操作者 Windows**（主力）+ **Mac**（备用）
+- 公网入口：Cloudflare Tunnel（`api.mailili-agency.com`），**同一 token，两台共用**
+- Mac 侧已上 launchd 守护：`com.etsyops.backend`（开机自启 + 无条件保活）、
+  `com.etsyops.tunnel`（开机不自动连，接管后无条件保活）
+
+**脚本清单（2026-10-16 精简后，共 3 个）**：
+| 文件 | 平台 | 用途 |
+|---|---|---|
+| `start-backend.bat` | Windows | 唯一入口：git pull → 起后端 → 起隧道（3 次重试，默认 http2） |
+| `start-mac.sh` | Mac | 终端入口，自动识别 launchd 托管后走 kickstart/bootout |
+| `工作台.command` | Mac | **唯一双击入口**，菜单：1) 启动/更新 2) 只重启隧道 3) 只重启后端 4) 看状态 0) 退出 |
+
+**日常操作**：
+- Mac 更新代码：双击 `工作台.command` → 选 1（pull + 重启后端 + 重启隧道 + 版本核对）
+- Windows 更新：双击 `start-backend.bat`（自动 pull + 重启）
+- 只改了前端：什么都不用做，等 Pages 构建 1~2 分钟刷新页面
+- 交还流量给 Windows：`launchctl bootout gui/$UID/com.etsyops.tunnel`
+- 接管：`launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.etsyops.tunnel.plist`
+
+**当前 commit**：`da0ebdb`（github + gitee 已同步；之后又有 dd8acb6 等后续提交，以远程为准）
+
+## 14.1 隧道稳定性攻坚（10-13 ~ 10-15）
+
+故障现象：公网间歇 502/530/000，"重启后端也没用"。
+
+排查取证（关键日志）：
+- `tunnel.log` 里 `failed to dial to edge with quic: timeout` 与
+  `dial tcp 198.41.x.x:7844: i/o timeout` 并存
+- cloudflared 前台跑时，`Registered tunnel connection ... protocol=http2` 成功过至少 5 次
+  （lax11 / lax07 / lax13），但同时反复 `Lost connection with the edge`
+
+**官方文档决定性证据**（Tunnel with firewall）：
+> "cloudflared connects to Cloudflare's global network on **port 7844**"
+> "Opening port 443 enables some **optional** features"（443 只用于查更新）
+
+→ 隧道只能走 7844，**没有 443 退路**。该端口在本网络下间歇可用
+（QUIC 完全不通，http2 间歇通且会掉）。
+
+**已实施的改进**（治标，提高命中率）：
+1. 启动脚本第 1 次就用 `--protocol http2`（不再先试 QUIC 浪费时间）
+2. 单次等待 20 秒 → 60 秒，3 次重试共 3 分钟
+3. Mac launchd 隧道改 `KeepAlive=true` + `ThrottleInterval=10`（无条件保活）
+4. 启动前按映像名全杀 cloudflared（`taskkill /fi "IMAGENAME eq cloudflared.exe"` /
+   `pkill -x cloudflared`），避免假活实例占名额
+5. 日志轮转为 `tunnel.log.prev`，验证只看本次记录（老代码 findstr 整个文件会匹配到
+   上次的成功痕迹 → 明明没连上却判定成功）
+
+## 14.2 启动脚本重构：5 个 → 3 个（10-16）
+
+用户反馈"脚本太多且重复"。删了 3 个：
+- `start-robust.bat`（Windows）：过时（还用旧式 `cloudflared tunnel run mailili-agency`，
+  与现行 token 方式不兼容）且有害（`powercfg` 改系统电源禁睡眠）
+- `重启隧道.command`：并入 `工作台.command` 菜单 2
+- `启动后端.command`：只是包装 `start-mac.sh`，且提示语是错的
+  （写着"关闭窗口 = 停止服务"，装 launchd 后不成立）
+
+新增 `工作台.command`（Mac 唯一双击入口，带菜单），复用了所有已修好的逻辑：
+`$(id -u)` 而非 `$UID`、bootout+bootstrap 重读 plist、注册失败用直接启动兜底、
+日志行数偏移判断真的连上、收尾自动做版本核对。
+
+## 14.3 代码版本核对（治「虚假拉新」）
+
+`git pull` 只换磁盘文件，node 启动时就把 server.js 读进内存——不重启跑的是旧代码。
+新增 `show_version()`，比对三个 commit 号：
+
+| 号 | 来源 |
+|---|---|
+| 本地硬盘 | `git rev-parse HEAD` |
+| 远程最新 | `git ls-remote origin main` |
+| 后端在跑 | `/api/etsy/whoami` 自报 `repoCommit` |
+
+任何不一致明确报警。调用点：菜单 4（状态）与菜单 1（启动/更新）收尾。
+
+## 14.4 修复：`repoCommit` 从来没拿到过（`dirname` 漏导入）
+
+`server.js` 第 8 行 `import { join, normalize, extname, resolve } from 'node:path'`
+**没有 `dirname`**，而 SERVER_ID 里 `dirname(fileURLToPath(import.meta.url))` 抛
+ReferenceError → 被同一个 try 的 catch 吞掉 → commit 永远是
+`(非 git 目录或 git 不可用)`。**从 10-06 加 SERVER_ID 那天就在**，只是没人看这个字段。
+
+修复：import 补 `dirname`（根因）+ SERVER_ID 两个 git 调用拆独立 try/catch +
+git 用绝对路径 `/usr/bin/git` 且失败原因打 `backend.log`。
+
+## 14.5 架构结论与待办（重要，未拍板）
+
+**结论：只要依赖 Cloudflare Tunnel 暴露本地电脑，就不可能稳定交付给店主。**
+7844 端口在大陆网络间歇可用，这不是补丁能修的——本轮所有改动只是提高命中率。
+
+**待用户拍板的上云方案**（调研完成，未实施）：
+- 腾讯云香港轻量：免备案（国内节点必须 ICP 备案 7~20 天），
+  入门型 38 元/月、锐驰型 2核2G/200Mbps/无限流量 55 元/月
+- 域名不用新买：`api.mailili-agency.com` A 记录指向新服务器 IP
+- 证书用 Let's Encrypt（Caddy 自动签、自动续期）
+- **两个坑**：① 公众号 IP 白名单必须换成新服务器 IP，否则微信接口全失败
+  ② OpenAI 不支持香港，`ETSY_AI_BASE_URL=https://api.openai.com/v1` 需换节点或换模型
+
+**其他待办**：
+- Mac 本地 `~/etsyops` 的 git HEAD 可能落后远程，跑菜单 1 会 pull 对齐
+- `tunnel.log` 会持续增长（10 秒重试一次），必要时
+  `cat /dev/null > ~/etsyops/tunnel.log` 截断（不能 rm，cloudflared 握着句柄）
+- `test/selftest.batcfg.sh` 硬编码 `/tmp/etsyops-work/start-backend.bat`，
+  该目录不存在会误报 3 项失败
