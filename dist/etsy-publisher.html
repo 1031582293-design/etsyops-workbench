@@ -378,6 +378,15 @@
         <h3>商品资料</h3>
         <div class="ph-sub">这一屏的内容全部来自你的事实资料卡。AI 不能猜材质、认证、价格与交期。</div>
 
+        <div class="subhead" style="margin-top:4px">上架前核对
+          <span class="hint">自动项由程序检测；人工项必须你自己确认。逐项打勾再建草稿</span>
+        </div>
+        <div id="checkList"></div>
+        <div class="btnrow" style="margin-top:8px">
+          <button class="btn sm" id="btnCheckAll">一键勾选「自动检测已通过」的项</button>
+          <span class="hint" style="align-self:center" id="checkSummary"></span>
+        </div>
+
         <div class="row2" style="margin-bottom:6px">
           <div>
             <label class="fld">商品类型 Item type<span class="hint">先选类型，后面哪些字段生效由它决定</span></label>
@@ -858,6 +867,7 @@ async function loadQuota(){
 /* ---------- 步骤切换 ---------- */
 function goto(n){
   CURRENT_STEP = n;
+  if (n === 5) renderChecklist();   // 进入商品资料页时重算核对清单
   document.querySelectorAll('.step').forEach(s => s.classList.toggle('hidden', Number(s.dataset.step) !== n));
   document.querySelectorAll('.step-chip').forEach(c => c.classList.toggle('active', Number(c.dataset.step) === n));
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1666,8 +1676,92 @@ function switchToItem(idx){
   else if (typeof clearPickedFiles === 'function') clearPickedFiles();
   renderItemNav();
   renderImportList();
+  renderChecklist();
   log('切换到条目 ' + (idx + 1) + '/' + IMPORT_BATCH.length + '：' + (it.sku || ''));
 }
+
+
+/* ================= 上架前核对清单 =================
+ * 自动项（标题长度/标签数/价格/类目/图片/两个 profile）由程序判断；
+ * 人工项（事实核对/创意标准/图片权利）必须人勾 —— 这几项程序无法替你判断，
+ * 也不该假装能判断（SOP 第 19 节）。 */
+function collectCheckState(){
+  const v = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const title = v('fTitle').trim();
+  const desc = v('fDesc').trim();
+  const tags = v('fTags').split('\n').map(x => x.trim()).filter(Boolean);
+  const price = Number(v('fPrice')) || 0;
+  const qty = Number(v('fQty')) || 0;
+  const isDigital = v('fItemType') === 'digital';
+  const auto = [
+    { k: 'title', label: '标题 Title 已填且 ≤140 字符', ok: !!title && title.length <= 140, note: title ? title.length + '/140' : '未填' },
+    { k: 'desc', label: '描述 Description 已填', ok: !!desc, note: desc ? desc.length + ' 字符' : '未填' },
+    { k: 'tags', label: '标签 1~13 个、每个 ≤20 字符', ok: tags.length > 0 && tags.length <= 13 && tags.every(t => t.length <= 20), note: tags.length ? tags.length + ' 个' : '未填' },
+    { k: 'price', label: '价格 Price > 0', ok: price > 0, note: price ? '$' + price : '未填' },
+    { k: 'qty', label: '数量 Quantity > 0', ok: qty > 0, note: qty ? String(qty) : '未填' },
+    { k: 'tax', label: '类目 taxonomy_id 已选', ok: !!PICKED_TAX, note: PICKED_TAX ? String(PICKED_TAX.id) : '未选（第 4 步）' },
+    { k: 'img', label: '图片 ≥1 张', ok: IMAGES.length > 0, note: IMAGES.length + ' 张' },
+  ];
+  if (!isDigital){
+    auto.push({ k: 'ship', label: '配送模板 Shipping profile 已选', ok: !!v('fShip'), note: v('fShip') || '未选' });
+    auto.push({ k: 'ready', label: '处理档案 Processing profile 已选', ok: !!v('fReady'), note: v('fReady') || '未选' });
+  }
+  const manual = [
+    { k: 'm_desc', label: '描述里每一句规格都对过实物（材质 / 尺寸 / 包含物 / 交期）' },
+    { k: 'm_creative', label: '我确认自己是制作者或设计者（Etsy 创意标准）' },
+    { k: 'm_img', label: '我确认图片是自己的实拍，没有用别人的图' },
+  ];
+  if (isDigital) manual.push({ k: 'm_file', label: '即时下载的交付文件已挂上（按单制作可跳过）' });
+  return { auto, manual, isDigital };
+}
+
+function renderChecklist(){
+  const box = document.getElementById('checkList');
+  if (!box) return;
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  if (!it){ box.innerHTML = '<div class="msg info">先在第 1 步解析表格。</div>'; return; }
+  const st = collectCheckState();
+  const chk = it._check || {};
+  const row = (k, label, auto, note) =>
+    '<tr><td style="width:64%">' + esc(label) + '</td>'
+    + '<td style="width:20%;font-size:11.5px;color:' + (auto == null ? 'var(--text-faint)' : (auto ? 'var(--good)' : 'var(--bad)')) + '">'
+    + (auto == null ? '人工判断' : (auto ? '✓ 通过' : '✗ 未通过')) + (note ? '（' + esc(note) + '）' : '') + '</td>'
+    + '<td style="width:16%"><input type="checkbox" data-check="' + k + '"' + (chk[k] ? ' checked' : '') + ' /></td></tr>';
+  box.innerHTML = '<table class="kv" style="width:100%">'
+    + '<tr><td><b>核对项</b></td><td><b>自动检测</b></td><td><b>已确认</b></td></tr>'
+    + st.auto.map(x => row(x.k, x.label, x.ok, x.note)).join('')
+    + st.manual.map(x => row(x.k, x.label, null, '')).join('')
+    + '</table>';
+
+  box.querySelectorAll('[data-check]').forEach(el => el.addEventListener('change', () => {
+    it._check = it._check || {};
+    it._check[el.dataset.check] = el.checked;
+    updateCheckSummary();
+  }));
+  updateCheckSummary();
+}
+
+function updateCheckSummary(){
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  const el = document.getElementById('checkSummary');
+  if (!it || !el) return;
+  const st = collectCheckState();
+  const total = st.auto.length + st.manual.length;
+  const done = [...st.auto, ...st.manual].filter(x => (it._check || {})[x.k]).length;
+  const autoFail = st.auto.filter(x => !x.ok).length;
+  el.innerHTML = '已确认 ' + done + ' / ' + total
+    + (autoFail ? '　<span style="color:var(--bad)">' + autoFail + ' 项自动检测未通过</span>' : '　<span style="color:var(--good)">自动项全部通过</span>');
+}
+
+document.getElementById('btnCheckAll').addEventListener('click', () => {
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  if (!it) return;
+  const st = collectCheckState();
+  it._check = it._check || {};
+  st.auto.forEach(x => { if (x.ok) it._check[x.k] = true; });
+  renderChecklist();
+  log('已勾选 ' + st.auto.filter(x => x.ok).length + ' 项自动检测通过的核对项', 's');
+});
 
 document.getElementById('btnPrevItem').addEventListener('click', () => switchToItem(CURRENT_IDX - 1));
 document.getElementById('btnNextItem').addEventListener('click', () => switchToItem(CURRENT_IDX + 1));
@@ -1881,25 +1975,86 @@ function renderKwTable(){
       + '这个 SKU 还没有候选词。点「AI 生成候选词池」开始，或先填好产品事实再生成。</div>';
     return;
   }
-  box.innerHTML = '<div style="font-size:12px;color:var(--text-faint);margin:6px 0">'
-    + words.length + ' 个候选词 · 改状态下拉即自动保存</div>'
+  const issues = kwSelfCheck(words);
+  const badN = Object.keys(issues).length;
+  box.innerHTML =
+    '<div style="font-size:12px;color:var(--text-faint);margin:6px 0">'
+    + words.length + ' 个候选词 · 改状态/量级即自动保存'
+    + (badN ? '　<span style="color:var(--warn)">词面自检发现 ' + badN + ' 处问题（见行内标黄）</span>' : '　词面自检通过')
+    + '</div>'
     + '<table class="kv" style="width:100%">'
-    + words.map((w, i) =>
-      '<tr><td style="width:34%"><b>' + esc(w.en) + '</b>'
-      + (w.en.length > 20 ? ' <span style="color:var(--bad)">' + w.en.length + '字符</span>' : '')
-      + '</td><td style="width:22%">' + esc(w.zh || '')
-      + '</td><td style="width:12%">' + esc(w.w || '')
-      + '</td><td style="width:32%"><select data-kw-i="' + i + '">'
-      + ['candidate','verified','adopted'].map(s =>
-          '<option value="' + s + '"' + ((w.status || 'candidate') === s ? ' selected' : '') + '>'
-          + KW_STATUS_LABEL[s] + '</option>').join('')
-      + '</select></td></tr>').join('')
-    + '</table>';
+    + words.map((w, i) => {
+      const probs = issues[i] || [];
+      const volLabel = { many: '很多', some: '中等', few: '很少' }[w.volume] || '';
+      return '<tr>'
+        + '<td style="width:30%"><b>' + esc(w.en) + '</b>'
+        + (probs.length ? '<br><span style="color:var(--warn);font-size:11px">' + probs.map(esc).join('；') + '</span>' : '')
+        + '</td>'
+        + '<td style="width:20%">' + esc(w.zh || '')
+        + (w.w ? '<br><span style="font-size:11px;color:var(--text-faint)">' + esc(w.w) + '</span>' : '')
+        + '</td>'
+        + '<td style="width:26%;font-size:11.5px">'
+        + '<button class="btn sm ghost" data-kw-search="' + i + '">去 Etsy 搜 ↗</button>'
+        + '<select data-kw-vol="' + i + '" style="margin-top:4px">'
+        + [['', '结果量级？'], ['many', '很多'], ['some', '中等'], ['few', '很少']].map(([v, t]) =>
+            '<option value="' + v + '"' + ((w.volume || '') === v ? ' selected' : '') + '>' + t + '</option>').join('')
+        + '</select>'
+        + (w.checkedAt ? '<div style="color:var(--text-faint)">' + new Date(w.checkedAt).toLocaleDateString() + ' 查过</div>' : '')
+        + '</td>'
+        + '<td style="width:24%"><select data-kw-i="' + i + '">'
+        + ['candidate','verified','adopted'].map(st =>
+            '<option value="' + st + '"' + ((w.status || 'candidate') === st ? ' selected' : '') + '>'
+            + KW_STATUS_LABEL[st] + '</option>').join('')
+        + '</select></td></tr>';
+    }).join('')
+    + '</table>'
+    + '<div class="msg info" style="margin-top:8px">'
+    + '<b>口径：</b>这里的「结果量级」是你在 Etsy 搜索页看到的<b>结果数量级</b>，'
+    + '不是搜索量。AI 无法访问 Etsy 实时数据，所以所有词一开始都是「候选，未验证搜索量」；'
+    + '验证记录只有你点过「去 Etsy 搜」并选了量级才算数。</div>';
+
+  box.querySelectorAll('[data-kw-search]').forEach(b => b.addEventListener('click', () => {
+    const i = Number(b.dataset.kwSearch);
+    const w = KW_POOL[sku].words[i];
+    window.open('https://www.etsy.com/search?q=' + encodeURIComponent(w.en), '_blank', 'noopener');
+    if (!w.checkedAt) { w.checkedAt = Date.now(); saveKeywords(sku); renderKwTable(); }
+  }));
+  box.querySelectorAll('[data-kw-vol]').forEach(sel => sel.addEventListener('change', () => {
+    const i = Number(sel.dataset.kwVol);
+    KW_POOL[sku].words[i].volume = sel.value;
+    KW_POOL[sku].words[i].checkedAt = Date.now();
+    if (sel.value && KW_POOL[sku].words[i].status === 'candidate') KW_POOL[sku].words[i].status = 'verified';
+    saveKeywords(sku); renderKwTable();
+  }));
   box.querySelectorAll('[data-kw-i]').forEach(sel => sel.addEventListener('change', () => {
     const i = Number(sel.dataset.kwI);
     KW_POOL[sku].words[i].status = sel.value;
-    saveKeywords(sku);
+    saveKeywords(sku); renderKwTable();
   }));
+}
+
+/* 词面自检 —— 不需要联网，挑 AI 出词最常见的毛病。
+ * 注意：这里只检查「词本身有没有毛病」，不判断搜索量/竞争度（那需要 Etsy 数据）。 */
+const KW_BRANDS = ['disney','pokemon','marvel','nike','adidas','gucci','sanrio','hello kitty','stitch','bluey','minecraft','star wars'];
+function kwSelfCheck(words){
+  const out = {};
+  const seen = {};
+  words.forEach((w, i) => {
+    const t = String(w.en || '').trim();
+    const low = t.toLowerCase();
+    const probs = [];
+    if (!t) probs.push('空词');
+    if (t.length > 20) probs.push(t.length + ' 字符，超过 Etsy 标签上限 20');
+    if (/[^\x00-\x7F]/.test(t)) probs.push('含非英文字符');
+    if (seen[low]) probs.push('与第 ' + seen[low] + ' 个重复');
+    else seen[low] = i + 1;
+    const brand = KW_BRANDS.find(b => low.includes(b));
+    if (brand) probs.push('含品牌/角色词「' + brand + '」，未授权不能用');
+    if (t && !/^[a-z0-9 ,'&+.-]+$/i.test(t)) probs.push('含特殊字符');
+    if (t.split(/\s+/).filter(Boolean).length > 5) probs.push('太长（超过 5 个词，不像买家搜法）');
+    if (probs.length) out[i] = probs;
+  });
+  return out;
 }
 
 async function saveKeywords(sku){
