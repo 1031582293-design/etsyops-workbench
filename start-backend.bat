@@ -108,7 +108,7 @@ REM    whether it is RUNNING or STOPPED, and net start errors get swallowed.
 REM    Result: launch window looks fine while external access returns Error 1033.
 REM    On the operator machine the service was DISABLED (sc start returned 1058).
 REM    A direct tunnel needs only a token + one exe and its state is obvious.
-REM (comment translated to English; see SETUP-SUMMARY.md and PITFALLS.md)
+REM (comment translated to English; the full lesson log lives in the knowledge base, not in this repo)
 REM ============================================================
 
 REM ---- Step 1: find a usable cloudflared executable ----

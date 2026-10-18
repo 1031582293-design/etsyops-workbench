@@ -33,3 +33,11 @@ server.test.js
 # 运行记录落库
 data/
 server.test.js
+
+# ⚠️ 踩坑/总结文档已迁出代码仓库（2026-10-17），唯一权威版本在资料库，见 README「文档位置」。
+# 这两行是护栏：即使将来有人在仓库里重建这两个文件，git add -A 也不会把它们提交上去。
+PITFALLS.md
+SETUP-SUMMARY.md
+
+# 隧道运行日志（cloudflared 写入，持续增长；不能 rm 只能截断，故不入库）
+tunnel.log

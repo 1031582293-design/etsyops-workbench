@@ -3,6 +3,22 @@
 电商 + 自媒体（抖音/小红书/公众号/TikTok/Instagram）一体化运营工作台。
 以「数字员工」为单位组织工作流：每个数字员工内置若干工作节点，按 SOP 串联 skill 并交付成果。
 
+## 文档位置（重要）
+
+**踩坑记录与搭建总结不在这个仓库里**，唯一权威版本在资料库：
+
+| 文档 | 资料库链接 |
+|---|---|
+| PITFALLS（踩坑与避坑清单） | https://www.workbuddy.cn/space/d/FpEgcB4Ubrp96GngnajVmB |
+| SETUP-SUMMARY（搭建总结） | https://www.workbuddy.cn/space/d/xs4XbttTVgf8UPONgGLMVA |
+
+这两个文件已于 2026-10-17 从仓库删除（历史版本仍在 git 里可查：`git log --all -- PITFALLS.md`），
+并已加入 `.gitignore` 防止被重新提交。**要更新它们，请直接改资料库里的文档，不要在仓库里重建** ——
+原因：本仓库会被操作者的 Windows 每 24 小时自动 `git pull`，任何未提交的人工改动都会让 pull 失败、
+并用旧代码启动，表现为「拉不到最新代码」。
+
+其余文档（OPERATOR-GUIDE / MAC-QUICKSTART / DEPLOY / README）仍在仓库内，随代码走。
+
 ## 技术栈
 - [Vite](https://vitejs.dev/) 5（开发服务器 + 构建）
 - 原生 ES Module，无框架依赖，零运行时三方库
