@@ -25,7 +25,7 @@ const SOCIAL_PLATFORMS = [
   {
     key: 'pinterest', name: 'Pinterest', deep: true,
     limit: 800, titleLimit: 100,
-    hint: '链接 + 图片 + 描述会全部预填，你只需选 board 点保存',
+    hint: '链接 + 图片会预填；描述有时不被 Pinterest 带过去 —— 文案已复制到剪贴板，描述框空着就直接粘贴（Ctrl/⌘+V）',
     imageNote: '图片用「media」参数直接传 Etsy 图地址，无需下载',
   },
   {
