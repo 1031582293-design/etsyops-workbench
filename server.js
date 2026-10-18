@@ -1253,6 +1253,12 @@ async function handleApi(req, res) {
         return json(res, 200, { ok: false, reason: 'auth',
           note: `AI 鉴权失败（HTTP ${r.status}）：检查 ETSY_AI_API_KEY 是否正确、是否过期。` });
       }
+      const raw = (() => { try { return JSON.stringify(d).toLowerCase(); } catch { return ''; } })();
+      if (r.status === 429 || /insufficient_quota|credit_balance_exhausted|no credits|余额不足|quota/.test(raw)) {
+        return json(res, 200, { ok: false, reason: 'quota',
+          note: 'AI 账户额度已用尽。去服务商控制台充值，或把 .env 的 ETSY_AI_* 换成有免费额度的服务'
+            + '（例如智谱 glm-4-flash）；改完必须重启后端。' });
+      }
       if (r.status === 404) {
         return json(res, 200, { ok: false, reason: 'model',
           note: `模型名不存在（HTTP 404）：ETSY_AI_MODEL=${ETSY_AI_MODEL} 不是该服务支持的模型名。` });
@@ -1612,6 +1618,15 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
       const msg = d.error?.message || JSON.stringify(d).slice(0, 200);
       throw new Error(`Etsy 文案生成鉴权失败（HTTP ${r.status}）：${msg} → `
         + '请检查 .env 里的 ETSY_AI_API_KEY 是否正确、是否已过期。');
+    }
+    // ★ 余额/额度用尽：OpenAI 系返回 429 + insufficient_quota / credit_balance_exhausted，
+    //   智谱等国内服务用 1113 / 余额不足 之类。这是最常见的一类失败，
+    //   笼统显示成「返回异常 + 一坨 JSON」会让人以为网络坏了。
+    const _raw = (() => { try { return JSON.stringify(d).toLowerCase(); } catch { return ''; } })();
+    if (r.status === 429 || /insufficient_quota|credit_balance_exhausted|no credits|余额不足|quota/.test(_raw)) {
+      throw new Error('AI 账户额度已用尽（' + (r.status === 429 ? 'HTTP 429' : 'insufficient_quota') + '）→ '
+        + '去服务商控制台充值，或把 .env 里的 ETSY_AI_* 换成有免费额度的服务（例如智谱 glm-4-flash）。'
+        + '原始信息：' + (() => { try { return JSON.stringify(d).slice(0, 200); } catch { return ''; } })());
     }
     if (r.status === 404) {
       throw new Error(`Etsy 文案生成返回 404：模型名「${ETSY_AI_MODEL}」可能不存在 → `

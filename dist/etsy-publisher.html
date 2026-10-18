@@ -184,7 +184,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">1b9a5bd</span>
+  <span class="vtag" id="verTag">BUILD_VERSION</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -198,65 +198,44 @@
 <div id="main" class="hidden">
 
   <div class="stepper">
-    <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">给料</div><div class="d">表格 + 图片文件夹</div></div></div>
-    <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">AI 文案</div><div class="d">队列生成 / 逐条改</div></div></div>
-    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">店铺设置</div><div class="d">分区 / 配送 / 处理档案</div></div></div>
+    <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">给料与店铺</div><div class="d">店铺配置 / 表格 / 图片</div></div></div>
+    <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">关键词</div><div class="d">候选池 → 人工验证</div></div></div>
+    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">AI 文案</div><div class="d">队列生成 / 逐条核对</div></div></div>
     <div class="step-chip" data-step="4"><div class="num">4</div><div><div class="t">类目与属性</div><div class="d">换真实 taxonomy_id</div></div></div>
-    <div class="step-chip" data-step="5"><div class="num">5</div><div><div class="t">商品资料</div><div class="d">标题 / 详情 / 标签</div></div></div>
-    <div class="step-chip" data-step="6"><div class="num">6</div><div><div class="t">库存与变体</div><div class="d">数量 / 变体</div></div></div>
-    <div class="step-chip" data-step="7"><div class="num">7</div><div><div class="t">写入与发布</div><div class="d">草稿 → 人工确认</div></div></div>
-    <div class="step-chip" data-step="8"><div class="num">8</div><div><div class="t">社媒发布</div><div class="d">生成内容 → 打开发布页</div></div></div>
+    <div class="step-chip" data-step="5"><div class="num">5</div><div><div class="t">商品资料</div><div class="d">详情 / 价格 / 库存 / 变体</div></div></div>
+    <div class="step-chip" data-step="6"><div class="num">6</div><div><div class="t">写入与发布</div><div class="d">草稿 → 人工确认</div></div></div>
+    <div class="step-chip" data-step="7"><div class="num">7</div><div><div class="t">社媒发布</div><div class="d">生成内容 → 打开发布页</div></div></div>
+  </div>
+
+  <div class="itemnav" id="itemNav" style="display:none;align-items:center;gap:10px;padding:10px 14px;margin:0 0 12px;border:1px solid var(--border);border-radius:10px;background:rgba(127,127,127,.06)">
+    <button class="btn sm ghost" id="btnPrevItem">‹ 上一条</button>
+    <div style="flex:1;font-size:13px" id="itemNavText">—</div>
+    <button class="btn sm ghost" id="btnNextItem">下一条 ›</button>
   </div>
 
   <div class="layout">
     <div>
       <!-- 步骤 1 -->
-      <section class="panel step" data-step="3">
-        <h3>店铺设置</h3>
-        <div class="ph-sub">这四个 ID 是建草稿的必填项。实物商品缺配送模板或处理档案，Etsy 会直接返回 400。</div>
-        <div id="msg1" class="msg"></div>
-        <button class="btn" id="btnPreflight">读取店铺配置</button>
-        <div id="preflightBox" class="hidden" style="margin-top:16px">
-          <table class="kv">
-            <tr><td>店铺</td><td id="pfShop">—</td></tr>
-            <tr><td>在售商品数</td><td id="pfActive">—</td></tr>
-            <tr><td>店铺分区</td><td id="pfSection">—</td></tr>
-            <tr><td>配送模板</td><td id="pfShip">—</td></tr>
-            <tr><td>处理档案</td><td id="pfReady">—</td></tr>
-          </table>
-          <div class="btnrow">
-            <button class="btn sm" data-goto="4">下一步：选类目 →</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- 步骤 2 -->
-      <section class="panel step hidden" data-step="4">
-        <h3>类目与属性</h3>
-        <div class="ph-sub">AI 给的类目名只是候选。必须在这里搜出真实 taxonomy_id，否则建草稿会被拒。</div>
-        <label class="fld">类目关键词<span class="hint">用英文物品名搜，例如 ceramic horse / pottery figurine</span></label>
-        <div class="row2">
-          <input type="text" id="taxQ" placeholder="ceramic horse" />
-          <button class="btn" id="btnTax">搜索类目</button>
-        </div>
-        <div id="taxResults" class="tax-list"></div>
-
-        <label class="fld">已选类目</label>
-        <div class="msg info" id="taxPicked" style="display:none"></div>
-
-        <label class="fld" style="margin-top:18px">属性（Attributes）<span class="hint">选完类目后可查该类目下有哪些可选属性</span></label>
-        <div class="row2">
-          <input type="text" id="propQ" placeholder="属性关键词，可留空列出全部" />
-          <button class="btn" id="btnProp" disabled>查询属性</button>
-        </div>
-        <div id="propList" class="tax-list"></div>
-      </section>
-
-      <!-- ========== 步骤 1：给料 ========== -->
       <section class="panel step" data-step="1">
-        <h3>给料：表格 + 图片文件夹</h3>
+        <h3>给料与店铺</h3>
         <div class="ph-sub">批量上新的起点。先把「事实数据」和「图片」一起丢进来，
           后面 AI 生成、字段填充、建草稿都基于这里解析出的条目 —— 不再先填表再传图。</div>
+
+        <div class="subhead">0. 店铺配置<span class="hint">选店后自动读取；实物商品建草稿必须有配送模板与处理档案</span></div>
+        <div class="row2">
+          <div id="pfSummary" class="msg info" style="margin:0">选店后自动读取…</div>
+          <button class="btn sm ghost" id="btnPreflight">重新读取</button>
+        </div>
+        <div id="msg1" class="msg"></div>
+        <div id="preflightBox" style="margin-top:10px">
+          <table class="kv">
+            <tr><td>店铺 Shop</td><td id="pfShop">—</td></tr>
+            <tr><td>在售商品数 Active listings</td><td id="pfActive">—</td></tr>
+            <tr><td>店铺分区 Shop section</td><td id="pfSection">—</td></tr>
+            <tr><td>配送模板 Shipping profile</td><td id="pfShip">—</td></tr>
+            <tr><td>处理档案 Processing profile</td><td id="pfReady">—</td></tr>
+          </table>
+        </div>
 
         <div class="subhead">0. 账号 Account<span class="hint">一个 Etsy 账号 = 一次授权；不同账号的店要分别授权</span></div>
         <div class="row2">
@@ -308,8 +287,24 @@
         </div>
       </section>
 
-      <!-- ========== 步骤 2：AI 文案 ========== -->
       <section class="panel step hidden" data-step="2">
+        <h3>关键词：候选池 + 人工验证</h3>
+        <div class="ph-sub">AI 只能出「候选词」，它拿不到 Etsy 搜索量。验证要你点开搜索页看一眼再改状态；标为「已搜索验证 / 采纳」的词，生成文案时会优先使用。</div>
+        <div class="subhead" style="margin-top:20px">关键词候选池（SOP 03）
+          <span class="hint">AI 只出候选词，验证靠你 —— 到 Etsy 搜索框 / Marketplace Insights 查过再改状态；「已验证 / 采纳」的词生成文案时优先使用</span>
+        </div>
+        <div class="row2">
+          <select id="kwSku"><option value="">（先在第 1 步解析表格）</option></select>
+          <button class="btn" id="btnKwGen">AI 生成候选词池</button>
+        </div>
+        <div id="kwMsg" class="msg"></div>
+        <div id="kwTable"></div>
+        <div class="btnrow" style="margin-top:16px">
+          <button class="btn" data-goto="3">下一步：生成 AI 文案 →</button>
+        </div>
+      </section>
+
+      <section class="panel step hidden" data-step="3">
         <h3>AI 文案：队列生成 + 逐条确认</h3>
         <div class="ph-sub">标题 / 描述 / 标签由 AI 按你给的事实生成。<b>AI 只依据表格里已填的字段</b>，
           素材缺失时会拒绝生成 —— 凭空写出来的规格是 Etsy 的合规风险。</div>
@@ -349,25 +344,36 @@
         <div class="btnrow" style="margin-top:16px">
           <button class="btn primary" id="btnAiBatch">批量生成（全部条目）</button>
           <button class="btn ghost" id="btnAiStop" disabled>中断队列</button>
-          <button class="btn" data-goto="3">跳过 AI，下一步 →</button>
+          <button class="btn" data-goto="4">跳过 AI，下一步 →</button>
         </div>
         <div id="msgAiBatch" class="msg"></div>
         <div class="progress hidden" id="aiProg"><div class="bar"><i id="aiBar"></i></div><span id="aiProgTxt"></span></div>
 
-        <div class="subhead" style="margin-top:20px">关键词候选池（SOP 03）
-          <span class="hint">AI 只出候选词，验证靠你 —— 到 Etsy 搜索框 / Marketplace Insights 查过再改状态；「已验证 / 采纳」的词生成文案时优先使用</span>
-        </div>
-        <div class="row2">
-          <select id="kwSku"><option value="">（先在第 1 步解析表格）</option></select>
-          <button class="btn" id="btnKwGen">AI 生成候选词池</button>
-        </div>
-        <div id="kwMsg" class="msg"></div>
-        <div id="kwTable"></div>
 
         <div id="aiList"></div>
       </section>
 
-      <!-- 步骤 3 -->
+      <section class="panel step hidden" data-step="4">
+        <h3>类目与属性</h3>
+        <div class="ph-sub">AI 给的类目名只是候选。必须在这里搜出真实 taxonomy_id，否则建草稿会被拒。</div>
+        <label class="fld">类目关键词<span class="hint">用英文物品名搜，例如 ceramic horse / pottery figurine</span></label>
+        <div class="row2">
+          <input type="text" id="taxQ" placeholder="ceramic horse" />
+          <button class="btn" id="btnTax">搜索类目</button>
+        </div>
+        <div id="taxResults" class="tax-list"></div>
+
+        <label class="fld">已选类目</label>
+        <div class="msg info" id="taxPicked" style="display:none"></div>
+
+        <label class="fld" style="margin-top:18px">属性（Attributes）<span class="hint">选完类目后可查该类目下有哪些可选属性</span></label>
+        <div class="row2">
+          <input type="text" id="propQ" placeholder="属性关键词，可留空列出全部" />
+          <button class="btn" id="btnProp" disabled>查询属性</button>
+        </div>
+        <div id="propList" class="tax-list"></div>
+      </section>
+
       <section class="panel step hidden" data-step="5">
         <h3>商品资料</h3>
         <div class="ph-sub">这一屏的内容全部来自你的事实资料卡。AI 不能猜材质、认证、价格与交期。</div>
@@ -537,13 +543,11 @@
 
         <div class="btnrow">
           <button class="btn" id="btnValidate">本地校验（不消耗 Etsy 额度）</button>
-          <button class="btn" data-goto="6">下一步：图片与库存 →</button>
+          <button class="btn" data-goto="6">下一步：写入 Etsy →</button>
         </div>
         <div id="msg3" class="msg"></div>
-      </section>
+      
 
-      <!-- 步骤 4 -->
-      <section class="panel step hidden" data-step="6">
         <h3>库存与变体</h3>
         <div class="ph-sub">图片在第 1 步「给料」里已选定，第一张为主图、最多 20 张。Etsy 要求实物商品展示真实成品照片。</div>
 
@@ -560,13 +564,9 @@
         <button class="btn sm ghost" id="btnAddVar" style="margin-top:10px">+ 添加一个变体</button>
         <div id="msgVar" class="msg"></div>
 
-        <div class="btnrow">
-          <button class="btn" data-goto="7">下一步：写入 Etsy →</button>
-        </div>
       </section>
 
-      <!-- 步骤 5 -->
-      <section class="panel step hidden" data-step="7">
+      <section class="panel step hidden" data-step="6">
         <h3>写入 Etsy 草稿</h3>
         <div class="ph-sub">这一步只建草稿。Etsy 上架费 $0.20 只在真正发布时产生。</div>
         <div id="msg5" class="msg"></div>
@@ -587,8 +587,8 @@
           <div class="msg warn" id="dWarn" style="display:block"></div>
         </div>
       </section>
-      <!-- 步骤 8 · 社媒发布（不调用任何社媒 API：只生成内容 + 打开平台官方发布页） -->
-      <section class="panel step hidden" data-step="8">
+
+      <section class="panel step hidden" data-step="7">
         <h3>社媒发布</h3>
         <div class="ph-sub">
           这里只做两件事：<b>生成各平台文案</b> + <b>打开平台官方发布页</b>。
@@ -866,13 +866,15 @@ document.querySelectorAll('[data-goto]').forEach(b => b.addEventListener('click'
 document.querySelectorAll('.step-chip').forEach(c => c.addEventListener('click', () => goto(Number(c.dataset.step))));
 
 /* ---------- 步骤 1：店铺设置 ---------- */
-document.getElementById('btnPreflight').addEventListener('click', async () => {
+/* 读取店铺配置。★ 不再需要用户点按钮：选中店铺后自动调用；
+ * 右上角那个「重新读取」只是强制刷新缓存。 */
+async function loadPreflight(force){
   const btn = document.getElementById('btnPreflight');
   const m = document.getElementById('msg1');
   btn.disabled = true; btn.textContent = '读取中…';
   log('读取店铺配置…');
   try {
-    PREF = await apiCall('/api/etsy/preflight', { body: { force: true }, timeout: 60000 });
+    PREF = await apiCall('/api/etsy/preflight', { body: { force: !!force }, timeout: 60000 });
     document.getElementById('preflightBox').classList.remove('hidden');
     const s = PREF.shop || {};
     document.getElementById('pfShop').textContent = (s.shop_name || '—') + '（' + (s.shop_id || PREF.shopId) + '）';
@@ -904,13 +906,43 @@ document.getElementById('btnPreflight').addEventListener('click', async () => {
     }
     log('店铺配置读取完成：分区 ' + (PREF.sections||[]).length + ' / 配送 ' + (PREF.shippingProfiles||[]).length +
         ' / 处理档案 ' + (PREF.readinessStates||[]).length, 's');
+    const sum = document.getElementById('pfSummary');
+    if (sum) sum.innerHTML = (PREF.shippingProfiles||[]).length && (PREF.readinessStates||[]).length
+      ? '<b>店铺配置已就绪。</b>实物商品会自动用上面的模板；表格里也可以直接写模板 ID。'
+      : '<b style="color:var(--warn)">店铺还缺配送模板或处理档案</b>，实物商品建不了草稿。';
+    validateProfileIds();
   } catch(e){
     showMsg(m, 'err', '<b>读取失败：</b>' + esc(e.message));
     logErr(e);
   } finally {
-    btn.disabled = false; btn.textContent = '重新读取店铺配置';
+    if (btn) { btn.disabled = false; btn.textContent = '重新读取'; }
   }
-});
+}
+
+document.getElementById('btnPreflight').addEventListener('click', () => loadPreflight(true));
+
+/* 表格里写了 Shipping / Processing profile 编码时，校验它是否在本店模板库里。
+ * 写错编码 = 建草稿被 Etsy 拒，所以在给料阶段就标红。 */
+function validateProfileIds(){
+  if (!PREF || !IMPORT_BATCH.length) return;
+  const ship = new Set((PREF.shippingProfiles || []).map(x => String(x.id)));
+  const ready = new Set((PREF.readinessStates || []).map(x => String(x.id)));
+  let bad = 0;
+  IMPORT_BATCH.forEach(it => {
+    const errs = (it._problems || []).filter(x => !/^模板 ID|^处理档案 ID/.test(x));
+    if (it.shipping_profile_id && !ship.has(String(it.shipping_profile_id))) {
+      errs.push('配送模板 ID ' + it.shipping_profile_id + ' 不在本店模板库里');
+      bad++;
+    }
+    if (it.readiness_state_id && !ready.has(String(it.readiness_state_id))) {
+      errs.push('处理档案 ID ' + it.readiness_state_id + ' 不在本店模板库里');
+      bad++;
+    }
+    it._problems = errs;
+  });
+  if (bad) log('发现 ' + bad + ' 个模板编码不在本店模板库里，已标红', 'e');
+  renderImportList();
+}
 
 function fillSelect(id, arr, placeholder){
   const el = document.getElementById(id);
@@ -1359,6 +1391,8 @@ document.getElementById('btnDraft').addEventListener('click', async () => {
   log('开始建草稿：' + (fTitle.value || '').slice(0, 40));
   const t0 = Date.now();
   try {
+    // 建草稿前把表单存回当前条目 —— 保证"当前条目"和真实提交的数据一致
+    saveCurrentForm();
     const body = collectForm();
     body.images = IMAGES.map((im, i) => ({ filename: im.filename, data: im.data, rank: i + 1 }));
     if (VARS.length){
@@ -1494,7 +1528,7 @@ boot().then(async () => {
     const st = Number(q.get('step') || 0);
     const lid = Number(q.get('listing_id') || 0);
     if (st === 8 || lid){
-      goto(8);
+      goto(7);
       socEnter();
       if (lid) await socOpenFor(lid);
     }
@@ -1568,6 +1602,75 @@ document.getElementById('btnAiCopy').addEventListener('click', async () => {
 const IMPORT_BATCH = [];   // 解析后的行
 const AI_RESULTS = [];     // 每条 { row, title, description, tags, status, error }
 let AI_POLL_TIMER = null;
+
+/* ================= 当前条目（取代原来的「填入表单」） =================
+ * 为什么这么改：原来每条都要点「填入表单」才知道第 5 步装的是哪一条，
+ * 状态是隐式的，切来切去很容易把 A 的标题配到 B 的价格上。
+ * 现在所有步骤都读写 CURRENT_IDX 这一条的 _form，顶部常显"当前第几条"。
+ * 切条目时先把表单存回旧条目（saveCurrentForm），再装载新条目 —— 不会串。 */
+let CURRENT_IDX = -1;
+
+function renderItemNav(){
+  const nav = document.getElementById('itemNav');
+  if (!nav) return;
+  if (!IMPORT_BATCH.length){ nav.style.display = 'none'; return; }
+  nav.style.display = 'flex';
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  const ai = AI_RESULTS.find(x => x.i === CURRENT_IDX);
+  const state = (it && it._form && it._form.title)
+    ? '文案已填' : (ai && ai.status === 'done' ? 'AI 已生成' : '未生成文案');
+  document.getElementById('itemNavText').innerHTML =
+    '<b>当前条目 ' + (CURRENT_IDX + 1) + ' / ' + IMPORT_BATCH.length + '</b>　'
+    + esc((it && it.sku) || ('第 ' + (it ? it._row : '?') + ' 行')) + '　·　' + state;
+  document.getElementById('btnPrevItem').disabled = CURRENT_IDX <= 0;
+  document.getElementById('btnNextItem').disabled = CURRENT_IDX >= IMPORT_BATCH.length - 1;
+}
+
+/** 把当前表单存回当前条目（类目与变体也一起存，否则切回来会丢） */
+function saveCurrentForm(){
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  if (!it) return;
+  try {
+    if (typeof collectImportRowForm !== 'function') return;
+    const f = collectImportRowForm();
+    f._vars = JSON.parse(JSON.stringify(VARS || []));
+    f._tax = PICKED_TAX ? { id: PICKED_TAX.id, name: PICKED_TAX.name } : null;
+    it._form = f;
+  } catch(e){ /* 表单未就绪时忽略 */ }
+}
+
+/** 切到第 idx 条：先存旧的，再装新的 */
+function switchToItem(idx){
+  if (idx < 0 || idx >= IMPORT_BATCH.length) return;
+  if (idx === CURRENT_IDX){ renderItemNav(); return; }
+  saveCurrentForm();
+  CURRENT_IDX = idx;
+  const it = IMPORT_BATCH[idx];
+  applyImportRow(it);
+  // 类目
+  const taxBox = document.getElementById('taxPicked');
+  if (it._form && it._form._tax){
+    PICKED_TAX = it._form._tax;
+    if (taxBox){ taxBox.style.display = 'block';
+      taxBox.innerHTML = '<b>已选类目：</b>' + esc(PICKED_TAX.name) + '（taxonomy_id = ' + PICKED_TAX.id + '）'; }
+  } else {
+    PICKED_TAX = null;
+    if (taxBox) taxBox.style.display = 'none';
+  }
+  // 变体
+  VARS = (it._form && Array.isArray(it._form._vars)) ? JSON.parse(JSON.stringify(it._form._vars)) : [];
+  renderVars();
+  // 图片按文件名匹配
+  const matched = it._matched || matchPickedImages(it.images);
+  if (matched.length) setPickedFiles(matched);
+  else if (typeof clearPickedFiles === 'function') clearPickedFiles();
+  renderItemNav();
+  renderImportList();
+  log('切换到条目 ' + (idx + 1) + '/' + IMPORT_BATCH.length + '：' + (it.sku || ''));
+}
+
+document.getElementById('btnPrevItem').addEventListener('click', () => switchToItem(CURRENT_IDX - 1));
+document.getElementById('btnNextItem').addEventListener('click', () => switchToItem(CURRENT_IDX + 1));
 
 /* 步骤切换时禁用「下一步」—— 必须先解析出至少 1 条 */
 function refreshGiveNext() {
@@ -1661,6 +1764,12 @@ function doParseImport() {
   refreshGiveNext();
   renderAiList();
   renderKwSkuOptions();   // 新解析的条目同步进关键词池的 SKU 下拉
+  // ★ 解析完自动把第 1 条设为当前条目：用户不需要再点任何按钮，
+  //   后面几步打开就有数据（这是原来最别扭的地方）
+  if (IMPORT_BATCH.length) {
+    CURRENT_IDX = -1;   // 强制重新装载
+    switchToItem(0);
+  }
 }
 
 function renderImportList() {
@@ -1668,7 +1777,7 @@ function renderImportList() {
   if (!IMPORT_BATCH.length) { box.innerHTML = ''; return; }
   box.innerHTML =
     '<div class="subhead">解析结果（' + IMPORT_BATCH.length + ' 条）'
-    + '<span class="hint">点「填入表单」把该条套进后面的表单，逐条确认后再建草稿。'
+    + '<span class="hint">点任意一条 = 设为「当前条目」，后面的所有步骤都跟着它走，不用再点「填入表单」。'
     + '<b>不会自动建草稿</b> —— 字段错位时批量建错草稿是要花上架费的。</span></div>'
     + IMPORT_BATCH.map((it, i) => {
       const pb = it._problems.length
@@ -1678,39 +1787,32 @@ function renderImportList() {
       const imgTip = mi === it.images.length
         ? '<span style="color:var(--good)">图 ' + mi + '/' + it.images.length + '</span>'
         : '<span style="color:var(--warn)">图 ' + mi + '/' + it.images.length + ' 缺</span>';
-      return '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:8px">'
+      const cur = i === CURRENT_IDX;
+      return '<div data-imp-pick="' + i + '" style="cursor:pointer;border:1px solid '
+        + (cur ? 'var(--accent)' : 'var(--border)') + ';border-radius:10px;padding:10px;margin-top:8px'
+        + (cur ? ';background:rgba(24,95,165,.06)' : '') + '">'
         + '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px">'
         + '<b style="font-size:13px">' + esc(it.sku || ('第 ' + it._row + ' 行')) + '</b>'
-        + '<button class="btn sm" data-imp-fill="' + i + '">填入表单 →</button></div>'
+        + (cur ? '<span style="font-size:11px;color:var(--accent);font-weight:600">当前条目</span>' : '')
+        + '</div>'
         + '<div style="font-size:12px;color:var(--text-faint);margin-top:4px">'
         + esc([it.price ? ('$' + it.price) : '', it.quantity ? ('×' + it.quantity) : '', it.who_made, it.when_made,
                it.materials.length ? it.materials.join('/') : '',
-               it.item_weight ? (it.item_weight + (it.item_weight_unit || 'g')) : '', imgTip]
+               it.item_weight ? (it.item_weight + (it.item_weight_unit || 'g')) : '']
               .filter(Boolean).join(' · '))
+        + '　' + imgTip          /* ★ 不能放进 esc() —— 否则 <span> 会被当纯文本显示 */
         + '</div>' + pb + '</div>';
     }).join('');
 
-  box.querySelectorAll('[data-imp-fill]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const idx = Number(btn.dataset.impFill);
-      const it = IMPORT_BATCH[idx];
-      if (!it) return;
-      applyImportRow(it);
-      const matched = it._matched || matchPickedImages(it.images);
-      if (matched.length) setPickedFiles(matched);
-      importMsg('ok', '已把第 ' + it._row + ' 行填入表单'
-        + (matched.length ? '，并匹配到 <b>' + matched.length + '</b> 张图片。' : '。')
-        + (matched.length < it.images.length
-          ? '<br>还有 ' + (it.images.length - matched.length) + ' 张没找到：请把图片文件也选中。' : '')
-        + '<br>现在可以直接跳到第 5 步核对标题/描述/标签。');
-    });
+  box.querySelectorAll('[data-imp-pick]').forEach(el => {
+    el.addEventListener('click', () => switchToItem(Number(el.dataset.impPick)));
   });
 }
 
 document.getElementById('btnImportParse').addEventListener('click', doParseImport);
 
 document.getElementById('btnToAi').addEventListener('click', () => {
-  goto(2);
+  goto(3);
   if (!AI_RESULTS.length) {
     showAiMsg('info', '已解析 ' + IMPORT_BATCH.length
       + ' 条。可以点「批量生成」让 AI 写标题/描述/标签，也可以直接「跳过 AI」手工填。');
@@ -1973,7 +2075,7 @@ function pollAiBatch(jobId, total) {
           '队列结束：成功 <b>' + okN + '</b> 条'
           + (fail ? '，失败 <b>' + fail + '</b> 条' : '')
           + (r.status === 'stopped' ? '（被中断）' : '') + '。'
-          + '<br>逐条核对文案后可「填入表单」，再往下走建草稿。'
+          + '<br>逐条核对文案后点「设为当前条目」，后面步骤会自动带出数据。'
           + '<br><b>请人工核对</b>：AI 只依据你给的事实生成，材质真伪、图片权利、'
           + '创意标准符合性仍需你确认。');
         return;
@@ -2002,7 +2104,7 @@ function renderAiList() {
   const label = { wait: '待生成', run: '生成中', done: '已生成', error: '失败', skip: '已跳过（缺事实）' };
   box.innerHTML = '<div class="subhead">逐条确认'
     + '<span class="hint">每条都能单独改、单独「换一版」（只重跑这一条，不影响其他）。'
-    + '满意后点「填入表单」，再往下走建草稿。</span></div>'
+    + '满意后点「设为当前条目」，后面步骤会带出这条的全部数据。</span></div>'
     + AI_RESULTS.map((x, k) => {
       const color = { wait: 'var(--text-faint)', run: 'var(--accent)', done: 'var(--good)', error: 'var(--bad)', skip: 'var(--text-faint)' }[x.status] || '';
       let body = '';
@@ -2027,7 +2129,7 @@ function renderAiList() {
         + '<span style="font-size:11.5px;color:' + color + '">' + (label[x.status] || x.status) + '</span></div>'
         + body
         + '<div class="btnrow" style="margin-top:8px">'
-        + '<button class="btn sm" data-ai-fill="' + k + '"' + (x.status === 'done' ? '' : ' disabled') + '>填入表单 →</button>'
+        + '<button class="btn sm" data-ai-fill="' + k + '"' + (x.status === 'done' ? '' : ' disabled') + '>设为当前条目 →</button>'
         + '<button class="btn sm ghost" data-ai-regen="' + k + '"' + (x.status === 'skip' ? ' disabled' : '') + '>换一版</button>'
         + '</div></div>';
     }).join('');
@@ -2048,18 +2150,20 @@ function renderAiList() {
     btn.addEventListener('click', () => {
       const k = Number(btn.dataset.aiFill);
       const x = AI_RESULTS[k];
-      const it = IMPORT_BATCH[x.i];
-      if (!x || !it) return;
-      applyImportRow(it);
-      const matched = it._matched || matchPickedImages(it.images);
-      if (matched.length) setPickedFiles(matched);
-      document.getElementById('fTitle').value = x.title;
-      document.getElementById('fDesc').value = x.description;
-      document.getElementById('fTags').value = x.tags.join(', ');
-      const cnt = document.getElementById('cntTitle');
-      if (cnt) cnt.textContent = x.title.length + ' / 140';
-      showAiMsg('ok', '已填入「' + (x.sku || ('第 ' + x.row + ' 行')) + '」的 AI 文案与图片。'
-        + '<br>下一步：确认类目（第 4 步）→ 核对资料（第 5 步）→ 建草稿（第 7 步）。');
+      if (!x) return;
+      const idx = x.i;
+      const it = IMPORT_BATCH[idx];
+      if (!it) return;
+      // ★ 先把 AI 结果写进该条目的 _form，再切过去 ——
+      //   这样它不会覆盖掉你在同一条上已经手改的其它字段。
+      it._form = Object.assign({}, it._form || {}, {
+        title: x.title || '', description: x.description || '', tags: x.tags || [],
+      });
+      switchToItem(idx);
+      saveCurrentForm();
+      renderItemNav();
+      showAiMsg('ok', '已切到「' + (x.sku || ('第 ' + x.row + ' 行')) + '」，文案已带出。'
+        + '<br>下一步：确认类目（第 4 步）→ 核对资料与价格（第 5 步）→ 建草稿（第 6 步）。');
       goto(4);
     });
   });
@@ -2166,6 +2270,7 @@ async function loadShops(){
       + '</option>').join('') || '<option value="">（这个账号下没查到店铺）</option>';
     SELECTED_SHOP = String(d.current || (list[0] ? list[0].shopId : ''));
     if (SELECTED_SHOP) sel.value = SELECTED_SHOP;
+    if (SELECTED_SHOP) loadPreflight(false);   // 自动读店铺配置，不用用户点
     note.innerHTML = list.length > 1
       ? '<b>这个账号下有 ' + list.length + ' 间店。</b>选中的店铺决定用哪套提示词版本。'
         + '<br><span style="color:var(--text-faint)">注意：建草稿会写进当前<b>授权账号</b>的店铺。'
@@ -2191,6 +2296,8 @@ document.getElementById('fShopPick').addEventListener('change', async () => {
   }
   // 提示词是按店铺分桶的，换店要重新拉那个店的版本
   await loadPromptVersions();
+  // 配送/处理模板是店铺级的，换店必须重新读（force，不吃缓存）
+  loadPreflight(true);
 });
 
 function currentPrompt(){
@@ -2642,8 +2749,8 @@ function socEnter(){
 }
 
 /* 进入步骤 8 时按需加载；支持 ?step=8&listing_id=xxx 直接落到某个商品 */
-document.querySelectorAll('.step-chip[data-step="8"]').forEach(c => c.addEventListener('click', socEnter));
-document.querySelectorAll('[data-goto="8"]').forEach(c => c.addEventListener('click', socEnter));
+document.querySelectorAll('.step-chip[data-step="7"]').forEach(c => c.addEventListener('click', socEnter));
+document.querySelectorAll('[data-goto="7"]').forEach(c => c.addEventListener('click', socEnter));
 
 document.getElementById('btnSocLoad').addEventListener('click', socLoadListings);
 document.getElementById('btnSocReload').addEventListener('click', () => {
@@ -2663,7 +2770,7 @@ document.getElementById('socUtm').addEventListener('change', () => {
 
 /* 供步骤 7 发布成功后跳转使用 */
 async function socOpenFor(listingId){
-  goto(8);
+  goto(7);
   socEnter();
   if (!SOC_LISTINGS.length) await socLoadListings();
   const sel = document.getElementById('socPick');
