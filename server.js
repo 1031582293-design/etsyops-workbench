@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { hostname as osHostname } from 'node:os';
 import { execSync } from 'node:child_process';
 import * as etsy from './etsy-api.js';
+import * as mail from './mail-ingest.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)));
 
@@ -407,6 +408,13 @@ const HOST = process.env.HOST || '0.0.0.0';
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGIN || 'https://etsyops-workbench.pages.dev,http://localhost:3000').split(',').map(s => s.trim());
 // 可选 API Key：设置了之后，发布/上传等写操作接口必须携带正确 key，挡住公开隧道的滥用。
 const API_KEY = process.env.API_KEY || '';
+
+// ★ 邮件接入（2026-10-20）：Cloudflare Email Worker 把 Etsy 通知邮件 POST 进来。
+// MAIL_INGEST_SECRET 是「Worker 与后端之间的专用钥匙」，与 API_KEY 完全分开——
+// Worker 不该知道前端用的 API_KEY，也不该能调其它接口。
+// 没配这个变量时，投递一律拒收（避免公网接口变成任人写盘的口子）。
+const MAIL_INGEST_SECRET = process.env.MAIL_INGEST_SECRET || '';
+const MAIL_DATA_DIR = process.env.MAIL_DATA_DIR || join(DATA_DIR, 'mail');
 function corsHeaders(res, req) {
   // 回显来源（没有 origin 时放行 *），确保 pages.dev / localhost / 127.0.0.1 / file:// 等任意页面 fetch 都不被浏览器 CORS 拦截
   const origin = req.headers.origin;
@@ -785,7 +793,13 @@ async function handleApi(req, res) {
   // ★ AI 队列的三个路径也免key：AI 没配好时队列根本跑不起来，
   //   那正是最需要看它报什么的时候（2026-10-07 加，之前只写了注释没真加，队列在排查时完全不可见）。
   const ETSY_AI_BATCH_OPEN = p === '/api/etsy/ai/batch' || p === '/api/etsy/ai/batch/stop' || p === '/api/etsy/ai/check';
+  // ★ 邮件两个路径不走 API_KEY：
+  //  - /api/mail/ingest 由 Cloudflare Worker 调用，它只持有 MAIL_INGEST_SECRET，
+  //    不该知道前端用的 API_KEY；安全性由 HMAC 签名 + 时间戳防重放承担（见 mail-ingest.js）。
+  //  - /api/mail/status 只返回「配没配密钥 / 收了几封 / 最后一封时间」，不含任何邮件内容，
+  //    定位「信到底有没有到」时最需要它。
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status'
+      && p !== '/api/mail/ingest' && p !== '/api/mail/status'
       && !ETSY_OPEN_PATHS.includes(p) && !ETSY_AI_BATCH_OPEN) {
     const url = new URL(req.url, 'http://localhost');
     const provided = req.headers['x-api-key'] || url.searchParams.get('key');
@@ -799,6 +813,56 @@ async function handleApi(req, res) {
       res.end(JSON.stringify({ ok: false, error: 'invalid_api_key', note: '前端携带的 API Key 与后端 API_KEY 不一致（需完全相同）。请核对 Cloudflare 的 WECHAT_API_KEY 或网址 ?apikey= 的值。' }));
       return;
     }
+  }
+
+  // ── 邮件接入：Cloudflare Email Worker 投递到这里 ─────────────────────────
+  // 收到即落盘（data/mail/inbox/YYYY-MM-DD/<内容哈希>.eml），先保证不丢信，
+  // 正文解析留到下一步做——这样即使解析器还没写，也能立刻验证「信到底到没到」。
+  if (p === '/api/mail/ingest' && req.method === 'POST') {
+    let body;
+    try {
+      body = await readJson(req);
+    } catch (e) {
+      return json(res, 400, { ok: false, error: 'bad_json', note: String((e && e.message) || e) });
+    }
+    const v = mail.verifySignature(
+      MAIL_INGEST_SECRET,
+      req.headers['x-mail-timestamp'],
+      body.rawB64,
+      req.headers['x-mail-signature'],
+    );
+    if (!v.ok) {
+      console.warn('[mail] 验签失败:', v.reason, '| from:', body.from || '?');
+      return json(res, v.reason === 'no_secret_configured' ? 503 : 401, {
+        ok: false,
+        error: v.reason,
+        note: v.reason === 'no_secret_configured'
+          ? '后端未设置 MAIL_INGEST_SECRET，已拒收。请在 .env 加一行 MAIL_INGEST_SECRET=<随机串> 并重启后端。'
+          : '签名不匹配或时间戳过期，邮件未入库。请核对 Worker 与后端用的是不是同一个密钥。',
+      });
+    }
+    const r = await mail.ingest(body, { secret: MAIL_INGEST_SECRET, dataDir: MAIL_DATA_DIR });
+    console.log('[mail]', JSON.stringify({
+      ok: r.ok, id: r.id, dup: !!r.duplicate, subject: r.subject || '', size: r.size || 0,
+    }));
+    return json(res, r.ok ? 200 : (r.status || 500), r);
+  }
+
+  if (p === '/api/mail/status' && req.method === 'GET') {
+    const st = await mail.status(MAIL_DATA_DIR);
+    return json(res, 200, {
+      ...st,
+      configured: Boolean(MAIL_INGEST_SECRET),
+      note: MAIL_INGEST_SECRET
+        ? '已配置收信密钥，等待 Worker 投递。'
+        : '未设置 MAIL_INGEST_SECRET，所有投递都会被拒。',
+    });
+  }
+
+  if (p === '/api/mail/recent' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const r = await mail.recent(MAIL_DATA_DIR, url.searchParams.get('limit'));
+    return json(res, 200, r);
   }
 
   // 绑定状态检测
