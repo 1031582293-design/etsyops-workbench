@@ -91,9 +91,22 @@ export const EMPLOYEES = [
       { t: '脚本撰写', skill: 'Script Writer', sop: '按平台调性写脚本', d: '口播/口播+Vlog。', out: '脚本库' },
       { t: '素材生成', skill: 'Asset Gen', sop: '文生图/图生视频', d: '封面+短视频片段。', out: '素材包' },
       { t: '多平台适配', skill: 'Adapt Pro', sop: '横竖版/字幕/水印适配', d: '一键出 5 版。', out: '适配稿 ×5' },
-      { t: '排期发布', skill: 'Scheduler', sop: '错峰定时发布', d: '按平台活跃时段。', out: '发布日历' }
+      { t: '分发排期', skill: 'Scheduler', sop: '定稿后交给「社媒分发」出各平台文案与发布', d: '内容定稿 → 一键转交分发数字员工。', out: '发布清单' }
     ],
     deliverables: [{ t: '本周内容日历', d: '5 平台 ×12 条排期' }]
+  },
+  {
+    id: 'social', name: '社媒分发', role: 'Social Distributor', cat: '自媒体', icon: '📮',
+    color: 'linear-gradient(135deg,#f1641e,#ffb86b)', status: 'run',
+    tagline: '把店铺商品变成各平台能直接发的内容：选在售商品 → 出平台文案 → 打开官方发布页，并记录发布状态。',
+    tool: 'social-publisher.html',
+    nodes: [
+      { t: '选择商品', skill: 'Listing Pick', sop: '从店铺在售商品里挑，只放行 active', d: '草稿没有公开链接，发出去别人点开是 404。', out: '待发商品' },
+      { t: '生成平台文案', skill: 'Copy Adapt', sop: '按 Pinterest / FB / X / IG / 微博 各自规则出稿', d: 'Pinterest 堆关键词、X 加权 280、IG 不吃链接。', out: '五平台文案' },
+      { t: '打开发布页', skill: 'Deep Link', sop: '拼平台官方发布页深链，内容尽量预填', d: '零申请零审核，登录自己账号点发布即可。', out: '发布页' },
+      { t: '记录发布', skill: 'Post Log', sop: '人工勾选已发布，落盘避免重复发', d: '深链接不到平台结果，只能人工确认。', out: '发布记录' }
+    ],
+    deliverables: [{ t: '社媒分发工具', d: 'social-publisher.html · 内容产出 → 打开发布页 → 记录' }]
   },
   {
     id: 'douyin', name: '抖音运营', role: 'Douyin Ops', cat: '自媒体', icon: '🎵',
@@ -181,5 +194,8 @@ export const SOCIAL = [
   { name: '小红书', handle: '@Handmade礼物铺', icon: '📕', c: 'linear-gradient(135deg,#ff2e4d,#ff7ac3)', fans: '28.3k', views: '640k', eng: '11.2%', post: '今日 3 条', prog: 92, st: '活跃' },
   { name: '微信公众号', handle: '梦琦Mengqi', id: 'wechat', icon: '💚', c: 'linear-gradient(135deg,#07c160,#22d3ee)', fans: '9.1k', views: '86k', eng: '6.7%', post: '本周 2 篇', prog: 50, st: '待群发' },
   { name: 'TikTok', handle: '@craftystudio', icon: '🎶', c: 'linear-gradient(135deg,#22d3ee,#7c5cff)', fans: '53.8k', views: '2.1M', eng: '9.8%', post: '今日 1 条', prog: 66, st: '活跃' },
-  { name: 'Instagram', handle: '@crafty.studio', icon: '🌅', c: 'linear-gradient(135deg,#ff7ac3,#ffb86b)', fans: '21.4k', views: '380k', eng: '7.5%', post: '今日 1 条', prog: 40, st: '学习中' }
+  { name: 'Instagram', handle: '@crafty.studio', icon: '🌅', c: 'linear-gradient(135deg,#ff7ac3,#ffb86b)', fans: '21.4k', views: '380k', eng: '7.5%', post: '今日 1 条', prog: 40, st: '学习中' },
+  { name: 'Pinterest', handle: '@aurenmorph', icon: '📌', c: 'linear-gradient(135deg,#e60023,#ff7ac3)', fans: '—', views: '—', eng: '—', post: '可分发', prog: 0, st: '已接入' },
+  { name: 'Facebook', handle: 'Aurenmorph', icon: '📘', c: 'linear-gradient(135deg,#1877f2,#22d3ee)', fans: '—', views: '—', eng: '—', post: '可分发', prog: 0, st: '已接入' },
+  { name: 'X', handle: '@aurenmorph', icon: '✖', c: 'linear-gradient(135deg,#2b2b2b,#6b7596)', fans: '—', views: '—', eng: '—', post: '可分发', prog: 0, st: '已接入' }
 ];

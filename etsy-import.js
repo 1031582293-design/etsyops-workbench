@@ -57,6 +57,12 @@ const IMPORT_ALIASES = {
   // 交付文件名（仅数字商品；文件字节要在页面上传，表格只记名字便于对号）
   files:'digital_file_names', 交付文件:'digital_file_names', 交付文件名:'digital_file_names',
   'digital files':'digital_file_names',
+  // 店铺级编码：给料时就可以带上，省一次手选。解析后用店铺模板库校验，
+  // 不在库里的 ID 会在卡片上标红（写错编码 = 建草稿被 Etsy 拒）。
+  ship:'shipping_profile_id', 'shipping profile':'shipping_profile_id',
+  配送模板:'shipping_profile_id', 配送模板id:'shipping_profile_id',
+  ready:'readiness_state_id', 'processing profile':'readiness_state_id',
+  处理档案:'readiness_state_id', 处理档案id:'readiness_state_id',
   // 变体
   variations:'variations_json', 变体:'variations_json',
   // 其他
@@ -219,6 +225,8 @@ function parseImportTable(text) {
       audience_note: get('audience_note').trim(),
       item_type: parseItemType(get('item_type')),
       digital_file_names: get('digital_file_names').trim(),
+      shipping_profile_id: get('shipping_profile_id').trim(),
+      readiness_state_id: get('readiness_state_id').trim(),
       shop_section_id: get('shop_section_id').trim(),
       return_policy_id: get('return_policy_id').trim(),
       variations_json: get('variations').trim(),
@@ -245,30 +253,66 @@ function parseImportTable(text) {
   return { columns: cols, rows, errors };
 }
 
-/* 把解析结果套进页面的表单（单条预览用）。
- * 只填「识别到的字段」，不碰用户已经手填的内容。 */
+/* 把某一条条目套进页面表单。
+ * ★ 有 item._form 时以它为准（那是用户在这条上编辑过的版本），
+ *   没有才用导入时的原始值 —— 这样切换条目不会把手改的内容冲掉。
+ * ★ 这里对空值也写进去：切到另一条时，上一条的标题必须被清掉，
+ *   否则会出现「A 的标题配 B 的价格」这种串条错误。 */
 function applyImportRow(item) {
-  const set = (id, v) => { const el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
-  set('fTitle', item.title);
-  set('fDesc', item.description);
-  set('fTags', item.tags.join(', '));
-  set('fPrice', item.price);
-  set('fQty', item.quantity);
-  set('fMat', item.materials.join(', '));
-  set('fAudience', item.audience_note);
-  set('fPartner', item.production_partner_ids);
+  const src = item._form || item;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v == null ? '' : v); };
+  set('fTitle', src.title);
+  set('fDesc', src.description);
+  set('fTags', (src.tags || []).join('\n'));
+  set('fPrice', src.price);
+  set('fQty', src.quantity);
+  set('fMat', (src.materials || []).join(', '));
+  set('fAudience', src.audience_note);
+  set('fPartner', src.production_partner_ids);
+  set('fWeight', src.item_weight);
+  set('fLen', src.item_length);
+  set('fWid', src.item_width);
+  set('fHgt', src.item_height);
+  const setSel = (id, v, keepIfEmpty) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (v == null || v === '') { if (!keepIfEmpty) el.selectedIndex = 0; return; }
+    el.value = v;
+  };
+  setSel('fWho', src.who_made, true);          // 制作方/时间是全局假设，别清空
+  setSel('fWhen', src.when_made, true);
+  setSel('fWeightUnit', src.item_weight_unit);
+  setSel('fDimUnit', src.item_dimensions_unit);
+  setSel('fItemType', src.item_type || 'physical');
+  setSel('fShip', src.shipping_profile_id);
+  setSel('fReady', src.readiness_state_id);
+  setSel('fSection', src.shop_section_id);
+  setSel('fReturn', src.return_policy_id);
+  setSel('fSupply', src.is_supply == null ? null : (src.is_supply ? 'true' : 'false'));
   if (item.taxonomy_id) set('fTax', item.taxonomy_id);
-  const setSel = (id, v) => { if (!v) return; const el = document.getElementById(id); if (el) el.value = v; };
-  setSel('fWho', item.who_made);
-  setSel('fWhen', item.when_made);
-  setSel('fWeightUnit', item.item_weight_unit);
-  setSel('fDimUnit', item.item_dimensions_unit);
-  if (item.item_weight != null) set('fWeight', item.item_weight);
-  if (item.item_length != null) set('fLen', item.item_length);
-  if (item.item_width != null) set('fWid', item.item_width);
-  if (item.item_height != null) set('fHgt', item.item_height);
-  const chk = document.getElementById('fSupply');
-  if (chk && item.is_supply != null) chk.checked = item.is_supply;
+}
+
+/* 把当前表单的值收集回该条目（切条目前调用）。
+ * 字段名与页面 collectForm() 保持一致，这样 _form 可以直接再喂给 applyImportRow。 */
+function collectImportRowForm() {
+  const val = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const num = v => { const n = Number(String(v).replace(/,/g, '').trim()); return Number.isFinite(n) && n > 0 ? n : null; };
+  return {
+    title: val('fTitle'), description: val('fDesc'),
+    tags: val('fTags').split('\n').map(s => s.trim()).filter(Boolean),
+    price: val('fPrice'), quantity: val('fQty'),
+    materials: val('fMat').split(/[,，]/).map(s => s.trim()).filter(Boolean),
+    audience_note: val('fAudience'), production_partner_ids: val('fPartner'),
+    item_weight: num(val('fWeight')), item_weight_unit: val('fWeightUnit'),
+    item_length: num(val('fLen')), item_width: num(val('fWid')), item_height: num(val('fHgt')),
+    item_dimensions_unit: val('fDimUnit'),
+    item_type: val('fItemType') || 'physical',
+    who_made: val('fWho'), when_made: val('fWhen'),
+    is_supply: val('fSupply') === 'true',
+    shipping_profile_id: val('fShip'), readiness_state_id: val('fReady'),
+    shop_section_id: val('fSection'), return_policy_id: val('fReturn'),
+    taxonomy_id: val('fTax'),
+  };
 }
 
 /* ---------- AI 返回内容的解析 ----------

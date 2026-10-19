@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>社媒分发 · 自媒体数字员工</title>
+<script src="./config.js"></script>
+<script src="./etsy-social.js"></script>
+<style>
+  :root{
+    --bg:#0b0e1a; --bg2:#0f1426; --panel:rgba(255,255,255,.045); --panel-2:rgba(255,255,255,.07);
+    --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.18);
+    --text:#eaf0ff; --text-dim:#aab3d0; --text-faint:#6b7596;
+    --accent:#ffb86b; --accent-2:#f1641e; --etsy:#f1641e;
+    --good:#34d399; --warn:#ffb86b; --bad:#ff6b81;
+    --radius:18px; --radius-sm:13px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:radial-gradient(1200px 700px at 10% -10%,rgba(241,100,30,.18),transparent 60%),
+      radial-gradient(900px 600px at 100% 0%,rgba(34,211,238,.10),transparent 55%),var(--bg);
+    color:var(--text);min-height:100vh;line-height:1.7}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 20px 60px}
+  .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+  .top h1{font-size:20px;margin:0;letter-spacing:.3px}
+  .top .sub{font-size:12.5px;color:var(--text-faint)}
+  .top .spacer{margin-left:auto}
+  a.btn,button.btn{display:inline-flex;align-items:center;gap:6px;padding:11px 18px;border-radius:12px;
+    border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px;
+    cursor:pointer;text-decoration:none;font-family:inherit}
+  a.btn:hover,button.btn:hover{border-color:var(--border-strong)}
+  .btn.primary{background:var(--etsy);border:none;color:#fff}
+  .btn.primary:hover{filter:brightness(1.07)}
+  .btn.ghost{background:transparent}
+  .btn.sm{padding:7px 12px;font-size:12px;border-radius:9px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btnrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    padding:22px 24px;margin-bottom:18px}
+  .panel h3{margin:0 0 6px;font-size:15px}
+  .ph-sub{font-size:12.8px;color:var(--text-dim);margin-bottom:12px;line-height:1.75}
+  .msg{padding:13px 16px;border-radius:12px;font-size:13px;line-height:1.75;margin:14px 0;display:none}
+  .msg.show{display:block}
+  .msg.ok{background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.32);color:#b6f2d8}
+  .msg.err{background:rgba(255,107,129,.1);border:1px solid rgba(255,107,129,.32);color:#ffc2cb}
+  .msg.warn{background:rgba(255,184,107,.1);border:1px solid rgba(255,184,107,.32);color:#ffdfb5}
+  .msg.info{background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.28);color:#b8ecf7}
+  .kv{width:100%;border-collapse:collapse;font-size:12.5px}
+  .kv td{padding:7px 0;border-bottom:1px solid var(--border)}
+  .kv td:first-child{color:var(--text-faint);width:22%}
+  .kv td:last-child{color:var(--text);word-break:break-all}
+  select,textarea,input[type=text]{width:100%;background:var(--bg2);border:1px solid var(--border);
+    color:var(--text);border-radius:10px;padding:10px 12px;font-size:13px;font-family:inherit}
+  select:focus,textarea:focus{border-color:var(--accent);outline:none}
+  textarea{min-height:110px;resize:vertical;line-height:1.7}
+  .hidden{display:none!important}
+  .pill{font-size:10.5px;padding:2px 8px;border-radius:999px;font-weight:700}
+  .pill.active{background:rgba(52,211,153,.16);color:var(--good)}
+  .pill.draft{background:rgba(255,184,107,.16);color:var(--warn)}
+  .pill.inactive{background:rgba(255,255,255,.08);color:var(--text-faint)}
+  .soc-imgs{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+  .soc-img{width:74px;height:74px;border-radius:10px;overflow:hidden;border:2px solid var(--border);
+    cursor:pointer;background:var(--bg2);padding:0;flex:0 0 auto}
+  .soc-img img{width:100%;height:100%;object-fit:cover;display:block}
+  .soc-img.on{border-color:var(--accent)}
+  .soc-card{margin-top:16px;padding:15px 16px;border-radius:14px;border:1px solid var(--border);
+    background:var(--panel)}
+  .soc-card h4{margin:0 0 4px;font-size:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .soc-card .cnt{font-size:11.5px;color:var(--text-faint);font-weight:400}
+  .soc-card .cnt.over{color:var(--bad)}
+  .soc-card textarea{min-height:96px;margin-top:8px;font-size:13px}
+  .soc-card .hintline{font-size:12px;color:var(--text-faint);margin-top:7px;line-height:1.6}
+  .soc-sent{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);width:auto}
+  .logrow{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);
+    font-size:12.5px;flex-wrap:wrap}
+  .logrow .p{min-width:74px;color:var(--accent)}
+  .logrow .id{color:var(--text-faint);min-width:84px}
+  .logrow .t{color:var(--text-faint);margin-left:auto}
+  .logrow a{color:var(--text-dim);text-decoration:none;max-width:340px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  @media(max-width:640px){.wrap{padding:18px 14px 40px}.panel{padding:18px 16px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a class="btn sm ghost" href="./index.html">← 回总览</a>
+    <div>
+      <h1>社媒分发</h1>
+      <div class="sub">自媒体数字员工 · 产出内容 → 打开平台官方发布页（不调社媒 API、无需开发者账号）</div>
+    </div>
+    <div class="spacer"></div>
+    <a class="btn sm ghost" href="./etsy-publisher.html" id="toPublisher">去上架页 →</a>
+  </div>
+
+  <div id="gate" class="panel hidden"></div>
+
+  <div id="main" class="hidden">
+    <section class="panel">
+      <h3>选择商品并生成内容</h3>
+        <h3>社媒发布</h3>
+        <div class="ph-sub">
+          这里只做两件事：<b>生成各平台文案</b> + <b>打开平台官方发布页</b>。
+          不向社媒平台发任何请求，也不需要开发者账号与审核 —— 你用自己账号登录点一下发布即可。
+        </div>
+        <div id="socMsg" class="msg"></div>
+
+        <div class="btnrow" style="margin-top:0">
+          <select id="socPick" style="max-width:520px"><option value="">（先点右边按钮读取店铺在售商品）</option></select>
+          <button class="btn" id="btnSocLoad">读取在售商品</button>
+          <button class="btn ghost sm" id="btnSocReload" disabled>刷新当前商品</button>
+        </div>
+
+        <div id="socBox" class="hidden" style="margin-top:18px">
+          <table class="kv">
+            <tr><td>商品</td><td id="socTitle">—</td></tr>
+            <tr><td>状态</td><td id="socState">—</td></tr>
+            <tr><td>公开链接</td><td id="socLink">—</td></tr>
+            <tr><td>发布记录</td><td id="socPosted">—</td></tr>
+          </table>
+
+          <div style="margin-top:16px">
+            <div class="ph-sub" style="margin-bottom:6px">要发的图片：默认第一张（Etsy 主图）。Pinterest 用竖图效果更好。</div>
+            <div id="socImgs" class="soc-imgs"></div>
+          </div>
+
+          <div style="margin-top:16px">
+            <div class="ph-sub" style="margin-bottom:6px">文案轮换：同一商品反复发时换个开场，避免被平台判重复。</div>
+            <div class="btnrow" style="margin-top:0">
+              <button class="btn sm" data-soc-variant="0">款式 A</button>
+              <button class="btn sm" data-soc-variant="1">款式 B</button>
+              <button class="btn sm" data-soc-variant="2">款式 C</button>
+              <button class="btn sm" data-soc-variant="3">款式 D</button>
+              <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-dim);width:auto">
+                <input type="checkbox" id="socUtm" checked style="width:auto"> 链接加 utm 来源标记
+              </label>
+            </div>
+          </div>
+
+          <div id="socCards"></div>
+        </div>
+    </section>
+
+    <section class="panel" id="logPanel">
+      <h3>发布记录</h3>
+      <div class="ph-sub">
+        只有勾选某个平台的「已发布」才会记录（深链接不到平台的发布结果，只能人工确认）。
+        记录存在后端 <code>data/social-posts.json</code>，**只在本机**，换机器不同步。
+      </div>
+      <div class="btnrow" style="margin-top:0">
+        <button class="btn sm ghost" id="btnLogRefresh">刷新记录</button>
+        <span class="sub" id="logCount" style="font-size:12px;color:var(--text-faint);align-self:center"></span>
+      </div>
+      <div id="socLogList" style="margin-top:10px"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+const API_BASE = (window.getApiBase && window.getApiBase()) || '';
+
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+  ));
+}
+function showMsg(el, kind, html){
+  if (!el) return;
+  el.className = 'msg show ' + kind;
+  el.innerHTML = html;
+}
+function fetchT(url, ms, opts){
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
+  return fetch(url, Object.assign({}, opts || {}, { signal: c.signal })).finally(() => clearTimeout(t));
+}
+async function apiCall(path, opts){
+  opts = opts || {};
+  const ms = opts.timeout || 60000;
+  const label = opts.label || path;
+  const headers = Object.assign(window.apiAuthHeaders ? window.apiAuthHeaders() : {},
+    { 'Accept-Encoding': 'identity' }, opts.headers || {});
+  const r = await fetchT(API_BASE + path, ms, {
+    method: opts.method || (opts.body ? 'POST' : 'GET'),
+    headers, body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const ct = r.headers.get('content-type') || '';
+  let txt = '';
+  try { txt = await r.text(); }
+  catch (te) { throw new Error(label + '：响应体传输中断（HTTP ' + r.status + '）'); }
+  if (ct.indexOf('application/json') < 0){
+    throw new Error(label + '：后端返回的不是 JSON（content-type=' + (ct || '空') + '）。开头：' + txt.slice(0, 140));
+  }
+  let d;
+  try { d = JSON.parse(txt || '{}'); }
+  catch (pe) { throw new Error(label + '：响应不是合法 JSON（HTTP ' + r.status + '）'); }
+  if (!r.ok) throw new Error((d && (d.note || d.error)) || (label + ' 失败（HTTP ' + r.status + '）'));
+  if (d && d.ok === false) throw new Error((d && (d.note || d.error)) || (label + ' 返回 ok:false'));
+  return d;
+}
+/* ================= 步骤 8 · 社媒发布 =================
+ * 设计要点（改前先读）：
+ *  1. 不调用任何社媒 API。只做「生成内容」+「打开平台官方发布页」，零申请、零 token。
+ *  2. 只允许 active 的 listing —— 草稿没有公开链接，发出去是 404。
+ *  3. 所有外部文本（标题/详情来自 AI 与表格导入）一律 textContent / socEsc，
+ *     绝不直接 innerHTML 拼接；所有深链参数由 etsy-social.js 统一 encodeURIComponent。
+ *  4. 深链打不开时有兜底（纯复制），所以文案可编辑、复制路径永远保留。
+ */
+let SOC_LISTINGS = [];
+let SOC_CUR = null;
+let SOC_IMG = '';
+let SOC_CONTENT = null;
+let SOC_VARIANT = 0;
+let SOC_LOG = {};
+let SOC_LOADED = false;
+
+function socMsg(kind, html){
+  showMsg(document.getElementById('socMsg'), kind, html);
+}
+
+/* 剪贴板：navigator.clipboard 在 iOS Safari / 非安全上下文会失败，必须有兜底 */
+async function socCopy(text){
+  const s = String(text == null ? '' : text);
+  try{
+    if (navigator.clipboard && window.isSecureContext){
+      await navigator.clipboard.writeText(s);
+      return true;
+    }
+  } catch(e){ /* 落到下面的兜底 */ }
+  try{
+    const ta = document.createElement('textarea');
+    ta.value = s;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, s.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch(e){ return false; }
+}
+
+function socStatePill(state){
+  const s = String(state || '').toLowerCase();
+  const cls = s === 'active' ? 'active' : (s === 'draft' ? 'draft' : 'inactive');
+  const el = document.createElement('span');
+  el.className = 'pill ' + cls;
+  el.textContent = (SOCIAL_STATE_TEXT[s] || s || '未知').replace(/（.*?）/g, '');
+  return el;
+}
+
+/* 后端还是旧代码时，新接口会落到路由末尾的 404 {error:'not_found'}。
+ * 这个报错对使用者没有任何信息量（看起来像数据坏了），所以这里直接点名真因。 */
+function socErrText(msg){
+  const m0 = String(msg == null ? '' : msg);
+  return esc(m0) + (/not_found/.test(m0)
+    ? '<br>后端看起来跑的还是旧代码 —— 社媒接口是本次新增的，<b>重启后端（start-backend.bat）</b>后再试。'
+    : '');
+}
+
+async function socLoadListings(){
+  const btn = document.getElementById('btnSocLoad');
+  btn.disabled = true; btn.textContent = '读取中…';
+  try{
+    const d = await apiCall('/api/etsy/listings/active?limit=100', { timeout: 60000, label: '读取在售商品' });
+    SOC_LISTINGS = Array.isArray(d.listings) ? d.listings : [];
+      sel.textContent = '';
+    if (!SOC_LISTINGS.length){
+      sel.appendChild(new Option('（店铺里还没有在售商品）', ''));
+      socMsg('warn', 'Etsy 返回 0 个在售商品。社媒只能发已上架（active）的商品 —— '
+        + '草稿没有公开链接，发出去别人打不开。先在第 7 步把商品发布上架。');
+    } else {
+      const total = d.total != null ? d.total : SOC_LISTINGS.length;
+      sel.appendChild(new Option('（选择要发社媒的商品，共 ' + total + ' 个在售）', ''));
+      SOC_LISTINGS.forEach(l => {
+        const t = String(l.title || '').slice(0, 60) || ('listing ' + l.listing_id);
+        sel.appendChild(new Option(t + '（#' + l.listing_id + '）', String(l.listing_id)));
+      });
+      socMsg('ok', '读到 <b>' + total + '</b> 个在售商品。选一个开始 —— 老商品和新上架的一样能发。');
+    }
+  } catch(e){
+    socMsg('err', '读取失败：' + socErrText(e.message));
+  } finally {
+    btn.disabled = false; btn.textContent = '读取在售商品';
+  }
+}
+
+async function socLoadListing(id){
+  const rid = Number(id || 0);
+  if (!rid) return;
+  socMsg('info', '读取商品 #' + rid + '…');
+  try{
+    const d = await apiCall('/api/etsy/listing?id=' + encodeURIComponent(rid), { timeout: 60000, label: '读取商品详情' });
+    SOC_CUR = d.listing || null;
+  } catch(e){
+    SOC_CUR = null;
+    socMsg('err', '读取商品失败：' + socErrText(e.message));
+    document.getElementById('socBox').classList.add('hidden');
+    return;
+  }
+  const v = socValidateListing(SOC_CUR);
+  document.getElementById('socBox').classList.remove('hidden');
+  document.getElementById('btnSocReload').disabled = false;
+
+  document.getElementById('socTitle').textContent = String(SOC_CUR.title || '—');
+
+  const stEl = document.getElementById('socState');
+  stEl.textContent = '';
+  stEl.appendChild(socStatePill(SOC_CUR.state));
+
+  const lnEl = document.getElementById('socLink');
+  lnEl.textContent = '';
+  if (SOC_CUR.url){
+    const a = document.createElement('a');
+    a.href = SOC_CUR.url;               // 取 API 返回的 url，不自己拼 slug 路径
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = SOC_CUR.url;
+    a.style.color = 'var(--accent)';
+    lnEl.appendChild(a);
+  } else {
+    lnEl.textContent = '—';
+  }
+
+  if (!v.ok){
+    socMsg('err', '<b>这个商品不能发社媒。</b><br>' + esc(v.reason));
+    document.getElementById('socCards').textContent = '';
+    document.getElementById('socImgs').textContent = '';
+    return;
+  }
+  socMsg(v.warn ? 'warn' : 'ok', v.warn ? esc(v.warn) : '可以发。选好图片与款式后，逐个平台点「复制并打开发布页」。');
+
+  SOC_IMG = (SOC_CUR.images && SOC_CUR.images[0]) || '';
+  socRenderImages();
+  await socLoadLog(SOC_CUR.listing_id);
+  socRenderCards();
+}
+
+function socRenderImages(){
+  const box = document.getElementById('socImgs');
+  box.textContent = '';
+  const imgs = (SOC_CUR && SOC_CUR.images) || [];
+  if (!imgs.length){
+    const d = document.createElement('div');
+    d.className = 'hintline';
+    d.textContent = '这个商品没有图片（Etsy 上没图片的商品很少见，确认一下）。';
+    box.appendChild(d);
+    return;
+  }
+  imgs.forEach(u => {
+    const b = document.createElement('button');
+    b.className = 'soc-img' + (u === SOC_IMG ? ' on' : '');
+    b.type = 'button';
+    b.title = '用这张图';
+    const im = document.createElement('img');
+    im.src = u;                 // 属性赋值，不是 innerHTML
+    im.alt = '';
+    im.loading = 'lazy';
+    b.appendChild(im);
+    b.addEventListener('click', () => {
+      SOC_IMG = u;
+      socRenderImages();
+      socRenderCards();
+    });
+    box.appendChild(b);
+  });
+}
+
+async function socLoadLog(listingId){
+  SOC_LOG = {};
+  try{
+    const d = await apiCall('/api/social/log?listing_id=' + encodeURIComponent(listingId),
+      { timeout: 20000, label: '读取发布记录' });
+    (d.items || []).forEach(it => { if (it && it.done) SOC_LOG[it.platform] = it; });
+  } catch(e){ /* 记录读不到不影响主流程 */ }
+  const el = document.getElementById('socPosted');
+  const keys = Object.keys(SOC_LOG);
+  el.textContent = keys.length
+    ? keys.map(k => (SOCIAL_PLATFORM_BY_KEY[k] ? SOCIAL_PLATFORM_BY_KEY[k].name : k)).join('、') + '（本机记录）'
+    : '还没发过（本机记录，换机器不会同步）';
+}
+
+function socRenderCards(){
+  SOC_CONTENT = socBuildContent(SOC_CUR, {
+    variant: SOC_VARIANT,
+    image: SOC_IMG,
+    utm: !document.getElementById('socUtm') || document.getElementById('socUtm').checked,
+    extraHashtags: ['#Etsy', '#Handmade'],
+  });
+  const box = document.getElementById('socCards');
+  box.textContent = '';
+  if (!SOC_CONTENT.ok){
+    const d = document.createElement('div');
+    d.className = 'msg err show';
+    d.textContent = SOC_CONTENT.reason;
+    box.appendChild(d);
+    return;
+  }
+
+  SOCIAL_PLATFORMS.forEach(plat => {
+    const it = SOC_CONTENT.items[plat.key];
+    if (!it) return;
+
+    const card = document.createElement('div');
+    card.className = 'soc-card';
+
+    const h = document.createElement('h4');
+    h.appendChild(document.createTextNode(plat.name));
+
+    const cnt = document.createElement('span');
+    cnt.className = 'cnt';
+    h.appendChild(cnt);
+
+    const sent = document.createElement('label');
+    sent.className = 'soc-sent';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!SOC_LOG[plat.key];
+    cb.addEventListener('change', () => socMarkSent(plat.key, cb.checked));
+    sent.appendChild(cb);
+    sent.appendChild(document.createTextNode('已发布'));
+    h.appendChild(sent);
+
+    card.appendChild(h);
+
+    const hint = document.createElement('div');
+    hint.className = 'hintline';
+    hint.textContent = plat.hint;
+    card.appendChild(hint);
+
+    const ta = document.createElement('textarea');
+    ta.value = it.copy || it.text || '';       // ← textContent 等价：直接赋 value，不拼 HTML
+    ta.addEventListener('input', () => socUpdateCount(plat.key, ta.value, cnt));
+    card.appendChild(ta);
+    socUpdateCount(plat.key, ta.value, cnt);
+
+    const row = document.createElement('div');
+    row.className = 'btnrow';
+
+    const deep = socDeepLink(plat.key, { title: it.title, blurb: socNoLink(ta.value, SOC_CONTENT.link) }, {
+      link: socLinkFor(plat.key),
+      image: SOC_CONTENT.image,
+    });
+
+    if (deep){
+      const b1 = document.createElement('button');
+      b1.className = 'btn primary sm';
+      b1.textContent = '复制并打开发布页';
+      b1.addEventListener('click', async () => {
+        const okCopy = await socCopy(ta.value);
+        window.open(deep, '_blank', 'noopener,noreferrer');   // noopener：防目标页反向操作本页
+        if (!okCopy) socMsg('warn', '内容没能自动复制到剪贴板，发布页已打开 —— 手动全选复制即可。');
+      });
+      row.appendChild(b1);
+    } else {
+      const b1 = document.createElement('button');
+      b1.className = 'btn primary sm';
+      b1.textContent = '复制文案';
+      b1.addEventListener('click', async () => {
+        const okCopy = await socCopy(ta.value);
+        socMsg(okCopy ? 'ok' : 'warn', okCopy
+          ? plat.name + ' 文案已复制。' + plat.hint
+          : '复制失败，请手动全选复制。');
+      });
+      row.appendChild(b1);
+    }
+
+    const b2 = document.createElement('button');
+    b2.className = 'btn ghost sm';
+    b2.textContent = '只复制文案';
+    b2.addEventListener('click', async () => {
+      const okCopy = await socCopy(ta.value);
+      if (!okCopy) socMsg('warn', '复制失败，请手动全选复制。');
+    });
+    row.appendChild(b2);
+
+    if (plat.key === 'instagram' && it.hashtags){
+      const bh = document.createElement('button');
+      bh.className = 'btn ghost sm';
+      bh.textContent = '复制 hashtag（放第一条评论）';
+      bh.addEventListener('click', async () => {
+        const okCopy = await socCopy(it.hashtags);
+        socMsg(okCopy ? 'ok' : 'warn', okCopy ? 'hashtag 已复制。' : '复制失败，请手动复制。');
+      });
+      row.appendChild(bh);
+    }
+
+    if (plat.imageNote && (plat.key === 'x' || plat.key === 'instagram')){
+      const bi = document.createElement('button');
+      bi.className = 'btn ghost sm';
+      bi.textContent = '打开图片（另存后手动添加）';
+      bi.disabled = !SOC_CONTENT.image;
+      bi.addEventListener('click', () => {
+        if (SOC_CONTENT.image) window.open(SOC_CONTENT.image, '_blank', 'noopener,noreferrer');
+      });
+      row.appendChild(bi);
+    }
+
+    card.appendChild(row);
+
+    const fb = document.createElement('div');
+    fb.className = 'hintline';
+    fb.textContent = SOCIAL_FALLBACK_NOTE + (plat.imageNote ? '　图片：' + plat.imageNote : '');
+    card.appendChild(fb);
+
+    box.appendChild(card);
+  });
+}
+
+/* 深链里带哪个链接：三个平台用独立参数或 url 参数承载链接，微博正文里也带一份 */
+function socLinkFor(){
+  return SOC_CONTENT.link;
+}
+/* 从用户编辑后的正文里摘掉链接，避免「链接出现两次」 */
+function socNoLink(text, link){
+  return String(text || '').split(link).join('').replace(/\s+$/, '');
+}
+
+function socUpdateCount(key, text, el){
+  const n = socCount(key, text);
+  const plat = SOCIAL_PLATFORM_BY_KEY[key] || {};
+  el.textContent = n + ' / ' + plat.limit + (plat.weighted ? '（X 加权计数：链接算 23、中文与表情各算 2）' : '');
+  el.classList.toggle('over', n > plat.limit);
+}
+
+async function socMarkSent(platform, done){
+  if (!SOC_CUR) return;
+  try{
+    await apiCall('/api/social/log', {
+      method: 'POST', timeout: 20000, label: '记录发布状态',
+      body: { listing_id: SOC_CUR.listing_id, platform, done, url: SOC_CUR.url || '' },
+    });
+    if (done) SOC_LOG[platform] = { platform, done: true }; else delete SOC_LOG[platform];
+    await socLoadLog(SOC_CUR.listing_id);
+  } catch(e){
+    socMsg('warn', '发布状态没记上（不影响你已经发出去的内容）：' + esc(e.message));
+  }
+}
+
+function socEnter(){
+  if (SOC_LOADED) return;
+  SOC_LOADED = true;
+  if (!SOC_LISTINGS.length) socLoadListings();
+}
+
+/* 进入步骤 8 时按需加载；支持 ?step=8&listing_id=xxx 直接落到某个商品 */
+
+document.getElementById('btnSocLoad').addEventListener('click', socLoadListings);
+document.getElementById('btnSocReload').addEventListener('click', () => {
+  if (SOC_CUR) socLoadListing(SOC_CUR.listing_id);
+});
+document.getElementById('socPick').addEventListener('change', e => {
+  const id = e.target.value;
+  if (id) socLoadListing(id);
+});
+document.querySelectorAll('[data-soc-variant]').forEach(b => b.addEventListener('click', () => {
+  SOC_VARIANT = Number(b.dataset.socVariant) || 0;
+  if (SOC_CUR) socRenderCards();
+}));
+document.getElementById('socUtm').addEventListener('change', () => {
+  if (SOC_CUR) socRenderCards();
+});
+
+/* 供步骤 7 发布成功后跳转使用 */
+async function socOpenFor(listingId){
+  socEnter();
+  if (!SOC_LISTINGS.length) await socLoadListings();
+  await socLoadListing(listingId);
+}
+
+/* ---------------- 发布记录（全量，供「发布记录」面板） ---------------- */
+async function socLoadAllLog(){
+  const box = document.getElementById('socLogList');
+  const cnt = document.getElementById('logCount');
+  box.textContent = '读取中…';
+  try{
+    const d = await apiCall('/api/social/log', { timeout: 20000, label: '读取发布记录' });
+    const items = Array.isArray(d.items) ? d.items : [];
+    cnt.textContent = '共 ' + (d.total != null ? d.total : items.length) + ' 条';
+    if (!items.length){
+      box.textContent = '';
+      const empty = document.createElement('div');
+      empty.className = 'ph-sub';
+      empty.style.margin = '0';
+      empty.textContent = '还没有记录。勾选上面任一平台的「已发布」后就会出现在这里。';
+      box.appendChild(empty);
+      return;
+    }
+    box.textContent = '';
+    items.forEach(it => {
+      const row = document.createElement('div');
+      row.className = 'logrow';
+
+      const p = document.createElement('span');
+      p.className = 'p';
+      p.textContent = (SOCIAL_PLATFORM_BY_KEY[it.platform] || {}).name || it.platform;
+
+      const id = document.createElement('span');
+      id.className = 'id';
+      id.textContent = '#' + it.listing_id;
+
+      const a = document.createElement('a');
+      a.href = it.url || ('https://www.etsy.com/listing/' + it.listing_id);
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = it.url || ('listing ' + it.listing_id);
+
+      const t = document.createElement('span');
+      t.className = 't';
+      t.textContent = it.at ? new Date(it.at).toLocaleString('zh-CN', { hour12: false }) : '';
+
+      const undo = document.createElement('button');
+      undo.className = 'btn sm ghost';
+      undo.textContent = '撤销';
+      undo.addEventListener('click', async () => {
+        if (!confirm('删掉这条记录？（只删记录，不影响已经发出去的内容）')) return;
+        try{
+          await apiCall('/api/social/log', {
+            method: 'POST', timeout: 20000, label: '撤销记录',
+            body: { listing_id: it.listing_id, platform: it.platform, done: false },
+          });
+          if (SOC_CUR && Number(SOC_CUR.listing_id) === Number(it.listing_id)) await socLoadLog(SOC_CUR.listing_id);
+          await socLoadAllLog();
+        } catch(e){ alert('撤销失败：' + e.message); }
+      });
+
+      row.appendChild(p);
+      row.appendChild(id);
+      row.appendChild(a);
+      row.appendChild(t);
+      row.appendChild(undo);
+      box.appendChild(row);
+    });
+  } catch(e){
+    box.textContent = '';
+    const d = document.createElement('div');
+    d.className = 'msg err show';
+    d.textContent = /not_found/.test(String(e.message))
+      ? '读取失败：后端跑的还是旧代码（这个接口是后加的）。重启后端后再试。'
+      : '读取失败：' + e.message;
+    box.appendChild(d);
+  }
+}
+
+/* ---------------- 启动：先看 Etsy 连没连，再按 ?listing_id= 落到具体商品 ---------------- */
+async function boot(){
+  const gate = document.getElementById('gate');
+  const main = document.getElementById('main');
+  let st = null;
+  try{
+    st = await apiCall('/api/etsy/status', { timeout: 20000, label: '读取连接状态' });
+  } catch(e){
+    gate.classList.remove('hidden');
+    gate.innerHTML = '<h3>连不上后端</h3><div class="ph-sub">' + esc(e.message)
+      + '</div><div class="ph-sub">确认后端进程在跑，再刷新本页。</div>';
+    return;
+  }
+  if (!st.configured || !st.authorized){
+    gate.classList.remove('hidden');
+    gate.innerHTML = '<h3>还没连接 Etsy 店铺</h3><div class="ph-sub">'
+      + '这个数字员工要读你店铺的「在售商品」来生成内容，所以先完成 Etsy 授权。'
+      + '</div><div class="btnrow"><a class="btn primary" href="./etsy-publisher.html">去上架页连接 Etsy</a></div>';
+    return;
+  }
+  main.classList.remove('hidden');
+
+  const q = new URLSearchParams(location.search);
+  const lid = Number(q.get('listing_id') || 0);
+  await socLoadListings();
+  if (lid) await socOpenFor(lid);
+  await socLoadAllLog();
+}
+
+document.getElementById('btnLogRefresh').addEventListener('click', socLoadAllLog);
+boot().catch(e => {
+  const gate = document.getElementById('gate');
+  gate.classList.remove('hidden');
+  gate.innerHTML = '<h3>页面初始化失败</h3><div class="ph-sub">' + esc(e.message) + '</div>';
+});
+</script>
+</body>
+</html>
