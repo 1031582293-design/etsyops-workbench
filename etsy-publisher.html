@@ -269,10 +269,10 @@
       </section>
 
       <section class="panel step hidden" data-step="2">
-        <h3>关键词：候选池 + 人工验证</h3>
-        <div class="ph-sub">AI 只能出「候选词」，它拿不到 Etsy 搜索量。验证要你点开搜索页看一眼再改状态；标为「已搜索验证 / 采纳」的词，生成文案时会优先使用。</div>
+        <h3>关键词：候选池 + EverBee 核实</h3>
+        <div class="ph-sub">AI 按 5W 出候选词池，点「用 EverBee 核实」批量拿近 30 天真实搜索量 / 竞争度，命中的词自动标「已搜索验证」；未收录 ≠ 搜索量为 0。已验证 / 采纳的词，生成文案时优先使用。</div>
         <div class="subhead" style="margin-top:20px">关键词候选池（SOP 03）
-          <span class="hint">AI 只出候选词，验证靠你 —— 到 Etsy 搜索框 / Marketplace Insights 查过再改状态；「已验证 / 采纳」的词生成文案时优先使用</span>
+          <span class="hint">AI 按 5W 出候选词，EverBee 一键核实真实搜索量；「已验证 / 采纳」的词生成文案时优先使用</span>
         </div>
         <div class="row2">
           <select id="kwSku"><option value="">（先在第 1 步解析表格）</option></select>
@@ -2562,7 +2562,7 @@ async function startKwBatch(){
       KW_POOL[sku] = { words: r.words, updatedAt: Date.now() };
       await saveKeywords(sku);
       done++;
-      log('关键词候选池（' + sku + '）：' + r.words.length + ' 个候选词，待人工验证', 's');
+      log('关键词候选池（' + sku + '）：' + r.words.length + ' 个候选词', 's');
     } catch(e){
       fail++;
       log('关键词候选池失败（' + sku + '）：' + (e.message || e), 'e');
@@ -2574,7 +2574,8 @@ async function startKwBatch(){
   btn.disabled = false;
   kwMsg(fail ? 'warn' : 'ok',
     '候选词池批量完成：成功 <b>' + done + '</b> 条' + (fail ? '，失败 <b>' + fail + '</b> 条' : '')
-    + '。验证靠你 —— 到 Etsy 搜索框查过再把状态改成「已搜索验证 / 采纳」，生成文案时这些词会被优先使用。');
+    + '。<b>下一步：</b>① 点上方「用 EverBee 核实（全部条目）」拿真实搜索量（命中的词自动标「已搜索验证」）；'
+    + '② 然后点「下一步：生成 AI 文案 →」，已验证的词会被优先使用。');
 }
 document.getElementById('btnKwGen').addEventListener('click', startKwBatch);
 

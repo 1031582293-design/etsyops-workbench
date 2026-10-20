@@ -1425,8 +1425,8 @@ async function handleApi(req, res) {
   }
 
   /* ---------- 关键词候选池（SOP 03） ----------
-   * SOP 流程：AI 出 5W 候选词池（全部标「候选，未验证」）→ 人到 Etsy 搜索 /
-   * Marketplace Insights 验证 → 在工作台标状态 → 验证过的词在生成文案时优先使用。
+   * SOP 流程（最新版）：AI 出 5W 候选词池（全部标「候选，未验证」）→ EverBee 一键
+   * 核实真实搜索量（命中的自动标「已搜索验证」）→ 验证过的词在生成文案时优先使用。
    * 落盘 data/etsy-keywords.json，按 SKU 分桶。 */
   if (p === '/api/etsy/keywords' && req.method === 'GET') {
     try {
@@ -1457,7 +1457,7 @@ async function handleApi(req, res) {
 
   /* AI 生成 5W 关键词候选池（SOP 提示词 B 的自动化版）。
    * ★ 全部输出都标「候选，未验证」—— AI 不能检索 Etsy 实时搜索量，
-   *   编造搜索量是 SOP 明令禁止的。验证靠人去 Etsy 搜索框 / Marketplace Insights。 */
+   *   编造搜索量是 SOP 明令禁止的。验证由 EverBee 一键核实完成（真实 vol/competition）。 */
   if (p === '/api/etsy/ai/keywords' && req.method === 'POST') {
     if (!etsyAiConfigured()) {
       return json(res, 400, { error: 'etsy_ai_not_configured',
@@ -1496,7 +1496,7 @@ async function handleApi(req, res) {
       if (!clean.length) throw new Error('AI 返回的候选词全部为空，可重试一次。');
       etsyLog(`关键词候选池生成成功：${clean.length} 个（全部标记为候选未验证）`);
       return json(res, 200, { ok: true, words: clean, model: ETSY_AI_MODEL,
-        note: `生成 ${clean.length} 个候选词，全部是「候选，未验证」。请到 Etsy 搜索框验证后再把状态改为已验证/采纳。` });
+        note: `生成 ${clean.length} 个候选词，全部是「候选，未验证」。点「用 EverBee 核实」批量拿真实搜索量，命中的自动标为已验证。` });
     } catch (e) {
       return json(res, 400, { error: 'keywords_failed', note: e.message });
     }
