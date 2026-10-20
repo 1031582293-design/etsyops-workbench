@@ -276,7 +276,7 @@
         </div>
         <div class="row2">
           <select id="kwSku"><option value="">（先在第 1 步解析表格）</option></select>
-          <button class="btn" id="btnKwGen">AI 生成候选词池</button>
+          <button class="btn" id="btnKwGen">AI 生成候选词池（全部条目）</button>
         </div>
         <div class="row2" style="margin-top:8px;align-items:center">
           <button class="btn ghost" id="btnKwVerify" disabled>用 EverBee 核实</button>
@@ -844,6 +844,12 @@ async function loadQuota(){
 /* ---------- 步骤切换 ---------- */
 function goto(n){
   CURRENT_STEP = n;
+  // ★ 下一步的第一个环节是 AI/Agent 动作的，进页即自动开跑，不再让人多点一次。
+  //    第 2 步：批量候选词（已有词池的条目自动跳过，重进不烧 token）
+  //    第 3 步：批量文案（仅首次进入自动跑；重跑手动点「批量生成」）
+  //    第 4 步：autoPickTaxonomy（类目关键词自动搜 + 选最末级叶子）
+  if (n === 2) startKwBatch();
+  if (n === 3) startAiBatch(true);
   if (n === 4) autoPickTaxonomy();   // 进类目页：条目有「类目关键词」就自动搜 + 选最末级叶子
   if (n === 5) renderChecklist();   // 进入商品资料页时重算核对清单
   document.querySelectorAll('.step').forEach(s => s.classList.toggle('hidden', Number(s.dataset.step) !== n));
@@ -2237,9 +2243,7 @@ function renderImportList() {
 document.getElementById('btnImportParse').addEventListener('click', doParseImport);
 
 document.getElementById('btnToAi').addEventListener('click', () => {
-  goto(2);
-  kwMsg('info', '已解析 ' + IMPORT_BATCH.length
-    + ' 条。先在这里出关键词候选 + EverBee 核实，再去第 3 步生成文案。');
+  goto(2);   // 进页自动开跑批量候选词（startKwBatch 自己会报进度，这里不再盖消息）
 });
 
 /* ================================================================
@@ -2507,26 +2511,58 @@ document.getElementById('kwSku').addEventListener('change', () => { renderKwTabl
 document.getElementById('btnKwVerify').addEventListener('click', everbeeVerify);
 /* 从授权页切回来时刷新一次状态，省得用户手动刷新整页 */
 window.addEventListener('focus', () => { if (!EB_STATUS || !EB_STATUS.authorized) loadEverbeeStatus(); });
-document.getElementById('btnKwGen').addEventListener('click', async () => {
-  const sku = document.getElementById('kwSku').value;
-  const it = IMPORT_BATCH.find(x => (x.sku || ('第 ' + x._row + ' 行')) === sku);
+/* ★ 批量生成候选词池（2026-10-21 从「下拉选一条生成」改成全部条目串行）。
+ * 已有词池的条目自动跳过 —— 所以每次进第 2 步自动触发时不会重复烧 token。 */
+let KW_BATCH_BUSY = false;
+async function startKwBatch(){
+  if (KW_BATCH_BUSY) return;
+  if (!IMPORT_BATCH.length){ kwMsg('warn', '还没有条目。先回第 1 步粘贴表格并点「解析表格」。'); return; }
+  const skuOf = it => it.sku || ('第 ' + it._row + ' 行');
+  const todo = IMPORT_BATCH.filter(it => {
+    const p = KW_POOL[skuOf(it)];
+    return !(p && Array.isArray(p.words) && p.words.length);
+  });
+  if (!todo.length){ kwMsg('info', '全部条目都已有候选词池，不重复生成。想重来就重新解析表格。'); return; }
+  KW_BATCH_BUSY = true;
   const btn = document.getElementById('btnKwGen');
-  if (!it){ kwMsg('err', '先回第 1 步解析表格，选出要生成关键词的条目。'); return; }
   btn.disabled = true;
-  kwMsg('info', 'AI 正在按产品事实生成候选词池（约 20~40 秒）…');
+  // 先 ping 一次 AI 出口，连不上当场报，别让用户对着队列干等
+  kwMsg('info', '先检查 AI 连通…');
   try {
-    const r = await apiCall('/api/etsy/ai/keywords', { method: 'POST', timeout: 150000,
-      body: factsOf(it), label: '生成关键词候选池' });
-    KW_POOL[sku] = { words: r.words, updatedAt: Date.now() };
-    await saveKeywords(sku);
-    renderKwTable();
-    kwMsg('ok', esc(r.note));
-    log('关键词候选池（' + sku + '）：' + r.words.length + ' 个候选词，待人工验证', 's');
+    const chk = await apiCall('/api/etsy/ai/check', { timeout: 30000, label: 'AI 连通检查' });
+    if (!chk.ok){
+      kwMsg('err', '<b>AI 连不上，没有开始生成。</b>' + esc(chk.note));
+      KW_BATCH_BUSY = false; btn.disabled = false; return;
+    }
   } catch(e){
-    kwMsg('err', '生成失败：' + esc(e.message || e)
-      + '<br><span style="color:var(--text-faint)">如果提示 AI 未配置/连不上，看「AI 连通检查」的说明 —— 与文案生成是同一个出口。</span>');
-  } finally { btn.disabled = false; }
-});
+    kwMsg('err', 'AI 连通检查失败：' + esc(e.message || e));
+    KW_BATCH_BUSY = false; btn.disabled = false; return;
+  }
+  let done = 0, fail = 0;
+  for (const it of todo){
+    const sku = skuOf(it);
+    kwMsg('info', '候选词池批量生成中：<b>' + (done + fail + 1) + ' / ' + todo.length + '</b> 条（' + esc(sku) + '）…');
+    try {
+      const r = await apiCall('/api/etsy/ai/keywords', { method: 'POST', timeout: 150000,
+        body: factsOf(it), label: '生成关键词候选池' });
+      KW_POOL[sku] = { words: r.words, updatedAt: Date.now() };
+      await saveKeywords(sku);
+      done++;
+      log('关键词候选池（' + sku + '）：' + r.words.length + ' 个候选词，待人工验证', 's');
+    } catch(e){
+      fail++;
+      log('关键词候选池失败（' + sku + '）：' + (e.message || e), 'e');
+      kwMsg('err', esc(sku) + ' 生成失败：' + esc(e.message || e) + '（自动继续下一条）');
+    }
+    renderKwTable();
+  }
+  KW_BATCH_BUSY = false;
+  btn.disabled = false;
+  kwMsg(fail ? 'warn' : 'ok',
+    '候选词池批量完成：成功 <b>' + done + '</b> 条' + (fail ? '，失败 <b>' + fail + '</b> 条' : '')
+    + '。验证靠你 —— 到 Etsy 搜索框查过再把状态改成「已搜索验证 / 采纳」，生成文案时这些词会被优先使用。');
+}
+document.getElementById('btnKwGen').addEventListener('click', startKwBatch);
 
 /** 事实不足的条目直接拒绝 —— 凭空写规格是 Etsy 的合规风险 */
 function aiRunnable(it) {
@@ -2543,8 +2579,16 @@ function setAiProgress(done, total, note) {
   document.getElementById('aiProgTxt').textContent = done + ' / ' + total + (note ? '　' + note : '');
 }
 
-document.getElementById('btnAiBatch').addEventListener('click', async () => {
+let AI_BATCH_BUSY = false;
+async function startAiBatch(auto){
+  if (AI_BATCH_BUSY) return;
   if (!IMPORT_BATCH.length) { showAiMsg('warn', '还没有解析出条目。请回第 1 步粘贴表格并点「解析表格」。'); return; }
+  // 自动触发（进第 3 步）只在还没有任何本批结果时跑一次；
+  // 已有结果就不动 —— 重跑请手动点「批量生成（全部条目）」。
+  if (auto && AI_RESULTS.length){
+    showAiMsg('info', '本批文案已生成过（结果见下方列表）。重跑请点「批量生成（全部条目）」。');
+    return;
+  }
 
   const btn = document.getElementById('btnAiBatch');
   const stop = document.getElementById('btnAiStop');
@@ -2558,6 +2602,7 @@ document.getElementById('btnAiBatch').addEventListener('click', async () => {
     return;
   }
 
+  AI_BATCH_BUSY = true;
   btn.disabled = true; stop.disabled = false;
   AI_RESULTS.length = 0;
   IMPORT_BATCH.forEach((it, i) => AI_RESULTS.push({
@@ -2571,7 +2616,7 @@ document.getElementById('btnAiBatch').addEventListener('click', async () => {
   try {
     const chk = await apiCall('/api/etsy/ai/check', { timeout: 30000, label: 'AI 连通检查' });
     if (!chk.ok) {
-      btn.disabled = false; stop.disabled = true;
+      btn.disabled = false; stop.disabled = true; AI_BATCH_BUSY = false;
       setAiProgress(0, 0);
       showAiMsg('err', '<b>AI 连不上，没有开始生成。</b>' + esc(chk.note));
       log('AI 连通检查失败：' + chk.note, 'e');
@@ -2579,7 +2624,7 @@ document.getElementById('btnAiBatch').addEventListener('click', async () => {
     }
     log('AI 连通正常（' + chk.latencyMs + 'ms，模型 ' + chk.model + '）', 's');
   } catch (e) {
-    btn.disabled = false; stop.disabled = true;
+    btn.disabled = false; stop.disabled = true; AI_BATCH_BUSY = false;
     showAiMsg('err', 'AI 连通检查失败：' + esc(e.message || e));
     return;
   }
@@ -2605,11 +2650,12 @@ document.getElementById('btnAiBatch').addEventListener('click', async () => {
     });
     pollAiBatch(r.jobId, todo.length);
   } catch (e) {
-    btn.disabled = false; stop.disabled = true;
+    btn.disabled = false; stop.disabled = true; AI_BATCH_BUSY = false;
     setAiProgress(0, 0);
     showAiMsg('err', '提交失败：' + esc(e.message || e));
   }
-});
+}
+document.getElementById('btnAiBatch').addEventListener('click', () => startAiBatch(false));
 
 /* 轮询进度。★ 不用 setInterval —— 轮询本身不占连接，
    而且后端是串行的，并发查只会互相干扰。 */
@@ -2626,7 +2672,7 @@ function pollAiBatch(jobId, total) {
   const tick = async () => {
     if (stopped) {
       try { await apiCall('/api/etsy/ai/batch/stop', { method: 'POST', body: { jobId }, timeout: 15000, label: '中断队列' }); } catch (e) { /* 中断失败不打扰用户 */ }
-      btn.disabled = false; stop.disabled = true;
+      btn.disabled = false; stop.disabled = true; AI_BATCH_BUSY = false;
       showAiMsg('warn', '已请求中断队列。已生成的条目保留，未生成的保持「待生成」。');
       return;
     }
@@ -2658,7 +2704,7 @@ function pollAiBatch(jobId, total) {
       }
       renderAiList();
       if (r.status === 'done' || r.status === 'stopped' || done >= total) {
-        btn.disabled = false; stop.disabled = true;
+        btn.disabled = false; stop.disabled = true; AI_BATCH_BUSY = false;
         const fail = AI_RESULTS.filter(x => x.status === 'error').length;
         const okN = AI_RESULTS.filter(x => x.status === 'done').length;
         showAiMsg(fail ? 'warn' : 'ok',
@@ -2675,7 +2721,7 @@ function pollAiBatch(jobId, total) {
       // 单次失败不终止 —— 网络抖动很常见，连续 5 次才放弃
       retries++;
       if (retries > 5) {
-        btn.disabled = false; stop.disabled = true;
+        btn.disabled = false; stop.disabled = true; AI_BATCH_BUSY = false;
         showAiMsg('err', '查询进度连续失败 5 次，已停止轮询（队列可能仍在后台跑）。'
           + '刷新页面后重新点「批量生成」会从断点继续。'
           + '<br>最后一次错误：' + esc(e.message || e));
