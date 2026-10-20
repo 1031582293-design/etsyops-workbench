@@ -169,7 +169,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">BUILD_VERSION</span>
+  <span class="vtag" id="verTag">186cbb8</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -260,17 +260,6 @@
         <div class="thumbs" id="thumbs"></div>
         <div id="imgPurposes"></div>
         <div id="msgImg" class="msg"></div>
-        <div class="btnrow" style="margin-top:8px">
-          <button class="btn sm" id="btnImgPlan">AI 生成图片处理计划（SOP 09 · 文字建议，不生图）</button>
-        </div>
-        <div id="imgPlanBox"></div>
-
-        <div class="subhead" style="margin-top:20px">4. 变体表<span class="hint">有变体的商品才填；Agent 自动把维度名/值名映射到 Etsy 属性</span></div>
-        <textarea id="varTableText" rows="4" placeholder="第一行是维度名 + SKU/价格/库存，之后每行一个组合&#10;Primary color&#9;Size&#9;SKU&#9;价格&#9;库存&#10;Black & Blue&#9;S&#9;BB-S&#9;32&#9;2&#10;Red & Green&#9;M&#9;RG-M&#9;34&#9;1"></textarea>
-        <div class="btnrow">
-          <button class="btn sm" id="btnVarTableParse">解析变体表（到当前条目）</button>
-        </div>
-        <div id="varTableMsg" class="msg"></div>
 
         <div id="importList"></div>
 
@@ -1055,7 +1044,7 @@ function autoMapVariations(properties){
     renderVarRows();
     log('变体自动映射：' + VARDIMS.map(dd => dd.name + '(' + dd.values.length + ')').join('、') + ' → ' + VARROWS.length + ' 组合', 's');
   }
-  const mm = document.getElementById('varTableMsg');
+  const mm = document.getElementById('msgVar');
   if (problems.length){
     showMsg(mm, 'warn', '<b>变体自动映射有 ' + problems.length + ' 处没对上：</b>' + problems.map(esc).join('；')
       + '。请核对变体表的维度名/值名是否和 Etsy 属性名一致（建议用英文），或在下面属性列表手动勾选。');
@@ -1386,16 +1375,18 @@ function addFiles(files){
     return;
   }
   Promise.all(arr.map(f => new Promise(async res => {
+    const purpose = autoGuessPurpose(f.name);
     // ★ 先去掉 EXIF（含 GPS），失败则回退到原始数据
     const stripped = await stripExif(f);
-    if (stripped){ res({ filename: f.name, data: stripped, stripped: true }); return; }
+    if (stripped){ res({ filename: f.name, data: stripped, stripped: true, purpose, autoPurpose: !!purpose }); return; }
     const r = new FileReader();
-    r.onload = () => res({ filename: f.name, data: String(r.result).split(',')[1], stripped: false });
+    r.onload = () => res({ filename: f.name, data: String(r.result).split(',')[1], stripped: false, purpose, autoPurpose: !!purpose });
     r.onerror = () => res(null);
     r.readAsDataURL(f);
   }))).then(list => {
     list.filter(Boolean).forEach(o => IMAGES.push(o));
     renderThumbs();
+    refreshImportImageMatch();   // 后选图片也要让批量条目立刻对上号
     const n = list.filter(Boolean).length;
     const s = list.filter(o => o && o.stripped).length;
     log('已加载 ' + n + ' 张图片，共 ' + IMAGES.length + ' 张（' + s + ' 张已去除 EXIF/GPS）');
@@ -1421,18 +1412,30 @@ function rememberPickedFiles(fileList) {
 }
 
 /* 按表格给出的文件名，从已选文件里找出对应的那些。
- * 返回 File[]，顺序与表格里写的顺序一致 —— 主图顺序直接影响 Etsy 的展示。 */
+ * 返回 File[]，顺序与表格里写的顺序一致 —— 主图顺序直接影响 Etsy 的展示。
+ * 匹配两级：先精确（忽略大小写），再退扩展名（表格写 .png 实际传 .jpg 很常见）。 */
 function matchPickedImages(names) {
   if (!PICKED_FILES.length || !names || !names.length) return [];
   const pool = PICKED_FILES.slice();
   const out = [];
+  const stripExt = s => String(s).toLowerCase().replace(/\.[a-z0-9]+$/, '');
   for (const raw of names) {
     // 运营可能把相对路径一起写进来（如 ./images/6-狼头套-1.jpg），只取最后一段
     const want = String(raw).trim().split(/[\\/]/).pop().toLowerCase();
-    const idx = pool.findIndex(f => f.name.toLowerCase() === want);
+    let idx = pool.findIndex(f => f.name.toLowerCase() === want);
+    if (idx < 0) idx = pool.findIndex(f => stripExt(f.name) === stripExt(want));
     if (idx >= 0) out.push(pool.splice(idx, 1)[0]);
   }
   return out;
+}
+
+/* 选图/删图后刷新批量条目的图片匹配。
+ * ★ 之前只在「解析表格」那刻匹配一次：先解析后选图（绝大多数人的操作顺序）
+ *   会永远显示「图 0/N 缺」—— 文件名一模一样也缺，就是这里没刷新。 */
+function refreshImportImageMatch(){
+  if (!IMPORT_BATCH.length) return;
+  matchAllRowsImages();
+  renderImportList();
 }
 
 /* 把匹配到的 File 转成 IMAGES 的结构并渲染。
@@ -1459,13 +1462,33 @@ function readAsImage(file) {
     fr.readAsDataURL(file);
   });
 }
-/* SOP 09：8 类图的用途。标记存内存（IMAGES[].purpose），生成「图片处理计划」时用。 */
+/* SOP 09：8 类图的用途。标记存内存（IMAGES[].purpose），上传时按文件名自动标记，可人工改。 */
 const IMG_PURPOSES = [
   ['main', '01 首图'], ['angle', '02 侧/背面'], ['craft', '03 工艺近照'],
   ['size', '04 尺寸图'], ['variant', '05 选款图'], ['included', '06 包含物'],
   ['scene', '07 使用/场景'], ['package', '08 包装/定制'],
 ];
 function purposeLabel(k){ const p = IMG_PURPOSES.find(x => x[0] === k); return p ? p[1] : '未标记'; }
+
+/* 按文件名推断图片用途（SOP 09 的 8 类判断标准的自动化版）。
+ * 只做「识别」，识别不出来的留空给人工 —— 绝不瞎猜。
+ * 命中规则：工艺近照→03，尺寸图→04，选款→05，包含物→06，使用/场景→07，
+ *           包装→08，侧/背/顶→02，主/正面→01。 */
+const PURPOSE_HINTS = [
+  ['craft',    /craft|texture|detail|closeup|macro|工艺|纹理|细节/i],
+  ['size',     /size|dimension|measure|尺寸/i],
+  ['variant',  /variant|colou?r|style|option|选款|配色/i],
+  ['included', /included|contents|配件|包含/i],
+  ['scene',    /\buse\b|scene|scale|lifestyle|使用|场景|尺度/i],
+  ['package',  /packag|giftbox|包装|定制/i],
+  ['angle',    /side|back|angle|profile|top|bottom|侧|背|反/i],
+  ['main',     /main|front|hero|主图|正面/i],
+];
+function autoGuessPurpose(name){
+  const s = String(name || '');
+  for (const [k, re] of PURPOSE_HINTS){ if (re.test(s)) return k; }
+  return '';
+}
 
 function renderThumbs(){
   const box = document.getElementById('thumbs');
@@ -1488,15 +1511,17 @@ function renderThumbs(){
       log('主图已换为原第 ' + (i + 1) + ' 张');
     });
   });
-  // 用途标记行（SOP 09）：每张图一行，方便 AI 出处理计划时对号
+  // 用途标记行（SOP 09）：按文件名自动标记可识别的，其余留人工
   const mark = document.getElementById('imgPurposes');
   if (mark) {
     mark.innerHTML = IMAGES.length
-      ? '<div style="font-size:12px;color:var(--text-faint);margin:10px 0 4px">图片用途标记（SOP 09 的 8 类图，标记后点「AI 生成图片处理计划」）：</div>'
+      ? '<div style="font-size:12px;color:var(--text-faint);margin:10px 0 4px">图片用途标记（SOP 09 的 8 类图；已按文件名自动标记可识别的，标「自动」的可改，认不出的请手工选）：</div>'
         + IMAGES.map((im, i) =>
           '<div style="display:flex;gap:8px;align-items:center;margin:4px 0;font-size:12.5px">'
-          + '<span style="width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+          + '<span style="width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0">'
           + esc(im.filename || ('图 ' + (i + 1))) + '</span>'
+          + (im.purpose && im.autoPurpose
+              ? '<span style="font-size:11px;color:var(--good);flex-shrink:0">自动</span>' : '<span style="font-size:11px;flex-shrink:0"></span>')
           + '<select data-img-p="' + i + '" style="flex:1">'
           // 第 2 张起默认不标用途 —— 之前默认落在「01 首图」上，
           // 两张图都成了首图（Etsy 会视作重复，也浪费一个展示位）
@@ -1508,57 +1533,17 @@ function renderThumbs(){
       : '';
     mark.querySelectorAll('[data-img-p]').forEach(sel => sel.addEventListener('change', () => {
       IMAGES[Number(sel.dataset.imgP)].purpose = sel.value;
+      IMAGES[Number(sel.dataset.imgP)].autoPurpose = false;   // 人改过就不算自动的了
     }));
   }
-  if (IMAGES.length) showMsg(document.getElementById('msgImg'), 'info',
-    IMAGES.length + ' 张图片，第 1 张为主图。Etsy 要求实物商品展示真实成品照片，渲染图不能替代实拍。');
-}
-
-document.getElementById('btnImgPlan').addEventListener('click', async () => {
-  const btn = document.getElementById('btnImgPlan');
-  const box = document.getElementById('imgPlanBox');
-  if (!IMAGES.length){
-    showMsg(document.getElementById('msgImg'), 'err', '先上传图片再生成处理计划。');
-    return;
+  if (IMAGES.length) {
+    const autoN = IMAGES.filter(im => im.purpose && im.autoPurpose).length;
+    showMsg(document.getElementById('msgImg'), 'info',
+      IMAGES.length + ' 张图片，第 1 张为主图'
+      + (autoN ? '，' + autoN + ' 张已按文件名自动标记用途' : '')
+      + '。Etsy 要求实物商品展示真实成品照片，渲染图不能替代实拍。');
   }
-  // 处理计划针对一个产品 —— 用「当前条目」的事实（顶部导航切到哪条就是哪条）
-  const it = IMPORT_BATCH[CURRENT_IDX] || IMPORT_BATCH.find(aiRunnable) || IMPORT_BATCH[0];
-  btn.disabled = true;
-  box.innerHTML = '<div class="msg info">AI 正在逐张给处理建议（约 20~40 秒）…</div>';
-  try {
-    const r = await apiCall('/api/etsy/ai/image-plan', { method: 'POST', timeout: 150000,
-      body: Object.assign(factsOf(it || {}), {
-        images: IMAGES.map((im, i) => ({
-          filename: im.filename || ('图' + (i + 1)),
-          purpose: im.purpose || (i === 0 ? 'main' : ''),
-          purposeLabel: purposeLabel(im.purpose || (i === 0 ? 'main' : '')),
-        })),
-      }),
-      label: '生成图片处理计划' });
-    box.innerHTML = '<div class="msg ok">' + esc(r.note) + '</div>'
-      + '<pre style="white-space:pre-wrap;font-size:12.5px;line-height:1.7;background:var(--bg-soft,rgba(127,127,127,.08));'
-      + 'padding:12px;border-radius:10px;overflow:auto">' + esc(r.plan) + '</pre>'
-      + '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12.5px">'
-      + 'SOP 09 提示词 D：保留实拍主体的图片处理（复制去你的修图工具用）</summary>'
-      + '<pre style="white-space:pre-wrap;font-size:12px;line-height:1.7;background:var(--bg-soft,rgba(127,127,127,.08));'
-      + 'padding:12px;border-radius:10px;overflow:auto">' + esc(SOP_PROMPT_D) + '</pre></details>';
-    log('图片处理计划已生成（' + IMAGES.length + ' 张图，基于当前条目 ' + (it.sku || '') + '）', 's');
-  } catch(e){
-    box.innerHTML = '<div class="msg err">生成失败：' + esc(e.message || e) + '</div>';
-  } finally { btn.disabled = false; }
-});
-
-/* SOP 09 提示词 D 原文。注意：当前生图模型是文生图、做不了保留实拍主体的修图，
- * 所以这段是给用户复制到专业修图工具（抠图/遮罩类）用的，工作台不代跑。 */
-const SOP_PROMPT_D = [
-  '请处理我上传的真实产品照片，目标是 Etsy 商品展示。',
-  '保留产品主体原始像素、形状、比例、实际颜色、图案、缝线、毛发、釉面、配件数量及真实瑕疵。',
-  '只调整背景、构图和轻微曝光白平衡，背景使用干净的暖白色。',
-  '禁止重新绘制产品，禁止改变材质或工艺，禁止增减零件，禁止补造看不见的结构，禁止生成不同角度冒充实拍。',
-  '主体居中并保留周围裁切空间，不加广告词、水印或 logo；不透明背景，建议横向输出。',
-  '如果你无法保留实拍主体，请先说明限制并给出抠图或补拍方案，不要返回看似相同的重绘商品。',
-].join('\n');
-
+}
 
 /* ---------- 场景图生成（SOP 04）：文生图辅助图，走 Etsy AI 出口 ---------- */
 let _sceneImg = null;   // 最近一次生成的场景图 { b64, url, prompt }
@@ -2001,13 +1986,6 @@ function switchToItem(idx){
       ? it._form.is_customizable : !!it.is_customizable;
     document.getElementById('fCustom').checked = cust;
   }
-  // 变体表回填（给料阶段粘的变体表，跟着条目走）
-  const vt = it._varTable;
-  const vtBox = document.getElementById('varTableText');
-  if (vtBox) vtBox.value = vt
-    ? vt.dims.concat(['SKU', '价格', '库存']).join('\t') + '\n'
-      + vt.rows.map(r => r.values.concat([r.sku, r.price, r.quantity]).join('\t')).join('\n')
-    : '';
   // 图片按文件名匹配
   const matched = it._matched || matchPickedImages(it.images);
   if (matched.length) setPickedFiles(matched);
@@ -2222,6 +2200,10 @@ function renderImportList() {
       let imgTip = mi === it.images.length
         ? '<span style="color:var(--good)">图 ' + mi + '/' + it.images.length + '</span>'
         : '<span style="color:var(--warn)">图 ' + mi + '/' + it.images.length + ' 缺</span>';
+      // 变体组合（批量文件里编号留空的行）条数一目了然
+      const vtip = (it._varTable && it._varTable.rows.length)
+        ? '<span style="color:var(--good)">变体 ' + it._varTable.dims.length + ' 维 × '
+          + it._varTable.rows.length + ' 组合</span>　' : '';
       // 有缺图时把「表格要什么文件名 / 实际上传了什么」摆出来，
       // 让「文件名对不上」一眼可见 —— 只说 0/1 缺，运营会以为是缺图
       if (mi < it.images.length) {
@@ -2243,7 +2225,7 @@ function renderImportList() {
                it.materials.length ? it.materials.join('/') : '',
                it.item_weight ? (it.item_weight + (it.item_weight_unit || 'g')) : '']
               .filter(Boolean).join(' · '))
-        + '　' + imgTip          /* ★ 不能放进 esc() —— 否则 <span> 会被当纯文本显示 */
+        + '　' + vtip + imgTip          /* ★ 不能放进 esc() —— 否则 <span> 会被当纯文本显示 */
         + '</div>' + pb + '</div>';
     }).join('');
 
@@ -2258,45 +2240,6 @@ document.getElementById('btnToAi').addEventListener('click', () => {
   goto(2);
   kwMsg('info', '已解析 ' + IMPORT_BATCH.length
     + ' 条。先在这里出关键词候选 + EverBee 核实，再去第 3 步生成文案。');
-});
-
-/* ---------- 变体表解析（给料第 4 项）----------
- * 格式：第一行「维度名… | SKU | 价格 | 库存」，之后每行一个组合。
- * 解析成 { dims:[维度名], rows:[{values:[值], sku, price, quantity}] }，存到当前条目。
- * 第 4 步选好类目后，Agent 用维度名匹配 property、值名匹配 value_id，自动生成变体。 */
-function parseVarTable(raw){
-  const lines = String(raw || '').split('\n').map(l => l.trim()).filter(Boolean);
-  if (!lines.length) return { ok:false, error:'粘贴的内容是空的' };
-  const split = l => l.split(/\t|,(?![^"]*")/).map(c => c.trim().replace(/^"|"$/g, ''));
-  const header = split(lines[0]);
-  const skuCol = header.findIndex(h => /^(sku|价格|price|库存|quantity|qty|数量)$/i.test(h));
-  if (skuCol < 0) return { ok:false, error:'表头要包含 SKU、价格、库存 三列（维度名列在前，SKU/价格/库存 在后）' };
-  const priceCol = header.findIndex(h => /^(价格|price)$/i.test(h));
-  const qtyCol = header.findIndex(h => /^(库存|quantity|qty|数量)$/i.test(h));
-  if (priceCol < 0 || qtyCol < 0) return { ok:false, error:'表头要包含「价格」「库存」两列' };
-  const dims = header.slice(0, skuCol).filter(Boolean);
-  if (!dims.length) return { ok:false, error:'没有维度列（SKU 前面至少一列维度名）' };
-  const rows = [];
-  for (let i = 1; i < lines.length; i++){
-    const c = split(lines[i]);
-    if (c.every(x => !x)) continue;
-    const values = c.slice(0, skuCol).map(x => x || '').slice(0, dims.length);
-    rows.push({ values, sku: c[skuCol] || '', price: c[priceCol] || '', quantity: c[qtyCol] || '' });
-  }
-  if (!rows.length) return { ok:false, error:'除了表头没有数据行' };
-  return { ok:true, dims, rows };
-}
-
-document.getElementById('btnVarTableParse').addEventListener('click', () => {
-  const m = document.getElementById('varTableMsg');
-  const it = IMPORT_BATCH[CURRENT_IDX];
-  if (!it) { showMsg(m, 'warn', '先解析上架表格、选中一个条目，再粘变体表。'); return; }
-  const r = parseVarTable(document.getElementById('varTableText').value);
-  if (!r.ok) { showMsg(m, 'err', esc(r.error)); return; }
-  it._varTable = { dims: r.dims, rows: r.rows };
-  showMsg(m, 'ok', '变体表已存到条目「' + esc(it.sku || ('第 ' + it._row + ' 行')) + '」：'
-    + r.dims.length + ' 个维度 × ' + r.rows.length + ' 个组合。第 4 步选好类目后会自动映射到 Etsy 属性。');
-  log('变体表已解析：' + r.dims.join(' / ') + ' → ' + r.rows.length + ' 组合', 's');
 });
 
 /* ================================================================

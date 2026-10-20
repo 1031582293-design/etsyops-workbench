@@ -1,9 +1,10 @@
-条目编号	变体表(直接复制下面几列到工作台第1步「变体表」)
-CER-HORSE-001	Primary color	SKU	价格	库存
-	Black & Blue	BB	32	2
-	Red & Green	RG	34	1
-
-WOLF-HEAD-001	Primary color	Size	SKU	价格	库存
-	Black	S	WF-B-S	30.70	3
-	Black	M	WF-B-M	31.50	4
-	White	S	WF-W-S	30.70	3
+条目编号	说明（2026-10-21 起变体不再单独粘贴，直接写进主批量表格）
+CER-HORSE-001	主行「变体维度」列填维度名（逗号分隔）：Primary color
+(编号留空)	接着的行就是变体组合：变体维度列填值、变体SKU/价格/数量填该组合 —— 见下行
+(示例)	Black & Blue	BB	32	2
+(示例)	Red & Green	RG	34	1
+WOLF-HEAD-001	双维度示例：主行变体维度 = Primary color, Size
+(示例)	Black, S	WF-B-S	30.70	3
+(示例)	Black, M	WF-B-M	31.50	4
+(示例)	White, S	WF-W-S	30.70	3
+规则	① 编号留空 = 上一条目的变体组合行；② 组合行「变体维度」列的值顺序 = 主行维度名顺序；③ 维度名/值名 Agent 会自动匹配 Etsy 属性，匹配不上会标红提示人工

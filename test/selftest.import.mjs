@@ -223,6 +223,57 @@ console.log('\n【H】AI 返回内容的解析（parseAiCopy）');
   ok(it.attributes_json === 'Material=Ceramic; Style=Rustic', '★ 普通属性解析', it.attributes_json);
 }
 
+/* 【J】变体组合行（2026-10-21）：编号留空 = 上一条目的变体组合，替代旧的「变体表粘贴框」 */
+{
+  const tsv = [
+    '编号,图片文件名,类目关键词,价格,数量,制作方,制作时间,材质,变体维度,变体SKU,是否定制,属性',
+    'CER-HORSE-001,a_main.jpg,ceramic horse figurine,32.00,3,i_did,2020_2026,Ceramic,Primary color,,否,Material=Ceramic',
+    ',,,32,2,,,,Black & Blue,BB,,',
+    ',,,34,1,,,,Red & Green,RG,,',
+    'WOLF-HEAD-001,b.jpg,fursuit head base,30.70,10,someone_else,2020_2026,EVA,"Primary color, Size",,是,',
+    ',,,30.70,3,,,,"Black, S",WF-B-S,,',
+    ',,,31.50,4,,,,"Black, M",WF-B-M,,',
+    'STL-MUG-002,c.jpg,stoneware mug,24.50,6,collective,made_to_order,Stoneware,,,否,Material=Stoneware',
+  ].join('\n');
+  const r = M.parseImportTable(tsv);
+  ok(r.errors.length === 0, '变体行不产生致命错误', JSON.stringify(r.errors));
+  ok(r.rows.length === 3, '★ 5 个数据行 → 3 个条目（变体行不占条目）', String(r.rows.length));
+  const [horse, wolf, mug] = r.rows;
+  ok(horse._varTable && horse._varTable.dims.length === 1 && horse._varTable.dims[0] === 'Primary color',
+    '★ 主行「变体维度」→ 变体表维度名', JSON.stringify(horse._varTable && horse._varTable.dims));
+  ok(horse._varTable.rows.length === 2, 'CER 2 个组合', String(horse._varTable.rows.length));
+  ok(horse._varTable.rows[0].values[0] === 'Black & Blue' && horse._varTable.rows[0].sku === 'BB'
+     && horse._varTable.rows[0].price === '32' && horse._varTable.rows[0].quantity === '2',
+    '★ 组合行的 值/SKU/价格/库存 全部读到', JSON.stringify(horse._varTable.rows[0]));
+  ok(horse._varTable.rows[1].values[0] === 'Red & Green' && horse._varTable.rows[1].price === '34',
+    '第二组合价格对位（上一变体行的列不串行）', JSON.stringify(horse._varTable.rows[1]));
+  ok(wolf._varTable && wolf._varTable.dims.length === 2, 'WOLF 双维度', JSON.stringify(wolf._varTable && wolf._varTable.dims));
+  ok(wolf._varTable.rows.length === 2
+     && wolf._varTable.rows[0].values[0] === 'Black' && wolf._varTable.rows[0].values[1] === 'S'
+     && wolf._varTable.rows[0].sku === 'WF-B-S',
+    '★ 双维度组合值按顺序拆成两维（引号内逗号不切列）', JSON.stringify(wolf._varTable.rows[0]));
+  ok(!mug._varTable, '无变体条目没有变体表容器');
+  ok(horse._problems.length === 0 && wolf._problems.length === 0, '变体行没有把主行标出问题',
+     JSON.stringify([horse._problems, wolf._problems]));
+
+  // 异常：变体行出现在第一个条目之前
+  const orphan = M.parseImportTable([
+    '编号,图片文件名,价格,数量,变体维度,变体SKU',
+    ',,,,Black,BB',
+    'A,a.jpg,1,1,,',
+  ].join('\n'));
+  ok(orphan.errors.some(e => /归属/.test(e)), '★ 变体行没有可归属的条目 → 明确报错', JSON.stringify(orphan.errors));
+
+  // 异常：主行没填维度名，变体行被丢弃并标问题
+  const nodim = M.parseImportTable([
+    '编号,图片文件名,价格,数量,变体维度,变体SKU',
+    'A,a.jpg,1,1,,',
+    ',,,,Black,BB',
+  ].join('\n'));
+  ok(nodim.rows.length === 1 && nodim.rows[0]._problems.some(p => /变体/.test(p)),
+    '★ 主行没填维度名 → 组合行丢弃且标红提示', JSON.stringify(nodim.rows[0]._problems));
+}
+
 console.log('\n' + '='.repeat(60));
 console.log(`导入器：${pass} 项通过，${fail} 项失败`);
 process.exit(fail ? 1 : 0);

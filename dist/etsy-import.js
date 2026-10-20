@@ -43,6 +43,9 @@ const IMPORT_ALIASES = {
   // 变体维度（英文属性名，逗号分隔）：Agent 自动匹配类目属性（property_id / value_id）
   variation_dims:'variation_dims', 变体维度:'variation_dims', '变体属性':'variation_dims',
   'variation dimensions':'variation_dims',
+  // 变体组合行（编号留空的那几行）的 SKU 列；价格/库存复用主表的「价格/数量」列
+  variant_sku:'variant_sku', 变体sku:'variant_sku', '变体 sku':'variant_sku',
+  'variation sku':'variant_sku', '组合sku':'variant_sku',
   // 普通属性（不做变体，只描述商品特征）：格式「属性名=值」分号分隔，如 Primary color=Blue; Style=Rustic
   attributes:'attributes_json', 属性:'attributes_json', 普通属性:'attributes_json',
   '商品属性':'attributes_json', 'attributes':'attributes_json',
@@ -227,6 +230,7 @@ function parseImportTable(text) {
   if (!has('quantity')) missing.push('数量');
 
   const rows = [];
+  const orphanVarLines = [];   // 变体组合行出现在第一个条目之前（没有归属）
   for (let r = 1; r < cells.length; r++) {
     const row = cells[r];
     if (!row.some(c => c)) continue;            // 跳过整行空
@@ -234,6 +238,28 @@ function parseImportTable(text) {
       const c = cols.find(x => x.field === f);
       return c ? (row[c.index] || '') : '';
     };
+    const skuCell = get('sku').trim();
+    const vdimsRaw = get('variation_dims').trim();
+
+    /* 变体组合行：编号留空、变体维度列有值 → 不生成独立条目，
+     * 归属上一条目，一行一个组合（值顺序 = 主行「变体维度」列的维度名顺序）。
+     * 价格/库存复用「价格/数量」列，SKU 用「变体SKU」列。
+     * 解析成 item._varTable = { dims, rows }，第 4 步选类目后自动映射 Etsy 属性。 */
+    if (!skuCell && vdimsRaw){
+      const last = rows[rows.length - 1];
+      if (!last){ orphanVarLines.push(r + 1); continue; }
+      if (!last._varTable){
+        last._problems.push('第 ' + (r + 1) + ' 行是变体组合，但该条目的「变体维度」列没填维度名，这行组合被丢弃');
+        continue;
+      }
+      last._varTable.rows.push({
+        values: vdimsRaw.split(/[,;、]/).map(s => s.trim()),
+        sku: get('variant_sku').trim(),
+        price: get('price').trim(),
+        quantity: get('quantity').trim(),
+      });
+      continue;
+    }
 
     const imagesRaw = get('images');
     const item = {
@@ -275,6 +301,9 @@ function parseImportTable(text) {
       variations_json: get('variations_json').trim(),
     };
 
+    // 主行声明了变体维度名 → 初始化变体表容器，后面编号留空的行就是它的组合
+    if (item.variation_dims.length) item._varTable = { dims: item.variation_dims.slice(), rows: [] };
+
     // 逐行的字段级问题（不阻断导入，但要明确告诉用户哪一行有问题）
     const problems = [];
     if (!item.images.length) problems.push('缺图片文件名');
@@ -292,6 +321,9 @@ function parseImportTable(text) {
       + '。这三个是建草稿的硬性要求，其余列可留空。');
   }
   if (!rows.length) errors.push('除了表头之外没有数据行');
+  if (orphanVarLines.length) {
+    errors.push('第 ' + orphanVarLines.join('、') + ' 行是变体组合（编号留空），但前面没有任何条目可以归属');
+  }
 
   return { columns: cols, rows, errors };
 }
