@@ -1,8 +1,14 @@
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+// ★ 路径必须相对本文件推导 —— 曾硬编码 /tmp/etsyops-work/（旧克隆副本），
+//   导致自测跑的是旧代码、当前仓库的改动根本没被测到（2026-10-20 抓到）。
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // 直接从页面里抽出导入器代码测（与前端同一份，避免测的是副本）
-const html = fs.readFileSync('/tmp/etsyops-work/etsy-publisher.html', 'utf8');
-const src = fs.readFileSync('/tmp/etsyops-work/etsy-import.js', 'utf8');
+const html = fs.readFileSync(join(ROOT, 'etsy-publisher.html'), 'utf8');
+const src = fs.readFileSync(join(ROOT, 'etsy-import.js'), 'utf8');
 
 // 在 Node 里模拟浏览器环境
 const fn = new Function(src + '\n; return { parseImportTable, parseHeaderRow, parseNumCell, parseTagsCell, parseWhoMade, parseWhenMade, applyImportRow, parseAiCopy, IMPORT_ALIASES };');
@@ -180,6 +186,27 @@ console.log('\n【H】AI 返回内容的解析（parseAiCopy）');
   // 标签超过 13 个要被截断
   const many = 'TITLE: t\nDESCRIPTION:\nd\nTAGS: ' + Array.from({length: 20}, (_, i) => 'tag' + i).join(', ');
   ok(M.parseAiCopy(many).tags.length === 13, '★ 超过 13 个标签被截到 13（Etsy 硬限制）');
+}
+
+/* 【H】CSV 引号感知切分（2026-10-20 真实踩坑：材质 "EVA, 三明治网布" 被逗号
+   切成两格，后面所有列错位，解析结果里材质显示成 "EVA） */
+{
+  const csv = [
+    '编号,图片文件名,标题,价格,数量,制作方,制作时间,是否手工材料,材质,净重,重量单位,长,宽,尺寸单位,适合人群,生产伙伴',
+    'WOLF-HEAD-001,WOLF-HEAD-001.jpg,,30.7,10,someone_else,2020_2026,否,"EVA, 三明治网布",1000,g,25,30,cm,标准尺寸，配有可调节海绵块,',
+    'WOLF-HAND-001,WOLF-HAND-001.jpg,,15,10,someone_else,2020_2026,否,"EVA",500,g,20,20,cm,标准尺寸,',
+  ].join('\n');
+  const r = M.parseImportTable(csv);
+  ok(r.rows.length === 2, '两行都解析出来', String(r.rows.length));
+  const it = r.rows[0];
+  ok(it.materials.length === 2 && it.materials[0] === 'EVA' && it.materials[1] === '三明治网布',
+    '★ 引号内的逗号不切列，材质按列表正常拆分', JSON.stringify(it.materials));
+  ok(!it.materials.join('').includes('"'), '字段外层的引号被剥掉');
+  ok(it.price === '30.7' && it.quantity === '10', '引号字段之后的列不再错位', it.price + '/' + it.quantity);
+  ok(it.item_weight === 1000 && it.item_weight_unit === 'g', '净重列对位', it.item_weight + it.item_weight_unit);
+  ok(it.audience_note === '标准尺寸，配有可调节海绵块', '适合人群列对位', it.audience_note);
+  const it2 = r.rows[1];
+  ok(it2.materials.length === 1 && it2.materials[0] === 'EVA', '第二行引号字段正常', JSON.stringify(it2.materials));
 }
 console.log('\n' + '='.repeat(60));
 console.log(`导入器：${pass} 项通过，${fail} 项失败`);
