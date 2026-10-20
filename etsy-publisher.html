@@ -330,6 +330,9 @@
           <button class="btn primary" id="btnAiBatch">批量生成（全部条目）</button>
           <button class="btn ghost" id="btnAiStop" disabled>中断队列</button>
           <button class="btn" data-goto="4">跳过 AI，下一步 →</button>
+          <label style="display:flex;gap:6px;align-items:center;font-size:12px;margin-left:6px">
+            <input type="checkbox" id="withScene" checked /> 同时生成场景图（每条约 $0.02）
+          </label>
         </div>
         <div id="msgAiBatch" class="msg"></div>
         <div class="progress hidden" id="aiProg"><div class="bar"><i id="aiBar"></i></div><span id="aiProgTxt"></span></div>
@@ -337,22 +340,6 @@
 
         <div id="aiList"></div>
 
-        <div class="subhead" style="margin-top:24px">场景图（SOP 04）<span class="hint">文生图辅助参考，首图必须用实拍</span></div>
-        <div class="msg info" style="margin:10px 0">
-          生成「产品在真实使用/展示场景中」的辅助图。⚠️ 文生图无法严格保留实拍主体像素，
-          主体细节可能与原图有差异 —— <b>首图必须用真实成品照</b>，场景图只作辅助参考。
-        </div>
-        <label class="fld">场景描述（可选）<span class="hint">英文更准；留空则由 AI 按产品用途自动设计</span></label>
-        <input type="text" id="fScene" placeholder="例如：on a wooden shelf with a small plant beside it" />
-        <label style="display:flex;gap:6px;align-items:center;font-size:12px;margin-top:8px">
-          <input type="checkbox" id="refImgOn" />
-          以第 1 张实拍图为参考（图生图 /images/edits，更保留主体；需 OpenAI 官方等支持 edits 的服务）
-        </label>
-        <div class="btnrow" style="margin-top:8px">
-          <button class="btn sm" id="btnSceneImg">生成场景图</button>
-        </div>
-        <div id="msgScene" class="msg"></div>
-        <div id="sceneBox" style="margin-top:8px"></div>
       </section>
 
       <section class="panel step hidden" data-step="4">
@@ -1556,75 +1543,6 @@ function renderThumbs(){
   }
 }
 
-/* ---------- 场景图生成（SOP 04）：文生图辅助图，走 Etsy AI 出口 ---------- */
-let _sceneImg = null;   // 最近一次生成的场景图 { b64, url, prompt }
-document.getElementById('btnSceneImg').addEventListener('click', async () => {
-  const m = document.getElementById('msgScene');
-  const btn = document.getElementById('btnSceneImg');
-  const it = IMPORT_BATCH[CURRENT_IDX];
-  if (!it) { showMsg(m, 'warn', '先在第 1 步解析表格，选中一个条目。'); return; }
-  const scene = document.getElementById('fScene').value.trim();
-  btn.disabled = true; btn.textContent = '生成中（约 20~60 秒）…';
-  log('开始生成场景图：' + (it.sku || ('第 ' + it._row + ' 行')));
-  try {
-    const facts = factsOf(it);
-    const ai = AI_RESULTS.find(x => x.i === CURRENT_IDX);
-    // 产品是什么：优先用已生成的英文标题，其次类目名
-    const product = (ai && ai.title) || (PICKED_TAX && PICKED_TAX.name) || '';
-    const refOn = document.getElementById('refImgOn') && document.getElementById('refImgOn').checked;
-    if (refOn && !IMAGES[0]) { showMsg(m, 'warn', '勾了「参考实拍图」但还没有上传图片 —— 先在第 1 步传图，或取消勾选。'); btn.disabled = false; btn.textContent = '生成场景图'; return; }
-    const d = await apiCall('/api/etsy/ai/scene-image', {
-      body: Object.assign({}, facts, { product, scene, size: '1024x1024',
-        refB64: (refOn && IMAGES[0]) ? IMAGES[0].data : '' }),
-      timeout: 180000,
-    });
-    _sceneImg = d;
-    const box = document.getElementById('sceneBox');
-    const imgSrc = d.b64 ? ('data:image/png;base64,' + d.b64) : d.url;
-    box.innerHTML =
-      '<div style="font-size:12px;color:var(--text-faint);margin-top:4px">prompt：' + esc(d.prompt || '') + '</div>'
-      + (imgSrc
-          ? '<img src="' + imgSrc + '" style="max-width:340px;border-radius:10px;margin-top:8px;display:block;border:1px solid var(--border)" alt="场景图预览" />'
-          : '<div class="msg warn" style="margin-top:8px">模型没有返回图片（b64 / url 都为空）。</div>')
-      + '<div class="btnrow" style="margin-top:8px">'
-      + '<button class="btn sm" id="btnSceneUse">选用：加入图片列表（排最后）</button>'
-      + '</div>';
-    const useBtn = document.getElementById('btnSceneUse');
-    if (useBtn) useBtn.addEventListener('click', async () => {
-      if (!_sceneImg || (!_sceneImg.b64 && !_sceneImg.url)) return;
-      if (IMAGES.length >= 20) { showMsg(m, 'err', '图片已满 20 张，不能再加。'); return; }
-      let data = _sceneImg.b64 || '';
-      // 只有 url 时（智谱等国内生图服务），前端 fetch 转 base64
-      if (!data && _sceneImg.url) {
-        try {
-          const r = await fetch(_sceneImg.url);
-          const blob = await r.blob();
-          data = await new Promise((res, rej) => {
-            const fr = new FileReader();
-            fr.onload = () => res(String(fr.result).split(',')[1]);
-            fr.onerror = rej;
-            fr.readAsDataURL(blob);
-          });
-        } catch (e) {
-          showMsg(m, 'err', '这张图只有 URL，转 base64 失败（可能跨域受限）：' + esc(e.message) + '。请重新生成或手动下载后在第 1 步上传。');
-          return;
-        }
-      }
-      const filename = 'scene-' + (it.sku || 'img') + '-' + Date.now() + '.png';
-      IMAGES.push({ filename, data, purpose: 'scene', purposeLabel: '07 使用/场景' });
-      renderThumbs();
-      log('场景图已加入图片列表（' + filename + '）', 's');
-      showMsg(m, 'ok', '场景图已加入图片列表，作为辅助图（排最后）。首图仍是实拍。');
-    });
-    showMsg(m, 'ok', '场景图已生成（模型 ' + esc(d.model || '') + '）。');
-  } catch (e) {
-    showMsg(m, 'err', esc(e.message));
-    logErr(e);
-  } finally {
-    btn.disabled = false; btn.textContent = '生成场景图';
-  }
-});
-
 /* ---------- AI 上架前校验（SOP 05）：对照事实字段审核完整草稿 ----------
  * 2026-10-21 改为批量：对所有已生成文案的条目串行校验，进入本步自动开跑。 */
 let PRECHECK_BUSY = false;
@@ -2715,7 +2633,7 @@ async function startAiBatch(auto){
   AI_RESULTS.length = 0;
   IMPORT_BATCH.forEach((it, i) => AI_RESULTS.push({
     i, row: it._row, sku: it.sku, status: skip.includes(it) ? 'skip' : 'wait',
-    title: '', description: '', tags: [], cn: '',
+    title: '', description: '', tags: [], cn: '', scene: null,
   }));
 
   // ★ 开跑前先 ping 一次 AI。受理成功但出口不通时，第一条要等满超时才报错，
@@ -2752,6 +2670,7 @@ async function startAiBatch(auto){
         items: todo.map(it => Object.assign(factsOf(it),
           { verified_keywords: adoptedKeywords(it.sku || ('第 ' + it._row + ' 行')) })),
         prompt: currentPrompt() || undefined,
+        withScene: !!(document.getElementById('withScene') || {}).checked,
       }),
       timeout: 30000,
       label: 'AI 批量生成',
@@ -2811,6 +2730,7 @@ function pollAiBatch(jobId, total) {
           slot.status = x.status; slot.title = x.title || '';
           slot.description = x.description || ''; slot.tags = x.tags || [];
           slot.cn = x.cn_check || '';
+          slot.scene = x.scene || null;
           slot.error = x.error || '';
         });
       }
@@ -2878,9 +2798,26 @@ function renderAiList() {
         + body
       + (x.cn ? '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:11.5px;color:var(--text-faint)">中文核对稿（给运营核对事实用，不发布）</summary>'
           + '<pre style="white-space:pre-wrap;font-size:12px;line-height:1.7;background:var(--bg-soft,rgba(127,127,127,.08));padding:10px;border-radius:8px;overflow:auto">' + esc(x.cn) + '</pre></details>' : '')
+      + (x.scene
+          ? '<div style="margin-top:8px;border-top:1px solid var(--border);padding-top:8px">'
+            + '<div style="font-size:11.5px;color:var(--text-faint)">场景图'
+            + (x.scene.error ? '（生成失败）' : '') + '</div>'
+            + (x.scene.error
+                ? '<div style="color:var(--bad);font-size:12px;margin-top:4px">' + esc(x.scene.error) + '</div>'
+                : ((x.scene.b64 || x.scene.url)
+                    ? '<img src="' + (x.scene.b64 ? ('data:image/png;base64,' + x.scene.b64) : x.scene.url)
+                      + '" style="max-width:200px;border-radius:8px;margin-top:4px;display:block;border:1px solid var(--border)" />'
+                    : '<div style="color:var(--text-faint);font-size:12px;margin-top:4px">（模型未返回图片）</div>')
+                  + (x.scene.prompt ? '<div style="font-size:11px;color:var(--text-faint);margin-top:4px;word-break:break-all">' + esc(x.scene.prompt) + '</div>' : ''))
+            + '</div>'
+          : '')
       + '<div class="btnrow" style="margin-top:8px">'
       + '<button class="btn sm" data-ai-fill="' + k + '"' + (x.status === 'done' ? '' : ' disabled') + '>设为当前条目 →</button>'
         + '<button class="btn sm ghost" data-ai-regen="' + k + '"' + (x.status === 'skip' ? ' disabled' : '') + '>换一版</button>'
+        + (x.status === 'done'
+            ? '<button class="btn sm ghost" data-scene-use="' + k + '"' + (x.scene && x.scene.b64 ? '' : ' disabled') + '>选用场景图</button>'
+              + '<button class="btn sm ghost" data-scene-regen="' + k + '">重生成场景图</button>'
+            : '')
         + '</div></div>';
     }).join('');
 
@@ -2894,6 +2831,36 @@ function renderAiList() {
   box.querySelectorAll('[data-ai-tags]').forEach(el => {
     el.addEventListener('input', () => {
       AI_RESULTS[Number(el.dataset.aiTags)].tags = el.value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+    });
+  });
+  box.querySelectorAll('[data-scene-use]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const k = Number(btn.dataset.sceneUse);
+      const x = AI_RESULTS[k];
+      if (!x.scene || !x.scene.b64) return;
+      if (IMAGES.length >= 20) { showAiMsg('warn', '图片已满 20 张，不能再加。'); return; }
+      IMAGES.push({ filename: (x.sku || 'item') + '-scene.jpg', data: x.scene.b64, purpose: 'scene', purposeLabel: '07 使用/场景' });
+      renderThumbs();
+      showAiMsg('ok', '场景图已加入图片列表（' + (x.sku || '') + '-scene.jpg，排最后，首图仍是实拍）。');
+    });
+  });
+  box.querySelectorAll('[data-scene-regen]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const k = Number(btn.dataset.sceneRegen);
+      const x = AI_RESULTS[k];
+      const it = IMPORT_BATCH[x.i];
+      if (!it) return;
+      btn.disabled = true; btn.textContent = '生成中…';
+      try {
+        const d = await apiCall('/api/etsy/ai/scene-image', {
+          body: Object.assign({}, factsOf(it), { product: x.title, scene: '', size: '1024x1024' }),
+          timeout: 180000,
+        });
+        x.scene = { prompt: d.prompt || '', url: d.url || '', b64: d.b64 || '', error: '' };
+      } catch (e) {
+        x.scene = { prompt: '', url: '', b64: '', error: e.message || String(e) };
+      }
+      renderAiList();
     });
   });
   box.querySelectorAll('[data-ai-fill]').forEach(btn => {

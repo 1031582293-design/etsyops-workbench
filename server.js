@@ -850,8 +850,21 @@ async function etsyAiImage(prompt, size = '1024x1024', refB64 = '') {
     }
     throw new Error('Etsy 场景图返回异常：' + JSON.stringify(d).slice(0, 400));
   }
-  // GPT image 系列默认返回 b64_json（不支持 url）；智谱 CogView 返回 url。两者都读。
-  return { url: item.url || item.file_url || '', b64: item.b64_json || '' };
+  // GPT image 系列默认返回 b64_json（不支持 url）；智谱 CogView / grok 返回 url。两者都读。
+  let imgUrl = item.url || item.file_url || '';
+  let b64 = item.b64_json || '';
+  // grok 等返回境外存储的 url，国内浏览器可能访问不到（也规避跨域/防盗链）——
+  // 后端走代理把图片字节拉回来转 b64，前端「选用」才有可上传的数据。
+  if (!b64 && imgUrl) {
+    try {
+      const r2 = await etsyAiFetch()(imgUrl, { method: 'GET', signal: AbortSignal.timeout(60000) });
+      if (r2.ok) {
+        const buf = await r2.arrayBuffer();
+        b64 = Buffer.from(buf).toString('base64');
+      }
+    } catch { /* 转 b64 失败仍返回 url，前端降级 */ }
+  }
+  return { url: imgUrl, b64 };
 }
 
 async function readJson(req) {
@@ -1626,6 +1639,7 @@ async function handleApi(req, res) {
       }
 
       const systemPrompt = readEtsyPrompt(b.prompt);
+      const withScene = !!b.withScene;   // 是否同时生成场景图（SOP 04 并入批量队列）
       const id = 'eb' + Date.now().toString(36) + (_etsyBatchSeq++);
       const job = {
         id, status: 'running', at: Date.now(),
@@ -1653,7 +1667,21 @@ async function handleApi(req, res) {
               + 'CN_CHECK（中文核对稿：把上述内容的关键事实列成中文要点，供运营核对，不发布）\n\n'
               + '产品事实（只能依据这些，不要编造未提及的规格）：\n' + item.facts);
             const parsed = parseEtsyCopy(content);
-            job.results.push({ index: item.index, sku: item.sku, ...parsed });
+            const result = { index: item.index, sku: item.sku, ...parsed };
+            if (withScene && parsed.parsed) {
+              // 场景图 prompt 用「标题 + 通用场景指令」，不再额外跑一次文本模型写 prompt
+              try {
+                const sp = (parsed.title || item.sku || 'this product')
+                  + ' in a natural, realistic lifestyle scene, clean warm white background, e-commerce product photography';
+                const simg = await etsyAiImage(sp, '1024x1024');
+                result.scene = { prompt: sp, url: simg.url || '', b64: simg.b64 || '' };
+                etsyLog(`Etsy 文案批次 ${id} [${job.done + 1}/${job.total}] ${item.sku} 场景图完成`);
+              } catch (se) {
+                result.scene = { prompt: '', url: '', b64: '', error: se.message };
+                etsyLog(`Etsy 文案批次 ${id} ${item.sku} 场景图失败：${se.message}`);
+              }
+            }
+            job.results.push(result);
             if (parsed.parsed) {
               job.okCount++;
               etsyLog(`Etsy 文案批次 ${id} [${job.done + 1}/${job.total}] ${item.sku} 完成（耗时 ${Math.round((Date.now() - job.curStartedAt) / 1000)}s）`);
