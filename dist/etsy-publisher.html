@@ -169,7 +169,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">e78f066</span>
+  <span class="vtag" id="verTag">7cf9c70</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -587,8 +587,8 @@
         <h3>AI 上架前校验</h3>
         <div class="ph-sub">对照「事实字段」让 AI 逐项交叉审核标题、描述、标签、变体与图片是否一致。发现冲突会列「问题位置 / 草稿说法 / 对应事实 / 风险 / 修正建议」。</div>
         <div class="btnrow" style="margin-top:12px">
-          <button class="btn primary" id="btnPrecheck">开始 AI 上架前校验</button>
-          <span class="hint" style="align-self:center">校验的是「当前条目」的完整草稿</span>
+          <button class="btn primary" id="btnPrecheck">开始 AI 上架前校验（全部条目）</button>
+          <span class="hint" style="align-self:center">批量校验所有已生成文案的条目；进入本步自动开跑</span>
         </div>
         <div id="msgPrecheck" class="msg"></div>
         <div id="precheckBox"></div>
@@ -856,6 +856,7 @@ function goto(n){
   if (n === 3) startAiBatch(true);
   if (n === 4) autoPickTaxonomy();   // 进类目页：条目有「类目关键词」就自动搜 + 选最末级叶子
   if (n === 5) renderChecklist();   // 进入商品资料页时重算核对清单
+  if (n === 6) startPrecheck();     // 进校验页：自动批量校验已生成文案的条目
   document.querySelectorAll('.step').forEach(s => s.classList.toggle('hidden', Number(s.dataset.step) !== n));
   document.querySelectorAll('.step-chip').forEach(c => c.classList.toggle('active', Number(c.dataset.step) === n));
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1624,63 +1625,89 @@ document.getElementById('btnSceneImg').addEventListener('click', async () => {
   }
 });
 
-/* ---------- AI 上架前校验（SOP 05）：对照事实字段审核完整草稿 ---------- */
-document.getElementById('btnPrecheck').addEventListener('click', async () => {
+/* ---------- AI 上架前校验（SOP 05）：对照事实字段审核完整草稿 ----------
+ * 2026-10-21 改为批量：对所有已生成文案的条目串行校验，进入本步自动开跑。 */
+let PRECHECK_BUSY = false;
+async function startPrecheck(){
+  if (PRECHECK_BUSY) return;
   const m = document.getElementById('msgPrecheck');
   const btn = document.getElementById('btnPrecheck');
   const box = document.getElementById('precheckBox');
-  const it = IMPORT_BATCH[CURRENT_IDX];
-  if (!it) { showMsg(m, 'warn', '先在第 1 步解析表格，选中一个条目。'); return; }
-  btn.disabled = true; btn.textContent = '校验中（约 20~60 秒）…';
-  log('开始 AI 上架前校验：' + (it.sku || ('第 ' + it._row + ' 行')));
-  try {
-    const facts = factsOf(it);
-    const form = collectForm();
+  if (!IMPORT_BATCH.length) { showMsg(m, 'warn', '先在第 1 步解析表格。'); return; }
+  saveCurrentForm();   // 当前表单先存回条目，保证 _form 是最新编辑版
+  const todo = IMPORT_BATCH.filter(it => String((it._form || it).title || '').trim());
+  if (!todo.length) { showMsg(m, 'warn', '还没有任何条目生成过文案（标题为空）。先去第 3 步生成文案。'); return; }
+  PRECHECK_BUSY = true;
+  btn.disabled = true;
+  const parseBlock = (report) => {
+    const lines = report.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length === 1 && /^OK\b/i.test(lines[0])) {
+      return '<div class="msg ok show" style="margin:8px 0 0"><b>AI 校验通过。</b>没有发现事实冲突或格式问题。仍建议人工过一遍核对清单。</div>';
+    }
+    const isBlocked = /不可发布/.test(report);
+    let html = '<div class="msg ' + (isBlocked ? 'err' : 'warn') + ' show" style="margin:8px 0 0">'
+      + (isBlocked ? '<b>AI 判定：不可发布。</b>以下问题需先解决：' : '<b>AI 发现以下问题：</b>') + '</div>'
+      + '<table class="kv" style="margin-top:8px;width:100%">'
+      + '<tr><td><b>问题位置</b></td><td><b>草稿说法</b></td><td><b>对应事实</b></td><td><b>风险 / 冲突</b></td><td><b>修正建议</b></td></tr>'
+      + lines.filter(l => l.includes('|')).map(l => {
+          const cols = l.split('|').map(c => c.trim());
+          while (cols.length < 5) cols.push('');
+          return '<tr>' + cols.slice(0, 5).map(c => '<td>' + esc(c) + '</td>').join('') + '</tr>';
+        }).join('')
+      + '</table>';
+    const other = lines.filter(l => !l.includes('|') && !/^不可发布$/.test(l));
+    if (other.length) html += '<div style="font-size:12.5px;color:var(--text-faint);margin-top:6px">' + other.map(esc).join('<br>') + '</div>';
+    return html;
+  };
+  let done = 0, okN = 0, warnN = 0, failN = 0, html = '';
+  for (const it of todo){
+    const sku = it.sku || ('第 ' + it._row + ' 行');
+    btn.textContent = '批量校验中 ' + (done + 1) + '/' + todo.length + '…';
+    showMsg(m, 'info', 'AI 上架前校验中：<b>' + (done + 1) + ' / ' + todo.length + '</b> 条（' + esc(sku) + '）…');
+    const f = it._form || it;
+    const vd = Array.isArray(f._vardims) ? f._vardims : [];
+    const vr = Array.isArray(f._varrows) ? f._varrows : [];
     const draft = {
-      title: form.title, description: form.description, tags: form.tags,
-      price: form.price, quantity: form.quantity,
-      who_made: form.who_made, when_made: form.when_made,
-      variations: VARROWS.map((r, i) => ({
-        name: (cartesian(VARDIMS.map(d => d.values))[i] || []).map(v => v.value).join(' + '),
+      title: f.title, description: f.description, tags: f.tags || [],
+      price: f.price, quantity: f.quantity,
+      who_made: f.who_made, when_made: f.when_made,
+      variations: vr.map((r, i) => ({
+        name: (cartesian(vd.map(d => d.values))[i] || []).map(v => v.value).join(' + '),
         price: r.price, quantity: r.quantity, sku: r.sku,
       })),
-      images: IMAGES.map((im, i) => ({ filename: im.filename, purposeLabel: im.purposeLabel || purposeLabel(im.purpose) })),
+      images: IMAGES.map(im => ({ filename: im.filename, purposeLabel: purposeLabel(im.purpose) })),
     };
-    const d = await apiCall('/api/etsy/ai/precheck', {
-      body: Object.assign({}, facts, { draft }),
-      timeout: 180000,
-    });
-    const report = d.report || '';
-    const lines = report.split('\n').map(l => l.trim()).filter(Boolean);
-    const isOk = lines.length === 1 && /^OK\b/i.test(lines[0]);
-    const isBlocked = /不可发布/.test(report);
-    let html = '';
-    if (isOk) {
-      html = '<div class="msg ok show" style="margin-top:8px"><b>AI 校验通过。</b>没有发现事实冲突或格式问题。仍建议人工过一遍核对清单。</div>';
-    } else {
-      html = '<div class="msg ' + (isBlocked ? 'err' : 'warn') + ' show" style="margin-top:8px">'
-        + (isBlocked ? '<b>AI 判定：不可发布。</b>以下问题需先解决：' : '<b>AI 发现以下问题：</b>')
-        + '</div>'
-        + '<table class="kv" style="margin-top:8px;width:100%">'
-        + '<tr><td><b>问题位置</b></td><td><b>草稿说法</b></td><td><b>对应事实</b></td><td><b>风险 / 冲突</b></td><td><b>修正建议</b></td></tr>'
-        + lines.filter(l => l.includes('|')).map(l => {
-            const cols = l.split('|').map(c => c.trim());
-            while (cols.length < 5) cols.push('');
-            return '<tr>' + cols.slice(0, 5).map(c => '<td>' + esc(c) + '</td>').join('') + '</tr>';
-          }).join('')
-        + '</table>';
-      const other = lines.filter(l => !l.includes('|') && !/^不可发布$/.test(l));
-      if (other.length) html += '<div style="font-size:12.5px;color:var(--text-faint);margin-top:6px">' + other.map(esc).join('<br>') + '</div>';
+    try {
+      const d = await apiCall('/api/etsy/ai/precheck', {
+        body: Object.assign({}, factsOf(it), { draft }),
+        timeout: 180000,
+      });
+      const report = d.report || '';
+      const isBlocked = /不可发布/.test(report);
+      if (/^OK\b/i.test(report.trim())) okN++;
+      else if (isBlocked) failN++;
+      else warnN++;
+      html += '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:8px">'
+        + '<b style="font-size:13px">' + esc(sku) + '</b>' + parseBlock(report) + '</div>';
+      log('AI 校验（' + sku + '）：' + (isBlocked ? '不可发布' : (okN && /^OK/i.test(report.trim()) ? '通过' : '有警告')),
+        isBlocked ? 'e' : 's');
+    } catch (e) {
+      failN++;
+      html += '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:8px"><b style="font-size:13px">' + esc(sku) + '</b>'
+        + '<div class="msg err show" style="margin:8px 0 0">校验失败：' + esc(e.message) + '</div></div>';
+      logErr(e);
     }
-    box.innerHTML = html;
-    showMsg(m, 'ok', 'AI 校验完成（模型 ' + esc(d.model || '') + '）。');
-  } catch (e) {
-    showMsg(m, 'err', esc(e.message));
-    logErr(e);
-  } finally {
-    btn.disabled = false; btn.textContent = '开始 AI 上架前校验';
+    done++;
+    box.innerHTML = html;   // 每条完成即刷新，不用等整批
   }
-});
+  btn.disabled = false; btn.textContent = '开始 AI 上架前校验（全部条目）';
+  PRECHECK_BUSY = false;
+  showMsg(m, failN ? 'warn' : 'ok',
+    '批量校验完成：通过 <b>' + okN + '</b> 条，有警告 <b>' + warnN + '</b> 条，不可发布 <b>' + failN + '</b> 条。'
+    + '<br><b>下一步「写入 Etsy」只建草稿、不会发布</b> —— 草稿不花钱，到 Shop Manager 人工核对后再发布（那一步才收 $0.20 上架费）。');
+  log('AI 上架前批量校验完成：通过 ' + okN + '，警告 ' + warnN + '，不可发布 ' + failN, failN ? 'e' : 's');
+}
+document.getElementById('btnPrecheck').addEventListener('click', startPrecheck);
 
 /* ---------- 步骤 4：变体 ---------- */
 /* ---------- 变体组合矩阵（SOP 06）：维度在第 4 步勾选属性值生成，这里只填每行的价格/库存/SKU ---------- */
@@ -2316,10 +2343,17 @@ let EB_STATUS = null;
 function updateVerifyBtn(){
   const btn = document.getElementById('btnKwVerify');
   if (!btn) return;
-  // 批量核实：只要任一条目有词池就可点（不再要求当前下拉选中的那条有词）
+  // ★ 未授权时按钮保持可点 —— 点击直达授权页（之前 disabled 会让「连接」入口死锁）
+  if (!EB_STATUS || !EB_STATUS.authorized){
+    btn.disabled = false;
+    btn.textContent = '① 连接 EverBee';
+    btn.title = '点击打开 EverBee 授权页：登录 → Approve，一次可用 60 天';
+    return;
+  }
+  btn.textContent = '用 EverBee 核实（全部条目）';
   const anyWords = Object.keys(KW_POOL).some(s => (KW_POOL[s].words || []).length);
-  btn.disabled = !(EB_STATUS && EB_STATUS.authorized && anyWords);
-  btn.title = !EB_STATUS || !EB_STATUS.authorized ? '点击直达 EverBee 授权' : (anyWords ? '' : '先让 AI 出词');
+  btn.disabled = !anyWords;
+  btn.title = anyWords ? '' : '先点「AI 生成候选词池（全部条目）」';
 }
 
 async function loadEverbeeStatus(){
