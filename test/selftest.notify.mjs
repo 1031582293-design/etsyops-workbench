@@ -12,7 +12,7 @@
 import { createHmac } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { buildSign, sendText, sendCard } from '../notify-feishu.js';
-import { classify, extractSnippet, buildCard, notifyMail } from '../mail-notify.js';
+import { classify, extractSnippet, buildCard, notifyMail, parseSubject, extractLink } from '../mail-notify.js';
 
 let pass = 0;
 let failed = 0;
@@ -98,6 +98,50 @@ await ok('超长被截断并加省略号', () => {
   const s = extractSnippet(Buffer.from(raw), 100);
   assert.ok(s.length <= 101);
   assert.ok(s.endsWith('…'));
+});
+
+console.log('\n[3b] 真实邮件结构（base64 + 零宽字符 + 转发头）');
+const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
+const realMail = [
+  'From: Noreta <x@outlook.com>',
+  'Subject: Fw: Etsy Conversation with Melody Deichman from FishBoneTreasures',
+  'Content-Type: multipart/alternative; boundary="B1"',
+  '',
+  '--B1',
+  'Content-Type: text/plain; charset="utf-8"',
+  'Content-Transfer-Encoding: base64',
+  '',
+  b64('From: Etsy <no-reply@account.etsy.com>\nSent: Monday, October 19, 2026\nTo: x@outlook.com\nSubject: Etsy Conversation\n\nMelody sent you a message \u034f\u200c\u200b\u2060 见 <https://www.etsy.com/conversations/98765>'),
+  '--B1',
+  'Content-Type: text/html; charset="utf-8"',
+  'Content-Transfer-Encoding: base64',
+  '',
+  b64('<html><body><p>Melody sent you a message</p><a href="https://www.etsy.com/conversations/98765">Reply</a></body></html>'),
+  '--B1--',
+].join('\r\n');
+
+await ok('base64 正文能被解开（不再是乱码）', () => {
+  const s = extractSnippet(Buffer.from(realMail));
+  assert.ok(s.includes('Melody sent you a message'), '实际输出：' + s.slice(0, 80));
+});
+await ok('零宽字符被清掉', () => {
+  const s = extractSnippet(Buffer.from(realMail));
+  assert.ok(!/[\u034f\u200b-\u200f\u2060\ufeff]/.test(s));
+});
+await ok('能从正文里抓到对话链接', () => {
+  assert.equal(extractLink(Buffer.from(realMail)), 'https://www.etsy.com/conversations/98765');
+});
+await ok('主题能解析出买家名与店铺', () => {
+  const p = parseSubject('Fw: Etsy Conversation with Melody Deichman from FishBoneTreasures');
+  assert.equal(p.buyer, 'Melody Deichman');
+  assert.equal(p.shop, 'FishBoneTreasures');
+});
+await ok('卡片优先显示买家名，按钮用对话链接', () => {
+  const rec = { subject: 'Fw: Etsy Conversation with Melody Deichman from FishBoneTreasures', at: new Date().toISOString() };
+  const card = buildCard(rec, 'Melody sent you a message', 'https://fallback', { link: 'https://www.etsy.com/conversations/98765' });
+  assert.equal(card.title, '买家咨询');
+  assert.ok(JSON.stringify(card.lines).includes('Melody Deichman'));
+  assert.equal(card.url, 'https://www.etsy.com/conversations/98765');
 });
 
 console.log('\n[4] 卡片与推送');
