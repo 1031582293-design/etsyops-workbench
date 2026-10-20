@@ -817,6 +817,7 @@ async function etsyAiImage(prompt, size = '1024x1024', refB64 = '') {
       { name: 'prompt', value: prompt },
       { name: 'size', value: size },
       { name: 'n', value: '1' },
+      { name: 'quality', value: 'high' },
       { name: 'image', filename: 'reference.png', type: 'image/png', buf: Buffer.from(refB64, 'base64') },
     ]);
     url = `${ETSY_AI_BASE_URL}/images/edits`;
@@ -824,7 +825,7 @@ async function etsyAiImage(prompt, size = '1024x1024', refB64 = '') {
       body: mp.body, signal: AbortSignal.timeout(AI_TIMEOUT_MS) };
   } else {
     init = { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, auth),
-      body: JSON.stringify({ model: ETSY_AI_IMAGE_MODEL, prompt, size, n: 1 }),
+      body: JSON.stringify({ model: ETSY_AI_IMAGE_MODEL, prompt, size, n: 1, quality: 'high' }),
       signal: AbortSignal.timeout(AI_TIMEOUT_MS) };
   }
   const r = await etsyAiFetch()(url, init);
