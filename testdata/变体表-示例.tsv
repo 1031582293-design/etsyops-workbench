@@ -1,0 +1,9 @@
+条目编号	变体表(直接复制下面几列到工作台第1步「变体表」)
+CER-HORSE-001	Primary color	SKU	价格	库存
+	Black & Blue	BB	32	2
+	Red & Green	RG	34	1
+
+WOLF-HEAD-001	Primary color	Size	SKU	价格	库存
+	Black	S	WF-B-S	30.70	3
+	Black	M	WF-B-M	31.50	4
+	White	S	WF-W-S	30.70	3

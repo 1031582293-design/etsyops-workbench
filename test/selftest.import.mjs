@@ -208,6 +208,21 @@ console.log('\n【H】AI 返回内容的解析（parseAiCopy）');
   const it2 = r.rows[1];
   ok(it2.materials.length === 1 && it2.materials[0] === 'EVA', '第二行引号字段正常', JSON.stringify(it2.materials));
 }
+/* 【I】给料新列（2026-10-21）：类目关键词 / 是否定制 / 变体维度 / 普通属性 */
+{
+  const tsv = [
+    '编号,图片文件名,类目关键词,价格,数量,制作方,制作时间,是否手工材料,材质,变体维度,是否定制,属性',
+    'CER-HORSE-001,a.jpg,ceramic horse figurine,32,3,i_did,2020_2026,否,Ceramic,"Primary color, Size",是,"Material=Ceramic; Style=Rustic"',
+  ].join('\n');
+  const r = M.parseImportTable(tsv);
+  const it = r.rows[0];
+  ok(it.taxonomy_keyword === 'ceramic horse figurine', '★ 类目关键词解析', it.taxonomy_keyword);
+  ok(it.is_customizable === true, '★ 是否定制「是」→ true', String(it.is_customizable));
+  ok(it.variation_dims.length === 2 && it.variation_dims[0] === 'Primary color' && it.variation_dims[1] === 'Size',
+    '★ 变体维度逗号分隔（引号内逗号不切）', JSON.stringify(it.variation_dims));
+  ok(it.attributes_json === 'Material=Ceramic; Style=Rustic', '★ 普通属性解析', it.attributes_json);
+}
+
 console.log('\n' + '='.repeat(60));
 console.log(`导入器：${pass} 项通过，${fail} 项失败`);
 process.exit(fail ? 1 : 0);

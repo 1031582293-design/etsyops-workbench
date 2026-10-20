@@ -34,6 +34,18 @@ const IMPORT_ALIASES = {
   materials:'materials', 材质:'materials', 材料:'materials', 制作材料:'materials',
   // 类目
   taxonomy_id:'taxonomy_id', 类目id:'taxonomy_id', category:'taxonomy_id', 类目:'taxonomy_id',
+  // 类目关键词（英文物品名）：Agent 自动搜 taxonomy 并选最末级叶子，比手填数字 ID 更省心
+  taxonomy_keyword:'taxonomy_keyword', 类目关键词:'taxonomy_keyword', '类目关键字':'taxonomy_keyword',
+  category_keyword:'taxonomy_keyword',
+  // 个性化定制：是/否 → is_customizable
+  is_customizable:'is_customizable', 是否定制:'is_customizable', 定制:'is_customizable',
+  customizable:'is_customizable', '是否可定制':'is_customizable', 个性化:'is_customizable',
+  // 变体维度（英文属性名，逗号分隔）：Agent 自动匹配类目属性（property_id / value_id）
+  variation_dims:'variation_dims', 变体维度:'variation_dims', '变体属性':'variation_dims',
+  'variation dimensions':'variation_dims',
+  // 普通属性（不做变体，只描述商品特征）：格式「属性名=值」分号分隔，如 Primary color=Blue; Style=Rustic
+  attributes:'attributes_json', 属性:'attributes_json', 普通属性:'attributes_json',
+  '商品属性':'attributes_json', 'attributes':'attributes_json',
   // 物理属性
   weight:'item_weight', 净重:'item_weight', 产品净重:'item_weight', 重量:'item_weight',
   weight_unit:'item_weight_unit', 重量单位:'item_weight_unit',
@@ -238,6 +250,11 @@ function parseImportTable(text) {
       is_supply: parseSupply(get('is_supply')),
       materials: parseTagsCell(get('materials')),
       taxonomy_id: get('taxonomy_id').trim(),
+      // 类目关键词（Agent 自动搜 taxonomy 选叶子）、定制开关、变体维度（英文属性名）
+      taxonomy_keyword: get('taxonomy_keyword').trim(),
+      is_customizable: parseSupply(get('is_customizable')),
+      variation_dims: parseTagsCell(get('variation_dims')),
+      attributes_json: get('attributes_json').trim(),
       //★ get() 要用**别名表右侧的字段名**（parseHeaderRow 返回的 field），
       //   不是别名左侧的表头写法。写错时整列静默读成空 —— 不报错、只是值全丢，
       //   自测就是靠这个断言抓到的。
@@ -255,7 +272,7 @@ function parseImportTable(text) {
       readiness_state_id: get('readiness_state_id').trim(),
       shop_section_id: get('shop_section_id').trim(),
       return_policy_id: get('return_policy_id').trim(),
-      variations_json: get('variations').trim(),
+      variations_json: get('variations_json').trim(),
     };
 
     // 逐行的字段级问题（不阻断导入，但要明确告诉用户哪一行有问题）

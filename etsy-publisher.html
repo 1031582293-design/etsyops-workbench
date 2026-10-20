@@ -265,10 +265,17 @@
         </div>
         <div id="imgPlanBox"></div>
 
+        <div class="subhead" style="margin-top:20px">4. 变体表<span class="hint">有变体的商品才填；Agent 自动把维度名/值名映射到 Etsy 属性</span></div>
+        <textarea id="varTableText" rows="4" placeholder="第一行是维度名 + SKU/价格/库存，之后每行一个组合&#10;Primary color&#9;Size&#9;SKU&#9;价格&#9;库存&#10;Black & Blue&#9;S&#9;BB-S&#9;32&#9;2&#10;Red & Green&#9;M&#9;RG-M&#9;34&#9;1"></textarea>
+        <div class="btnrow">
+          <button class="btn sm" id="btnVarTableParse">解析变体表（到当前条目）</button>
+        </div>
+        <div id="varTableMsg" class="msg"></div>
+
         <div id="importList"></div>
 
         <div class="btnrow" style="margin-top:18px">
-          <button class="btn" id="btnToAi" disabled>下一步：生成 AI 文案 →</button>
+          <button class="btn" id="btnToAi" disabled>下一步：关键词 →</button>
         </div>
       </section>
 
@@ -385,7 +392,7 @@
         </div>
         <div id="checkList"></div>
         <div class="btnrow" style="margin-top:8px">
-          <button class="btn sm" id="btnCheckAll">一键勾选「自动检测已通过」的项</button>
+          <button class="btn sm" id="btnCheckAll">重新检测自动项</button>
           <span class="hint" style="align-self:center" id="checkSummary"></span>
         </div>
 
@@ -727,6 +734,7 @@ let PREF = null;
 let IMAGES = [];   // { filename, data(base64), rank }
 let VARDIMS = [];  // 变体维度 [{ property_id, name, scale_id, values:[{value_id, value}] }]，第 4 步勾选属性值生成
 let VARROWS = [];  // 组合矩阵行 [{ sku, price, quantity }]，对应 VARDIMS 的笛卡尔积
+let ATTRS = [];    // 普通属性（不做变体）[{ property_id, name, value_ids:[], values:[值] }]，从给料「属性」列自动映射
 let LAST_LISTING = 0;
 let CURRENT_STEP = 1;
 
@@ -847,6 +855,7 @@ async function loadQuota(){
 /* ---------- 步骤切换 ---------- */
 function goto(n){
   CURRENT_STEP = n;
+  if (n === 4) autoPickTaxonomy();   // 进类目页：条目有「类目关键词」就自动搜 + 选最末级叶子
   if (n === 5) renderChecklist();   // 进入商品资料页时重算核对清单
   document.querySelectorAll('.step').forEach(s => s.classList.toggle('hidden', Number(s.dataset.step) !== n));
   document.querySelectorAll('.step-chip').forEach(c => c.classList.toggle('active', Number(c.dataset.step) === n));
@@ -942,6 +951,32 @@ function fillSelect(id, arr, placeholder){
 
 /* ---------- 步骤 2：类目 ---------- */
 let PICKED_TAX = null;
+/* ---------- 类目与属性：搜索 + 自动选叶子 + 自动变体映射 ---------- */
+
+/* 点选一个类目结果（btnTax 手动点、autoPickTaxonomy 自动选都走这里） */
+function pickTaxonomyItem(r){
+  PICKED_TAX = { id: Number(r.taxonomy_id), name: r.full_path };
+  const el = document.getElementById('taxPicked');
+  el.style.display = 'block';
+  el.innerHTML = '<b>已选类目：</b>' + esc(r.full_path) + '（taxonomy_id = ' + r.taxonomy_id + '）'
+    + (r.is_leaf ? '' : ' <span style="color:var(--warn)">⚠ 非叶子，建议手动选更细</span>');
+  document.getElementById('btnProp').disabled = false;
+  log('已选类目 ' + r.full_path + ' → ' + r.taxonomy_id, 's');
+  loadProperties();
+}
+
+function renderTaxResults(results, pickedId){
+  const box = document.getElementById('taxResults');
+  box.innerHTML = results.map(r =>
+    '<div class="tax-item' + (r.taxonomy_id === pickedId ? ' picked' : '') + '" data-id="' + r.taxonomy_id + '" data-name="' + esc(r.full_path) + '">'
+    + '<div>' + esc(r.name) + (r.is_leaf ? '' : ' <span style="color:var(--text-faint);font-size:11px">（可继续往下细分）</span>') + '</div>'
+    + '<div class="id">taxonomy_id = ' + r.taxonomy_id + '</div></div>').join('');
+  box.querySelectorAll('.tax-item').forEach(it => it.addEventListener('click', () => {
+    const r = results.find(x => x.taxonomy_id === Number(it.dataset.id));
+    if (r) pickTaxonomyItem(r);
+  }));
+}
+
 document.getElementById('btnTax').addEventListener('click', async () => {
   const q = document.getElementById('taxQ').value.trim();
   const box = document.getElementById('taxResults');
@@ -954,31 +989,126 @@ document.getElementById('btnTax').addEventListener('click', async () => {
       box.innerHTML = '<div class="msg show warn">没搜到。换个更简短的英文词试试，比如 horse / figurine / ceramic。</div>';
       return;
     }
-    box.innerHTML = d.results.map(r =>
-      '<div class="tax-item" data-id="' + r.taxonomy_id + '" data-name="' + esc(r.full_path) + '">' +
-      '<div>' + esc(r.name) + (r.is_leaf ? '' : ' <span style="color:var(--text-faint);font-size:11px">（可继续往下细分）</span>') + '</div>' +
-      '<div class="id">taxonomy_id = ' + r.taxonomy_id + '</div></div>').join('');
-    box.querySelectorAll('.tax-item').forEach(it => it.addEventListener('click', () => {
-      PICKED_TAX = { id: Number(it.dataset.id), name: it.dataset.name };
-      const el = document.getElementById('taxPicked');
-      el.style.display = 'block';
-      el.innerHTML = '<b>已选类目：</b>' + esc(it.dataset.name) + '（taxonomy_id = ' + PICKED_TAX.id + '）';
-      document.getElementById('btnProp').disabled = false;
-      log('已选类目 ' + it.dataset.name + ' → ' + PICKED_TAX.id, 's');
-    }));
+    renderTaxResults(d.results, PICKED_TAX ? PICKED_TAX.id : null);
   } catch(e){
     box.innerHTML = '<div class="msg show err">' + esc(e.message) + '</div>';
     logErr(e);
   }
 });
 
-document.getElementById('btnProp').addEventListener('click', async () => {
+/* 进第 4 步时自动触发：条目带「类目关键词」就自动搜 taxonomy，选最末级叶子 */
+async function autoPickTaxonomy(){
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  const kw = it && it.taxonomy_keyword;
+  if (!kw) return;
+  if (PICKED_TAX) return;   // 已选过就不再自动改
+  const box = document.getElementById('taxResults');
+  const qbox = document.getElementById('taxQ');
+  if (qbox && !qbox.value) qbox.value = kw;
+  box.innerHTML = '<div class="msg show info">自动搜索类目「' + esc(kw) + '」…</div>';
+  try {
+    const d = await apiCall('/api/etsy/taxonomy?q=' + encodeURIComponent(kw), { timeout: 40000 });
+    const results = d.results || [];
+    if (!results.length){
+      box.innerHTML = '<div class="msg show warn">类目关键词「' + esc(kw) + '」没搜到，请手动搜索。</div>';
+      return;
+    }
+    // ★ 选最末级叶子：is_leaf=true 的第一个；没有叶子就退而取第一个（并标非叶子警告）
+    const leaf = results.find(r => r.is_leaf) || results[0];
+    renderTaxResults(results, leaf.taxonomy_id);
+    pickTaxonomyItem(leaf);
+    log('自动选类目「' + kw + '」→ ' + leaf.full_path, 's');
+  } catch(e){
+    box.innerHTML = '<div class="msg show err">自动搜类目失败：' + esc(e.message) + '</div>';
+    logErr(e);
+  }
+}
+
+/* 模糊匹配辅助：去大小写、去非字母数字，避免「Primary color」vs「primary color」对不上 */
+function normMatch(x){ return String(x || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+/* ★ 变体自动映射：给料变体表的「维度名/值名」→ 类目属性的 property_id / value_id。
+ * 匹配不上就标红提示人工，绝不猜 ID。 */
+function autoMapVariations(properties){
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  const vt = it && it._varTable;
+  if (!vt || !vt.dims.length || !vt.rows.length) return;
+  const dims = [];
+  const problems = [];
+  vt.dims.forEach(dimName => {
+    const p = properties.find(x => normMatch(x.name) === normMatch(dimName));
+    if (!p){ problems.push('维度「' + dimName + '」没找到对应属性'); return; }
+    const vals = [];
+    vt.rows.forEach(r => {
+      const vi = vt.dims.indexOf(dimName);
+      const valName = (r.values || [])[vi];
+      if (!valName) return;
+      const pv = (p.possible_values || []).find(x => normMatch(x.name) === normMatch(valName));
+      if (pv && !vals.some(x => x.value_id === pv.value_id)) vals.push({ value_id: pv.value_id, value: pv.name });
+      else if (!pv && !problems.includes('值「' + valName + '」')) problems.push('值「' + valName + '」在「' + p.name + '」里没找到');
+    });
+    if (vals.length) dims.push({ property_id: p.property_id, name: p.name, scale_id: null, values: vals });
+  });
+  if (dims.length){
+    VARDIMS = dims;
+    VARROWS = vt.rows.map(r => ({ sku: r.sku || '', price: r.price || '', quantity: r.quantity || '' }));
+    renderVarRows();
+    log('变体自动映射：' + VARDIMS.map(dd => dd.name + '(' + dd.values.length + ')').join('、') + ' → ' + VARROWS.length + ' 组合', 's');
+  }
+  const mm = document.getElementById('varTableMsg');
+  if (problems.length){
+    showMsg(mm, 'warn', '<b>变体自动映射有 ' + problems.length + ' 处没对上：</b>' + problems.map(esc).join('；')
+      + '。请核对变体表的维度名/值名是否和 Etsy 属性名一致（建议用英文），或在下面属性列表手动勾选。');
+  } else if (dims.length){
+    showMsg(mm, 'ok', '变体表已自动映射到 Etsy 属性（' + dims.length + ' 维度 × ' + VARROWS.length + ' 组合）。');
+  }
+}
+
+/* 解析「属性」列：Primary color=Blue; Style=Rustic → [{name, value}] */
+function parseAttributesJson(raw){
+  return String(raw || '').split(/[;；]/).map(s => s.trim()).filter(Boolean).map(s => {
+    const m = s.split(/[:=]/);
+    return { name: (m[0] || '').trim(), value: (m[1] || '').trim() };
+  }).filter(x => x.name && x.value);
+}
+
+/* ★ 普通属性自动映射（不做变体，只描述商品特征）：
+ * 给料「属性」列的「属性名=值」→ property_id / value_id，提交时写进 listing 属性。
+ * 有预设值的匹配 value_id；无预设值的属性直接用自定义值。 */
+function autoMapAttributes(properties){
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  const raw = it && (it.attributes_json || '');
+  if (!raw){ ATTRS = []; return; }
+  const pairs = parseAttributesJson(raw);
+  const attrs = [];
+  const problems = [];
+  pairs.forEach(p => {
+    const prop = properties.find(x => normMatch(x.name) === normMatch(p.name));
+    if (!prop){ problems.push('属性「' + p.name + '」没找到'); return; }
+    const pv = (prop.possible_values || []).find(x => normMatch(x.name) === normMatch(p.value));
+    if (pv){
+      attrs.push({ property_id: prop.property_id, name: prop.name, value_ids: [pv.value_id], values: [pv.name] });
+    } else if (Array.isArray(prop.possible_values) && prop.possible_values.length){
+      problems.push('属性值「' + p.value + '」在「' + prop.name + '」里没找到');
+    } else {
+      attrs.push({ property_id: prop.property_id, name: prop.name, value_ids: [], values: [p.value] });
+    }
+  });
+  ATTRS = attrs;
+  if (problems.length) log('普通属性映射有 ' + problems.length + ' 处没对上：' + problems.join('；'), 'w');
+  else if (attrs.length) log('普通属性自动映射：' + attrs.map(a => a.name + '=' + a.values[0]).join('、'), 's');
+}
+
+/* 查类目属性：渲染属性列表（勾选值=设变体维度，人工兜底）+ 自动变体映射 */
+async function loadProperties(){
   if (!PICKED_TAX) return;
   const box = document.getElementById('propList');
   box.innerHTML = '<div class="msg show info">查询中…</div>';
   try {
     const d = await apiCall('/api/etsy/properties?taxonomy_id=' + PICKED_TAX.id, { timeout: 40000 });
     if (!d.properties || !d.properties.length){ box.innerHTML = '<div class="msg show warn">该类目没有可选属性。</div>'; return; }
+    autoMapVariations(d.properties);
+    autoMapAttributes(d.properties);
     box.innerHTML = d.properties.map(p => {
       const dim = VARDIMS.find(v => v.property_id === p.property_id);
       const selIds = dim ? dim.values.map(x => x.value_id) : [];
@@ -992,13 +1122,13 @@ document.getElementById('btnProp').addEventListener('click', async () => {
                   '<label style="font-size:11.5px;display:inline-flex;align-items:center;gap:3px;border:1px solid var(--border);border-radius:6px;padding:2px 7px;cursor:pointer">'
                   + '<input type="checkbox" data-var-dim="' + p.property_id + '" data-name="' + esc(p.name) + '"'
                   + ' data-vid="' + v.value_id + '" data-vname="' + esc(v.name) + '"'
-                  + (selIds.includes(v.value_id) ? ' checked' : '') + ' />' + esc(v.name) + '</label>').join('')
+                  + (selIds.includes(v.value_id) ? ' checked' : '') + ' />' + esc(v.name)
+                  + '<span style="color:var(--text-faint);font-size:10px">(' + v.value_id + ')</span></label>').join('')
               + '<span style="font-size:11px;color:var(--text-faint)">勾选 = 设为变体值</span>'
               + '</div>'
             : '<div style="font-size:11px;color:var(--text-faint);margin-top:4px">（无预设值，不能作变体维度）</div>')
         + '</div>';
     }).join('');
-    // ★ 勾选属性值 = 设置变体维度（SOP 06）。property_id / value_id 直接来自本次查询，全程无猜测。
     box.querySelectorAll('[data-var-dim]').forEach(cb => cb.addEventListener('change', () => {
       const pid = Number(cb.dataset.varDim);
       const name = cb.dataset.name;
@@ -1021,16 +1151,18 @@ document.getElementById('btnProp').addEventListener('click', async () => {
         showMsg(document.getElementById('msgVar'), 'err', 'Etsy 最多支持 3 个变体维度，不能再加。');
         return;
       }
-      VARROWS = [];   // 组合变了，清空旧的价格/库存行
+      VARROWS = [];
       renderVarRows();
       log('变体维度更新：' + (VARDIMS.map(dd => dd.name + '(' + dd.values.length + ')').join('、') || '已清空'), 's');
     }));
-    log('类目 ' + PICKED_TAX.id + ' 下有 ' + d.properties.length + ' 个属性（勾选属性值即可设为变体维度）', 's');
+    log('类目 ' + PICKED_TAX.id + ' 下有 ' + d.properties.length + ' 个属性（可勾选属性值设为变体维度）', 's');
   } catch(e){
     box.innerHTML = '<div class="msg show err">' + esc(e.message) + '</div>';
     logErr(e);
   }
-});
+}
+
+document.getElementById('btnProp').addEventListener('click', loadProperties);
 
 /* ---------- 步骤 3：商品资料 + 实时字符校验 ---------- */
 const fTitle = document.getElementById('fTitle');
@@ -1173,6 +1305,8 @@ function collectForm(){
     //   /api/etsy/properties 的真实查询结果，没有猜测成分。
     variation_dimensions: VARDIMS.map(d => ({ property_id: d.property_id, name: d.name, scale_id: d.scale_id, values: d.values })),
     variation_rows: VARROWS.map(r => ({ sku: r.sku || '', price: r.price, quantity: r.quantity })),
+    // 普通属性（SOP 06 属性项）：从给料「属性」列自动映射，property_id/value_id 来自真实查询
+    properties: ATTRS.map(a => ({ property_id: a.property_id, value_ids: a.value_ids || [], values: a.values || [] })),
     // 交付文件只在数字商品时用；base64 只在真要建草稿时才带上
     digital_files: isDigital()
       ? DIGITAL_FILES.map(f => ({ name: f.name, size: f.size, data: f.data }))
@@ -1209,6 +1343,37 @@ drop.addEventListener('drop', e => {
 });
 fileInput.addEventListener('change', () => { rememberPickedFiles(fileInput.files); addFiles(fileInput.files); });
 
+/* ★ 去掉图片 EXIF（含 GPS 定位）：Canvas 重绘一遍。
+ * 零依赖、浏览器原生。重绘会去掉所有元数据（GPS/拍摄时间/相机参数），
+ * 方向由浏览器按原图 EXIF Orientation 自动摆正，所以方向不会歪。
+ * 失败时返回 null（调用方回退到原始数据，绝不因为去 EXIF 失败而丢图）。 */
+function stripExif(file){
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const type = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+        canvas.toBlob(blob => {
+          if (!blob){ resolve(null); return; }
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result).split(',')[1]);
+          fr.onerror = () => resolve(null);
+          fr.readAsDataURL(blob);
+        }, type, 0.92);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    } catch(e){ resolve(null); }
+  });
+}
+
 function addFiles(files){
   const m = document.getElementById('msgImg');
   const arr = Array.from(files || []);
@@ -1220,15 +1385,20 @@ function addFiles(files){
     showMsg(m, 'err', '图片最多 20 张，当前已有 ' + IMAGES.length + ' 张。');
     return;
   }
-  Promise.all(arr.map(f => new Promise(res => {
+  Promise.all(arr.map(f => new Promise(async res => {
+    // ★ 先去掉 EXIF（含 GPS），失败则回退到原始数据
+    const stripped = await stripExif(f);
+    if (stripped){ res({ filename: f.name, data: stripped, stripped: true }); return; }
     const r = new FileReader();
-    r.onload = () => res({ filename: f.name, data: String(r.result).split(',')[1] });
+    r.onload = () => res({ filename: f.name, data: String(r.result).split(',')[1], stripped: false });
     r.onerror = () => res(null);
     r.readAsDataURL(f);
   }))).then(list => {
     list.filter(Boolean).forEach(o => IMAGES.push(o));
     renderThumbs();
-    log('已加载 ' + list.filter(Boolean).length + ' 张图片，共 ' + IMAGES.length + ' 张');
+    const n = list.filter(Boolean).length;
+    const s = list.filter(o => o && o.stripped).length;
+    log('已加载 ' + n + ' 张图片，共 ' + IMAGES.length + ' 张（' + s + ' 张已去除 EXIF/GPS）');
   });
 }
 
@@ -1796,6 +1966,7 @@ function saveCurrentForm(){
     const f = collectImportRowForm();
     f._vardims = JSON.parse(JSON.stringify(VARDIMS || []));
     f._varrows = JSON.parse(JSON.stringify(VARROWS || []));
+    f._attrs = JSON.parse(JSON.stringify(ATTRS || []));
     f._tax = PICKED_TAX ? { id: PICKED_TAX.id, name: PICKED_TAX.name } : null;
     it._form = f;
   } catch(e){ /* 表单未就绪时忽略 */ }
@@ -1822,9 +1993,21 @@ function switchToItem(idx){
   // 变体
   VARDIMS = (it._form && Array.isArray(it._form._vardims)) ? JSON.parse(JSON.stringify(it._form._vardims)) : [];
   VARROWS = (it._form && Array.isArray(it._form._varrows)) ? JSON.parse(JSON.stringify(it._form._varrows)) : [];
+  ATTRS = (it._form && Array.isArray(it._form._attrs)) ? JSON.parse(JSON.stringify(it._form._attrs)) : [];
   renderVarRows();
-  // 个性化定制开关
-  if (document.getElementById('fCustom')) document.getElementById('fCustom').checked = !!(it._form && it._form.is_customizable);
+  // 个性化定制开关（优先编辑过的 _form，其次给料表格「是否定制」列）
+  if (document.getElementById('fCustom')){
+    const cust = (it._form && typeof it._form.is_customizable === 'boolean')
+      ? it._form.is_customizable : !!it.is_customizable;
+    document.getElementById('fCustom').checked = cust;
+  }
+  // 变体表回填（给料阶段粘的变体表，跟着条目走）
+  const vt = it._varTable;
+  const vtBox = document.getElementById('varTableText');
+  if (vtBox) vtBox.value = vt
+    ? vt.dims.concat(['SKU', '价格', '库存']).join('\t') + '\n'
+      + vt.rows.map(r => r.values.concat([r.sku, r.price, r.quantity]).join('\t')).join('\n')
+    : '';
   // 图片按文件名匹配
   const matched = it._matched || matchPickedImages(it.images);
   if (matched.length) setPickedFiles(matched);
@@ -1876,6 +2059,10 @@ function renderChecklist(){
   const it = IMPORT_BATCH[CURRENT_IDX];
   if (!it){ box.innerHTML = '<div class="msg info">先在第 1 步解析表格。</div>'; return; }
   const st = collectCheckState();
+  // ★ 自动项（字数/标签/价格/类目/图片/profile）核验通过的直接打勾，
+  //   不需要人逐个点；只有「人工判断」项（制作者/图片权利/逐句核对）才需要人勾。
+  it._check = it._check || {};
+  st.auto.forEach(x => { if (x.ok) it._check[x.k] = true; });
   const chk = it._check || {};
   const row = (k, label, auto, note) =>
     '<tr><td style="width:64%">' + esc(label) + '</td>'
@@ -1911,11 +2098,9 @@ function updateCheckSummary(){
 document.getElementById('btnCheckAll').addEventListener('click', () => {
   const it = IMPORT_BATCH[CURRENT_IDX];
   if (!it) return;
+  renderChecklist();   // 重新检测：自动项通过的会自动打勾
   const st = collectCheckState();
-  it._check = it._check || {};
-  st.auto.forEach(x => { if (x.ok) it._check[x.k] = true; });
-  renderChecklist();
-  log('已勾选 ' + st.auto.filter(x => x.ok).length + ' 项自动检测通过的核对项', 's');
+  log('已重新检测，自动项通过 ' + st.auto.filter(x => x.ok).length + ' / ' + st.auto.length + ' 项', 's');
 });
 
 document.getElementById('btnPrevItem').addEventListener('click', () => switchToItem(CURRENT_IDX - 1));
@@ -1965,12 +2150,13 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
 /* 模板：第 1 行列名、第 2 行填法说明、第 3 行示例（示例行用前须删除） */
 document.getElementById('btnImportTpl').addEventListener('click', () => {
   const rows = [
-    ['图片文件名', '价格', '数量', '制作方', '制作时间', '材质', '产品净重', '长度', '宽度', '高度', '适合人群', '类目ID', '标题', '描述', '标签', '生产伙伴'],
-    ['【必填】逗号分隔多个文件名', '【必填】美元数字', '【必填】正整数', 'i_did / someone_else / collective',
-     'made_to_order / 2020_2026', '逗号分隔', '克或千克', 'cm', 'cm', 'cm', '非 Etsy 字段，建议写进描述',
-     '搜类目后填 ID', '可留空由 AI 生成', '可留空由 AI 生成', '逗号分隔，最多 13 个', '可留空'],
-    ['6-狼头套-1.jpg', '30.70', '10', 'someone_else', '2020_2026', 'EVA, 三明治网布', '2250', '50', '50', '30',
-     '标准尺寸，配有可调节海绵块', '', '（示例行，用前请删除）', '（示例行）', 'wolf fursuit head, wolf mask', ''],
+    ['图片文件名', '类目关键词', '价格', '数量', '制作方', '制作时间', '材质', '变体维度', '是否定制', '产品净重', '长度', '宽度', '高度', '适合人群', '类目ID', '标题', '描述', '标签', '生产伙伴'],
+    ['【必填】逗号分隔多个文件名', '英文物品名，Agent 自动搜类目选叶子', '【必填】美元数字', '【必填】正整数', 'i_did / someone_else / collective',
+     'made_to_order / 2020_2026', '逗号分隔', '英文属性名逗号分隔，如 Primary color, Size', '是 / 否',
+     '克或千克', 'cm', 'cm', 'cm', '非 Etsy 字段，建议写进描述',
+     '留空则用类目关键词自动查', '可留空由 AI 生成', '可留空由 AI 生成', '逗号分隔，最多 13 个', '可留空'],
+    ['wolf-head-01.jpg', 'fursuit head base', '30.70', '10', 'someone_else', '2020_2026', 'EVA foam, sandwich mesh', 'Primary color, Size', '否', '2250', '50', '50', '30',
+     'Standard size with adjustable foam blocks', '', '（示例行，用前请删除）', '（示例行）', 'wolf fursuit head, wolf mask', ''],
   ];
   const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
   // 带 BOM：Excel / WPS 打开中文 CSV 才不会乱码
@@ -2069,11 +2255,48 @@ function renderImportList() {
 document.getElementById('btnImportParse').addEventListener('click', doParseImport);
 
 document.getElementById('btnToAi').addEventListener('click', () => {
-  goto(3);
-  if (!AI_RESULTS.length) {
-    showAiMsg('info', '已解析 ' + IMPORT_BATCH.length
-      + ' 条。可以点「批量生成」让 AI 写标题/描述/标签，也可以直接「跳过 AI」手工填。');
+  goto(2);
+  kwMsg('info', '已解析 ' + IMPORT_BATCH.length
+    + ' 条。先在这里出关键词候选 + EverBee 核实，再去第 3 步生成文案。');
+});
+
+/* ---------- 变体表解析（给料第 4 项）----------
+ * 格式：第一行「维度名… | SKU | 价格 | 库存」，之后每行一个组合。
+ * 解析成 { dims:[维度名], rows:[{values:[值], sku, price, quantity}] }，存到当前条目。
+ * 第 4 步选好类目后，Agent 用维度名匹配 property、值名匹配 value_id，自动生成变体。 */
+function parseVarTable(raw){
+  const lines = String(raw || '').split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return { ok:false, error:'粘贴的内容是空的' };
+  const split = l => l.split(/\t|,(?![^"]*")/).map(c => c.trim().replace(/^"|"$/g, ''));
+  const header = split(lines[0]);
+  const skuCol = header.findIndex(h => /^(sku|价格|price|库存|quantity|qty|数量)$/i.test(h));
+  if (skuCol < 0) return { ok:false, error:'表头要包含 SKU、价格、库存 三列（维度名列在前，SKU/价格/库存 在后）' };
+  const priceCol = header.findIndex(h => /^(价格|price)$/i.test(h));
+  const qtyCol = header.findIndex(h => /^(库存|quantity|qty|数量)$/i.test(h));
+  if (priceCol < 0 || qtyCol < 0) return { ok:false, error:'表头要包含「价格」「库存」两列' };
+  const dims = header.slice(0, skuCol).filter(Boolean);
+  if (!dims.length) return { ok:false, error:'没有维度列（SKU 前面至少一列维度名）' };
+  const rows = [];
+  for (let i = 1; i < lines.length; i++){
+    const c = split(lines[i]);
+    if (c.every(x => !x)) continue;
+    const values = c.slice(0, skuCol).map(x => x || '').slice(0, dims.length);
+    rows.push({ values, sku: c[skuCol] || '', price: c[priceCol] || '', quantity: c[qtyCol] || '' });
   }
+  if (!rows.length) return { ok:false, error:'除了表头没有数据行' };
+  return { ok:true, dims, rows };
+}
+
+document.getElementById('btnVarTableParse').addEventListener('click', () => {
+  const m = document.getElementById('varTableMsg');
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  if (!it) { showMsg(m, 'warn', '先解析上架表格、选中一个条目，再粘变体表。'); return; }
+  const r = parseVarTable(document.getElementById('varTableText').value);
+  if (!r.ok) { showMsg(m, 'err', esc(r.error)); return; }
+  it._varTable = { dims: r.dims, rows: r.rows };
+  showMsg(m, 'ok', '变体表已存到条目「' + esc(it.sku || ('第 ' + it._row + ' 行')) + '」：'
+    + r.dims.length + ' 个维度 × ' + r.rows.length + ' 个组合。第 4 步选好类目后会自动映射到 Etsy 属性。');
+  log('变体表已解析：' + r.dims.join(' / ') + ' → ' + r.rows.length + ' 组合', 's');
 });
 
 /* ================================================================
