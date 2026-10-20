@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { hostname as osHostname } from 'node:os';
 import { execSync } from 'node:child_process';
 import * as etsy from './etsy-api.js';
+import * as everbee from './etsy-everbee.js';
 import * as mail from './mail-ingest.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)));
@@ -160,6 +161,23 @@ const ETSY_TOKEN_FILE = join(DATA_DIR, 'etsy-token.json');
 const ETSY_OAUTH_STATE_FILE = join(DATA_DIR, 'etsy-oauth-state.json');
 const etsyStore = etsy.createTokenStore(ETSY_TOKEN_FILE, { readFileSync, writeFileSync, mkdirSync, renameSync });
 const etsyLog = (...a) => console.log('[etsy]', ...a);
+
+/* ---------- EverBee Research MCP（直连，不走官方 REST 审核） ----------
+   REST 那条路要求应用过人工审核，未审核一律 401 "App is not approved for Open API access"；
+   MCP 是官方给 AI 工具用的通道，标准 OAuth、支持动态注册、不需要审核也不需要 client_secret。
+   状态与 token 落 data/everbee-mcp.json（data/ 已 gitignore，两台机器各授权各的）。 */
+const EVERBEE_MCP_FILE = join(DATA_DIR, 'everbee-mcp.json');
+const everbeeLog = (...a) => console.log('[everbee]', ...a);
+const everbeeClient = everbee.createEverbee({ storeFile: EVERBEE_MCP_FILE, log: everbeeLog });
+
+/* 回调地址从请求头推导：本机 http://127.0.0.1:3000，线上 https://api.xxx.com。
+   为什么不写死 .env：同一份代码要在操作者 Windows（隧道域名）和学员本机（localhost）都能用。 */
+function everbeeRedirectUri(req) {
+  const host = (req.headers['x-forwarded-host'] || req.headers.host || '127.0.0.1:3000').split(',')[0].trim();
+  const proto = (req.headers['x-forwarded-proto'] || '').split(',')[0].trim()
+    || (/^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host) ? 'http' : 'https');
+  return proto + '://' + host + '/api/everbee/callback';
+}
 
 // ★ 自动发现到的 shop_id 也落盘（data/ 已gitignore）。
 //   为什么不在 .env 里：Etsy 界面上任何地方都不显示数字 shop_id，让操作者手工找不现实。
@@ -789,7 +807,12 @@ async function handleApi(req, res) {
   //   排查「授权失败」时往往还没配好凭证/没授权，那时正是最需要用它的时候。
   // whoami 与 connectivity 一样是纯诊断（不碰店铺数据），放在免 key 白名单里
   // diag/logs 也是免key：排障时常常正好没配好凭证/没授权，那时最需要看日志
-  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status', '/api/etsy/connectivity', '/api/etsy/whoami', '/api/diag/logs'];
+  const ETSY_OPEN_PATHS = ['/api/etsy/callback', '/api/etsy/oauth/callback', '/api/etsy/status', '/api/etsy/connectivity', '/api/etsy/whoami', '/api/diag/logs',
+    // EverBee 三个路径同样免 key：
+    //  - status 只返回布尔/到期时间，前端首屏要靠它决定显示「未连接 / 已连接」
+    //  - auth 是浏览器整页跳转，地址栏里带不了 x-api-key
+    //  - callback 是 EverBee 跳回来的，更不可能带 key；安全性由 state 校验承担
+    '/api/everbee/status', '/api/everbee/auth', '/api/everbee/callback'];
   // ★ AI 队列的三个路径也免key：AI 没配好时队列根本跑不起来，
   //   那正是最需要看它报什么的时候（2026-10-07 加，之前只写了注释没真加，队列在排查时完全不可见）。
   const ETSY_AI_BATCH_OPEN = p === '/api/etsy/ai/batch' || p === '/api/etsy/ai/batch/stop' || p === '/api/etsy/ai/check';
@@ -1829,6 +1852,84 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
     });
   }
 
+  /* ================= EverBee（Research MCP 直连） =================
+     为什么不走 REST：REST 要应用过人工审核，未审核一律 401；
+     MCP 只需店主浏览器点一次「授权」，token 有效期 60 天，到期自动续。
+     token 只落在服务端 data/everbee-mcp.json，前端永远拿不到。 */
+  if (p === '/api/everbee/status' && req.method === 'GET') {
+    try {
+      const st = await everbeeClient.status();
+      return json(res, 200, Object.assign({
+        ok: true, endpoint: everbee.MCP_ENDPOINT, scope: everbee.SCOPE,
+        note: st.authorized ? '' : '还没连接 EverBee。点「连接 EverBee」→ 登录 → 授权，一次授权可用 60 天。',
+      }, st));
+    } catch (e) {
+      return json(res, 500, { ok: false, error: 'everbee_status_failed', note: String((e && e.message) || e) });
+    }
+  }
+
+  // 发起授权：302 跳到 EverBee 授权页（浏览器整页跳转，所以免 API key）
+  if (p === '/api/everbee/auth' && req.method === 'GET') {
+    try {
+      const redirectUri = everbeeRedirectUri(req);
+      const url = await everbeeClient.authUrl(redirectUri);
+      everbeeLog('发起授权，redirect=' + redirectUri);
+      res.writeHead(302, { Location: url, 'Cache-Control': 'no-store' });
+      return res.end();
+    } catch (e) {
+      return json(res, 500, { ok: false, error: 'everbee_auth_failed', note: String((e && e.message) || e) });
+    }
+  }
+
+  // 授权回调：拿到 code 立刻换 token（授权码寿命只有 1~2 分钟，慢一步就 invalid_grant）
+  if (p === '/api/everbee/callback' && req.method === 'GET') {
+    const u = new URL(req.url, 'http://localhost');
+    const code = u.searchParams.get('code') || '';
+    const state = u.searchParams.get('state') || '';
+    const err = u.searchParams.get('error') || '';
+    if (err) return htmlPage(res, 400, 'EverBee 授权被拒绝', 'EverBee 返回：' + err);
+    if (!code) return htmlPage(res, 400, '回调缺少 code', '没有收到授权码，请重新点「连接 EverBee」。');
+    try {
+      const tok = await everbeeClient.exchangeCode(code, state);
+      const days = tok && tok.expiresAt ? Math.max(0, Math.round((tok.expiresAt - Date.now()) / 86400000)) : 60;
+      return htmlPage(res, 200, 'EverBee 已连接', '授权成功，有效期约 ' + days + ' 天。可以关掉这个页面，回到工作台了。');
+    } catch (e) {
+      everbeeLog('授权失败：' + (e && e.message));
+      return htmlPage(res, 400, 'EverBee 授权失败', String((e && e.message) || e));
+    }
+  }
+
+  // 批量查词：body { terms: ["a","b"], params?: {...} }
+  if (p === '/api/everbee/keywords' && req.method === 'POST') {
+    let body;
+    try { body = await readJson(req); }
+    catch (e) { return json(res, 400, { ok: false, error: 'bad_json', note: String((e && e.message) || e) }); }
+    const terms = Array.isArray(body.terms) ? body.terms.map((x) => String(x || '').trim()).filter(Boolean) : [];
+    if (!terms.length) return json(res, 400, { ok: false, error: 'no_terms', note: 'terms 为空：先把候选词填进词池再核实。' });
+    if (terms.length > 50) return json(res, 400, { ok: false, error: 'too_many_terms', note: '一次最多查 50 个词（40 个候选 + 余量）。' });
+    const params = (body.params && typeof body.params === 'object') ? body.params : {};
+    try {
+      const t0 = Date.now();
+      const results = await everbeeClient.lookup(terms, params);
+      const okCount = results.filter((r) => r.ok).length;
+      return json(res, 200, {
+        ok: true, total: terms.length, okCount, failed: terms.length - okCount,
+        ms: Date.now() - t0,
+        note: okCount === terms.length ? '' : (terms.length - okCount) + ' 个词查询失败，见 results[].error',
+        results,
+      });
+    } catch (e) {
+      const code = (e && e.code) === 'everbee_not_authorized' ? 401 : 502;
+      return json(res, code, { ok: false, error: (e && e.code) || 'everbee_keywords_failed', note: String((e && e.message) || e) });
+    }
+  }
+
+  // 断开本地保存的 token（EverBee 侧仍可在账号设置里撤销）
+  if (p === '/api/everbee/revoke' && req.method === 'POST') {
+    try { return json(res, 200, Object.assign({ ok: true }, everbeeClient.revokeLocal())); }
+    catch (e) { return json(res, 500, { ok: false, note: String((e && e.message) || e) }); }
+  }
+
   // 授权状态自检：不消耗任何 Etsy 额度，前端首屏就调它决定显示哪一屏
   if (p === '/api/etsy/status' && req.method === 'GET') {
     return json(res, 200, Object.assign({ ok: true, serverVersion: SERVER_VERSION }, etsyAuthState()));
@@ -2683,6 +2784,23 @@ a{display:inline-block;margin-top:18px;font-size:14px;color:#2563eb;text-decorat
 <a href="https://etsyops-workbench.pages.dev/">← 回到工作台</a></div></body></html>`;
   const buf = Buffer.from(html, 'utf8');
   res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': buf.length,
+    'Cache-Control': 'no-store',
+  });
+  res.end(buf);
+}
+
+/* 极简 HTML 响应（EverBee 授权回调用）：只需告诉用户成没成，不引前端框架 */
+function htmlPage(res, code, title, detail) {
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const body = '<!doctype html><meta charset="utf-8"><title>' + esc(title) + '</title>'
+    + '<div style="max-width:560px;margin:12vh auto;font:15px/1.7 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#222;padding:0 24px">'
+    + '<h2 style="font-size:20px;margin:0 0 10px">' + esc(title) + '</h2>'
+    + '<p style="color:#555;margin:0">' + esc(detail) + '</p></div>';
+  const buf = Buffer.from(body, 'utf8');
+  res.writeHead(code, {
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': buf.length,
     'Cache-Control': 'no-store',
