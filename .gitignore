@@ -41,3 +41,6 @@ SETUP-SUMMARY.md
 
 # 隧道运行日志（cloudflared 写入，持续增长；不能 rm 只能截断，故不入库）
 tunnel.log
+
+# EverBee 自测临时状态文件
+.tmp-everbee-*

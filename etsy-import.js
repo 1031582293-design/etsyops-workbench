@@ -170,7 +170,33 @@ function parseImportTable(text) {
   const lines = raw.split('\n').filter(l => l.trim());
   const delim = lines[0].includes('\t') ? '\t' : (lines[0].includes(',') ? ',' : '\t');
 
-  const cells = lines.map(l => l.split(delim).map(c => c.trim()));
+  /* 引号感知切分：CSV 里 "EVA, 三明治网布" 这种带逗号的字段，
+     直接 split 会把一格切成两格，后面所有列全部错位（真实踩过：
+     解析结果里材质显示成 "EVA、净重列拿到 g）。引号内的分隔符不切，
+     "" 转义成 "。没有引号的行走原来的快速路径。 */
+  function splitLine(line) {
+    if (!line.includes('"')) return line.split(delim).map(c => c.trim());
+    const out = [];
+    let cur = '';
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQ) {
+        if (ch === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; }
+          else inQ = false;
+        } else cur += ch;
+      } else if (ch === '"') {
+        inQ = true;
+      } else if (ch === delim) {
+        out.push(cur.trim()); cur = '';
+      } else cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+  }
+
+  const cells = lines.map(splitLine);
 
   const cols = parseHeaderRow(cells[0]);
   if (!cols.length) {

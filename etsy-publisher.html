@@ -260,7 +260,7 @@
         <div id="imgPurposes"></div>
         <div id="msgImg" class="msg"></div>
         <div class="btnrow" style="margin-top:8px">
-          <button class="btn sm" id="btnImgPlan">AI 生成图片处理计划（SOP 09）</button>
+          <button class="btn sm" id="btnImgPlan">AI 生成图片处理计划（SOP 09 · 文字建议，不生图）</button>
         </div>
         <div id="imgPlanBox"></div>
 
@@ -1250,6 +1250,9 @@ function renderThumbs(){
           + '<span style="width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
           + esc(im.filename || ('图 ' + (i + 1))) + '</span>'
           + '<select data-img-p="' + i + '" style="flex:1">'
+          // 第 2 张起默认不标用途 —— 之前默认落在「01 首图」上，
+          // 两张图都成了首图（Etsy 会视作重复，也浪费一个展示位）
+          + (i > 0 ? '<option value=""' + (!im.purpose ? ' selected' : '') + '>请选择用途</option>' : '')
           + IMG_PURPOSES.map(([k, label]) =>
               '<option value="' + k + '"' + (im.purpose === k ? ' selected' : '') + '>'
               + (i === 0 ? '01 首图（第 1 张自动为主图）' : label) + '</option>').join('')
@@ -1270,8 +1273,8 @@ document.getElementById('btnImgPlan').addEventListener('click', async () => {
     showMsg(document.getElementById('msgImg'), 'err', '先上传图片再生成处理计划。');
     return;
   }
-  // 处理计划针对一个产品 —— 用第一个有事实的条目
-  const it = IMPORT_BATCH.find(aiRunnable) || IMPORT_BATCH[0];
+  // 处理计划针对一个产品 —— 用「当前条目」的事实（顶部导航切到哪条就是哪条）
+  const it = IMPORT_BATCH[CURRENT_IDX] || IMPORT_BATCH.find(aiRunnable) || IMPORT_BATCH[0];
   btn.disabled = true;
   box.innerHTML = '<div class="msg info">AI 正在逐张给处理建议（约 20~40 秒）…</div>';
   try {
@@ -1291,7 +1294,7 @@ document.getElementById('btnImgPlan').addEventListener('click', async () => {
       + 'SOP 09 提示词 D：保留实拍主体的图片处理（复制去你的修图工具用）</summary>'
       + '<pre style="white-space:pre-wrap;font-size:12px;line-height:1.7;background:var(--bg-soft,rgba(127,127,127,.08));'
       + 'padding:12px;border-radius:10px;overflow:auto">' + esc(SOP_PROMPT_D) + '</pre></details>';
-    log('图片处理计划已生成（' + IMAGES.length + ' 张图）', 's');
+    log('图片处理计划已生成（' + IMAGES.length + ' 张图，基于当前条目 ' + (it.sku || '') + '）', 's');
   } catch(e){
     box.innerHTML = '<div class="msg err">生成失败：' + esc(e.message || e) + '</div>';
   } finally { btn.disabled = false; }
@@ -1815,9 +1818,17 @@ function renderImportList() {
         ? '<div style="color:var(--bad);font-size:12px;margin-top:6px">⚠ ' + it._problems.map(esc).join('；') + '</div>'
         : '';
       const mi = it._matched ? it._matched.length : 0;
-      const imgTip = mi === it.images.length
+      let imgTip = mi === it.images.length
         ? '<span style="color:var(--good)">图 ' + mi + '/' + it.images.length + '</span>'
         : '<span style="color:var(--warn)">图 ' + mi + '/' + it.images.length + ' 缺</span>';
+      // 有缺图时把「表格要什么文件名 / 实际上传了什么」摆出来，
+      // 让「文件名对不上」一眼可见 —— 只说 0/1 缺，运营会以为是缺图
+      if (mi < it.images.length) {
+        const want = it.images.map(s => String(s).split(/[\\/]/).pop()).join('、');
+        const have = PICKED_FILES.map(f => f.name).slice(0, 4).join('、') || '（还没上传图片）';
+        imgTip += '<div style="color:var(--text-faint);font-size:11px;margin-top:4px">表格要：'
+          + esc(want) + '<br>已上传：' + esc(have) + '</div>';
+      }
       const cur = i === CURRENT_IDX;
       return '<div data-imp-pick="' + i + '" style="cursor:pointer;border:1px solid '
         + (cur ? 'var(--accent)' : 'var(--border)') + ';border-radius:10px;padding:10px;margin-top:8px'
