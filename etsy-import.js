@@ -338,6 +338,7 @@ function collectImportRowForm() {
     shipping_profile_id: val('fShip'), readiness_state_id: val('fReady'),
     shop_section_id: val('fSection'), return_policy_id: val('fReturn'),
     taxonomy_id: val('fTax'),
+    is_customizable: (document.getElementById('fCustom') || {}).checked || false,
   };
 }
 

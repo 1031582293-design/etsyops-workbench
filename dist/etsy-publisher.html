@@ -184,11 +184,12 @@
 
   <div class="stepper">
     <div class="step-chip active" data-step="1"><div class="num">1</div><div><div class="t">给料与店铺</div><div class="d">店铺配置 / 表格 / 图片</div></div></div>
-    <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">关键词</div><div class="d">候选池 → 人工验证</div></div></div>
-    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">AI 文案</div><div class="d">队列生成 / 逐条核对</div></div></div>
+    <div class="step-chip" data-step="2"><div class="num">2</div><div><div class="t">关键词</div><div class="d">候选池 → EverBee 核实</div></div></div>
+    <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">AI 生成</div><div class="d">文案 + 场景图</div></div></div>
     <div class="step-chip" data-step="4"><div class="num">4</div><div><div class="t">类目与属性</div><div class="d">换真实 taxonomy_id</div></div></div>
     <div class="step-chip" data-step="5"><div class="num">5</div><div><div class="t">商品资料</div><div class="d">详情 / 价格 / 库存 / 变体</div></div></div>
-    <div class="step-chip" data-step="6"><div class="num">6</div><div><div class="t">写入与发布</div><div class="d">草稿 → 人工确认</div></div></div>
+    <div class="step-chip" data-step="6"><div class="num">6</div><div><div class="t">AI 上架前校验</div><div class="d">事实对照审核</div></div></div>
+    <div class="step-chip" data-step="7"><div class="num">7</div><div><div class="t">写入与发布</div><div class="d">草稿 → 人工确认</div></div></div>
   </div>
 
   <div class="itemnav" id="itemNav" style="display:none;align-items:center;gap:10px;padding:10px 14px;margin:0 0 12px;border:1px solid var(--border);border-radius:10px;background:rgba(127,127,127,.06)">
@@ -293,7 +294,7 @@
       </section>
 
       <section class="panel step hidden" data-step="3">
-        <h3>AI 文案：队列生成 + 逐条确认</h3>
+        <h3>AI 生成：文案 + 场景图</h3>
         <div class="ph-sub">标题 / 描述 / 标签由 AI 按你给的事实生成。<b>AI 只依据表格里已填的字段</b>，
           素材缺失时会拒绝生成 —— 凭空写出来的规格是 Etsy 的合规风险。</div>
 
@@ -339,6 +340,19 @@
 
 
         <div id="aiList"></div>
+
+        <div class="subhead" style="margin-top:24px">场景图（SOP 04）<span class="hint">文生图辅助参考，首图必须用实拍</span></div>
+        <div class="msg info" style="margin:10px 0">
+          生成「产品在真实使用/展示场景中」的辅助图。⚠️ 文生图无法严格保留实拍主体像素，
+          主体细节可能与原图有差异 —— <b>首图必须用真实成品照</b>，场景图只作辅助参考。
+        </div>
+        <label class="fld">场景描述（可选）<span class="hint">英文更准；留空则由 AI 按产品用途自动设计</span></label>
+        <input type="text" id="fScene" placeholder="例如：on a wooden shelf with a small plant beside it" />
+        <div class="btnrow" style="margin-top:8px">
+          <button class="btn sm" id="btnSceneImg">生成场景图</button>
+        </div>
+        <div id="msgScene" class="msg"></div>
+        <div id="sceneBox" style="margin-top:8px"></div>
       </section>
 
       <section class="panel step hidden" data-step="4">
@@ -540,7 +554,7 @@
 
         <div class="btnrow">
           <button class="btn" id="btnValidate">本地校验（不消耗 Etsy 额度）</button>
-          <button class="btn" data-goto="6">下一步：写入 Etsy →</button>
+          <button class="btn" data-goto="6">下一步：AI 上架前校验 →</button>
         </div>
         <div id="msg3" class="msg"></div>
       
@@ -552,18 +566,38 @@
         <div class="msg info" id="imgSummary">图片在第 1 步选定。</div>
 
 
-        <label class="fld" style="margin-top:20px">变体 Variations<span class="hint">无变体就留空，留空则用上面的主价格与数量</span></label>
+        <label class="fld" style="margin-top:20px">变体 Variations<span class="hint">维度在第 4 步勾选属性值；这里填每个组合的价格 / 库存 / SKU</span></label>
         <div id="varDigitalNote" class="msg warn" style="display:none">
           <b>数字商品不支持变体。</b>官方原文：Variations are unavailable for digital listings。
           需要多个规格就拆成几条独立链接。
         </div>
+        <div class="msg info" style="margin-top:6px">要加变体：到第 4 步「类目与属性」查属性，勾选属性值作为变体维度。这里只负责给每个组合填价格、库存与 SKU。</div>
         <div id="varBox"></div>
-        <button class="btn sm ghost" id="btnAddVar" style="margin-top:10px">+ 添加一个变体</button>
         <div id="msgVar" class="msg"></div>
+
+        <label class="fld" style="margin-top:20px">个性化定制 Personalization<span class="hint">让买家提交名字、字体或图片等定制资料</span></label>
+        <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-top:6px">
+          <input type="checkbox" id="fCustom" /> 允许买家定制（is_customizable）
+        </label>
+        <div class="msg info" style="margin-top:6px">定制方式（Text box / List of options / File upload）在 Shop Manager 里配；这里只开总开关。</div>
 
       </section>
 
       <section class="panel step hidden" data-step="6">
+        <h3>AI 上架前校验</h3>
+        <div class="ph-sub">对照「事实字段」让 AI 逐项交叉审核标题、描述、标签、变体与图片是否一致。发现冲突会列「问题位置 / 草稿说法 / 对应事实 / 风险 / 修正建议」。</div>
+        <div class="btnrow" style="margin-top:12px">
+          <button class="btn primary" id="btnPrecheck">开始 AI 上架前校验</button>
+          <span class="hint" style="align-self:center">校验的是「当前条目」的完整草稿</span>
+        </div>
+        <div id="msgPrecheck" class="msg"></div>
+        <div id="precheckBox"></div>
+        <div class="btnrow" style="margin-top:16px">
+          <button class="btn" data-goto="7">下一步：写入 Etsy →</button>
+        </div>
+      </section>
+
+      <section class="panel step hidden" data-step="7">
         <h3>写入 Etsy 草稿</h3>
         <div class="ph-sub">这一步只建草稿。Etsy 上架费 $0.20 只在真正发布时产生。</div>
         <div id="msg5" class="msg"></div>
@@ -691,7 +725,8 @@ function showMsg(el, kind, html){
 let STATUS = null;
 let PREF = null;
 let IMAGES = [];   // { filename, data(base64), rank }
-let VARS = [];     // { name, price, quantity, sku }
+let VARDIMS = [];  // 变体维度 [{ property_id, name, scale_id, values:[{value_id, value}] }]，第 4 步勾选属性值生成
+let VARROWS = [];  // 组合矩阵行 [{ sku, price, quantity }]，对应 VARDIMS 的笛卡尔积
 let LAST_LISTING = 0;
 let CURRENT_STEP = 1;
 
@@ -944,14 +979,53 @@ document.getElementById('btnProp').addEventListener('click', async () => {
   try {
     const d = await apiCall('/api/etsy/properties?taxonomy_id=' + PICKED_TAX.id, { timeout: 40000 });
     if (!d.properties || !d.properties.length){ box.innerHTML = '<div class="msg show warn">该类目没有可选属性。</div>'; return; }
-    box.innerHTML = d.properties.map(p =>
-      '<div style="padding:9px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:7px;font-size:12.5px">' +
-      '<div>' + esc(p.name) + (p.is_required ? ' <span style="color:var(--bad)">必填</span>' : '') +
-      ' <span style="color:var(--text-faint);font-size:11px">property_id=' + p.property_id + '</span></div>' +
-      '<div style="color:var(--text-faint);font-size:11px;margin-top:4px">' +
-      (p.possible_values.length ? p.possible_values.slice(0,8).map(v => esc(v.name) + '(' + v.value_id + ')').join('、') : '（无预设值，可用自定义值）') +
-      '</div></div>').join('');
-    log('类目 ' + PICKED_TAX.id + ' 下有 ' + d.properties.length + ' 个属性', 's');
+    box.innerHTML = d.properties.map(p => {
+      const dim = VARDIMS.find(v => v.property_id === p.property_id);
+      const selIds = dim ? dim.values.map(x => x.value_id) : [];
+      const hasVals = Array.isArray(p.possible_values) && p.possible_values.length;
+      return '<div style="padding:9px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:7px;font-size:12.5px">'
+        + '<div>' + esc(p.name) + (p.is_required ? ' <span style="color:var(--bad)">必填</span>' : '')
+        + ' <span style="color:var(--text-faint);font-size:11px">property_id=' + p.property_id + '</span></div>'
+        + (hasVals
+            ? '<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center">'
+              + p.possible_values.slice(0, 12).map(v =>
+                  '<label style="font-size:11.5px;display:inline-flex;align-items:center;gap:3px;border:1px solid var(--border);border-radius:6px;padding:2px 7px;cursor:pointer">'
+                  + '<input type="checkbox" data-var-dim="' + p.property_id + '" data-name="' + esc(p.name) + '"'
+                  + ' data-vid="' + v.value_id + '" data-vname="' + esc(v.name) + '"'
+                  + (selIds.includes(v.value_id) ? ' checked' : '') + ' />' + esc(v.name) + '</label>').join('')
+              + '<span style="font-size:11px;color:var(--text-faint)">勾选 = 设为变体值</span>'
+              + '</div>'
+            : '<div style="font-size:11px;color:var(--text-faint);margin-top:4px">（无预设值，不能作变体维度）</div>')
+        + '</div>';
+    }).join('');
+    // ★ 勾选属性值 = 设置变体维度（SOP 06）。property_id / value_id 直接来自本次查询，全程无猜测。
+    box.querySelectorAll('[data-var-dim]').forEach(cb => cb.addEventListener('change', () => {
+      const pid = Number(cb.dataset.varDim);
+      const name = cb.dataset.name;
+      const vid = Number(cb.dataset.vid);
+      const vname = cb.dataset.vname;
+      let dim = VARDIMS.find(v => v.property_id === pid);
+      if (cb.checked){
+        if (!dim){ dim = { property_id: pid, name, scale_id: null, values: [] }; VARDIMS.push(dim); }
+        if (!dim.values.some(x => x.value_id === vid)) dim.values.push({ value_id: vid, value: vname });
+      } else {
+        if (dim){
+          dim.values = dim.values.filter(x => x.value_id !== vid);
+          if (!dim.values.length) VARDIMS = VARDIMS.filter(v => v.property_id !== pid);
+        }
+      }
+      if (VARDIMS.length > 3){
+        cb.checked = false;
+        const d2 = VARDIMS.find(v => v.property_id === pid);
+        if (d2){ d2.values = d2.values.filter(x => x.value_id !== vid); if (!d2.values.length) VARDIMS = VARDIMS.filter(v => v.property_id !== pid); }
+        showMsg(document.getElementById('msgVar'), 'err', 'Etsy 最多支持 3 个变体维度，不能再加。');
+        return;
+      }
+      VARROWS = [];   // 组合变了，清空旧的价格/库存行
+      renderVarRows();
+      log('变体维度更新：' + (VARDIMS.map(dd => dd.name + '(' + dd.values.length + ')').join('、') || '已清空'), 's');
+    }));
+    log('类目 ' + PICKED_TAX.id + ' 下有 ' + d.properties.length + ' 个属性（勾选属性值即可设为变体维度）', 's');
   } catch(e){
     box.innerHTML = '<div class="msg show err">' + esc(e.message) + '</div>';
     logErr(e);
@@ -1009,10 +1083,8 @@ function toggleItemType(){
   document.getElementById('wrapReady').style.display     = dig ? 'none' : '';
   const varNote = document.getElementById('varDigitalNote');
   if (varNote) varNote.style.display = dig ? '' : 'none';
-  const addVar = document.getElementById('btnAddVar');
-  if (addVar) addVar.disabled = dig;
   // 数字商品不支持变体：切过去时把已填的变体清掉，避免带着无效数据进草稿
-  if (dig && VARS.length){ VARS.length = 0; renderVars(); }
+  if (dig && (VARDIMS.length || VARROWS.length)){ VARDIMS.length = 0; VARROWS.length = 0; renderVarRows(); }
   document.getElementById('typeTip').innerHTML = dig
     ? '<b>数字商品：</b>不用填配送模板与处理档案，也不支持变体。即时下载必须挂交付文件，按单制作不用。'
     : '<b>实物商品：</b>需要配送模板与处理档案，可填重量、尺寸与变体。';
@@ -1095,6 +1167,12 @@ function collectForm(){
     item_dimensions_unit: document.getElementById('fDimUnit').value,
     production_partner_ids: document.getElementById('fPartner').value.trim(),
     audience_note: document.getElementById('fAudience').value.trim(),
+    // 个性化定制（Personalization）：布尔开关，详细定制方式在 Shop Manager 配
+    is_customizable: document.getElementById('fCustom') ? document.getElementById('fCustom').checked : false,
+    // ★ 变体（SOP 06）：维度 + 组合矩阵。property_id / value_id 全部来自第 4 步
+    //   /api/etsy/properties 的真实查询结果，没有猜测成分。
+    variation_dimensions: VARDIMS.map(d => ({ property_id: d.property_id, name: d.name, scale_id: d.scale_id, values: d.values })),
+    variation_rows: VARROWS.map(r => ({ sku: r.sku || '', price: r.price, quantity: r.quantity })),
     // 交付文件只在数字商品时用；base64 只在真要建草稿时才带上
     digital_files: isDigital()
       ? DIGITAL_FILES.map(f => ({ name: f.name, size: f.size, data: f.data }))
@@ -1311,30 +1389,172 @@ const SOP_PROMPT_D = [
   '如果你无法保留实拍主体，请先说明限制并给出抠图或补拍方案，不要返回看似相同的重绘商品。',
 ].join('\n');
 
+
+/* ---------- 场景图生成（SOP 04）：文生图辅助图，走 Etsy AI 出口 ---------- */
+let _sceneImg = null;   // 最近一次生成的场景图 { b64, url, prompt }
+document.getElementById('btnSceneImg').addEventListener('click', async () => {
+  const m = document.getElementById('msgScene');
+  const btn = document.getElementById('btnSceneImg');
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  if (!it) { showMsg(m, 'warn', '先在第 1 步解析表格，选中一个条目。'); return; }
+  const scene = document.getElementById('fScene').value.trim();
+  btn.disabled = true; btn.textContent = '生成中（约 20~60 秒）…';
+  log('开始生成场景图：' + (it.sku || ('第 ' + it._row + ' 行')));
+  try {
+    const facts = factsOf(it);
+    const ai = AI_RESULTS.find(x => x.i === CURRENT_IDX);
+    // 产品是什么：优先用已生成的英文标题，其次类目名
+    const product = (ai && ai.title) || (PICKED_TAX && PICKED_TAX.name) || '';
+    const d = await apiCall('/api/etsy/ai/scene-image', {
+      body: Object.assign({}, facts, { product, scene, size: '1024x1024' }),
+      timeout: 180000,
+    });
+    _sceneImg = d;
+    const box = document.getElementById('sceneBox');
+    const imgSrc = d.b64 ? ('data:image/png;base64,' + d.b64) : d.url;
+    box.innerHTML =
+      '<div style="font-size:12px;color:var(--text-faint);margin-top:4px">prompt：' + esc(d.prompt || '') + '</div>'
+      + (imgSrc
+          ? '<img src="' + imgSrc + '" style="max-width:340px;border-radius:10px;margin-top:8px;display:block;border:1px solid var(--border)" alt="场景图预览" />'
+          : '<div class="msg warn" style="margin-top:8px">模型没有返回图片（b64 / url 都为空）。</div>')
+      + '<div class="btnrow" style="margin-top:8px">'
+      + '<button class="btn sm" id="btnSceneUse">选用：加入图片列表（排最后）</button>'
+      + '</div>';
+    const useBtn = document.getElementById('btnSceneUse');
+    if (useBtn) useBtn.addEventListener('click', async () => {
+      if (!_sceneImg || (!_sceneImg.b64 && !_sceneImg.url)) return;
+      if (IMAGES.length >= 20) { showMsg(m, 'err', '图片已满 20 张，不能再加。'); return; }
+      let data = _sceneImg.b64 || '';
+      // 只有 url 时（智谱等国内生图服务），前端 fetch 转 base64
+      if (!data && _sceneImg.url) {
+        try {
+          const r = await fetch(_sceneImg.url);
+          const blob = await r.blob();
+          data = await new Promise((res, rej) => {
+            const fr = new FileReader();
+            fr.onload = () => res(String(fr.result).split(',')[1]);
+            fr.onerror = rej;
+            fr.readAsDataURL(blob);
+          });
+        } catch (e) {
+          showMsg(m, 'err', '这张图只有 URL，转 base64 失败（可能跨域受限）：' + esc(e.message) + '。请重新生成或手动下载后在第 1 步上传。');
+          return;
+        }
+      }
+      const filename = 'scene-' + (it.sku || 'img') + '-' + Date.now() + '.png';
+      IMAGES.push({ filename, data, purpose: 'scene', purposeLabel: '07 使用/场景' });
+      renderThumbs();
+      log('场景图已加入图片列表（' + filename + '）', 's');
+      showMsg(m, 'ok', '场景图已加入图片列表，作为辅助图（排最后）。首图仍是实拍。');
+    });
+    showMsg(m, 'ok', '场景图已生成（模型 ' + esc(d.model || '') + '）。');
+  } catch (e) {
+    showMsg(m, 'err', esc(e.message));
+    logErr(e);
+  } finally {
+    btn.disabled = false; btn.textContent = '生成场景图';
+  }
+});
+
+/* ---------- AI 上架前校验（SOP 05）：对照事实字段审核完整草稿 ---------- */
+document.getElementById('btnPrecheck').addEventListener('click', async () => {
+  const m = document.getElementById('msgPrecheck');
+  const btn = document.getElementById('btnPrecheck');
+  const box = document.getElementById('precheckBox');
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  if (!it) { showMsg(m, 'warn', '先在第 1 步解析表格，选中一个条目。'); return; }
+  btn.disabled = true; btn.textContent = '校验中（约 20~60 秒）…';
+  log('开始 AI 上架前校验：' + (it.sku || ('第 ' + it._row + ' 行')));
+  try {
+    const facts = factsOf(it);
+    const form = collectForm();
+    const draft = {
+      title: form.title, description: form.description, tags: form.tags,
+      price: form.price, quantity: form.quantity,
+      who_made: form.who_made, when_made: form.when_made,
+      variations: VARROWS.map((r, i) => ({
+        name: (cartesian(VARDIMS.map(d => d.values))[i] || []).map(v => v.value).join(' + '),
+        price: r.price, quantity: r.quantity, sku: r.sku,
+      })),
+      images: IMAGES.map((im, i) => ({ filename: im.filename, purposeLabel: im.purposeLabel || purposeLabel(im.purpose) })),
+    };
+    const d = await apiCall('/api/etsy/ai/precheck', {
+      body: Object.assign({}, facts, { draft }),
+      timeout: 180000,
+    });
+    const report = d.report || '';
+    const lines = report.split('\n').map(l => l.trim()).filter(Boolean);
+    const isOk = lines.length === 1 && /^OK\b/i.test(lines[0]);
+    const isBlocked = /不可发布/.test(report);
+    let html = '';
+    if (isOk) {
+      html = '<div class="msg ok show" style="margin-top:8px"><b>AI 校验通过。</b>没有发现事实冲突或格式问题。仍建议人工过一遍核对清单。</div>';
+    } else {
+      html = '<div class="msg ' + (isBlocked ? 'err' : 'warn') + ' show" style="margin-top:8px">'
+        + (isBlocked ? '<b>AI 判定：不可发布。</b>以下问题需先解决：' : '<b>AI 发现以下问题：</b>')
+        + '</div>'
+        + '<table class="kv" style="margin-top:8px;width:100%">'
+        + '<tr><td><b>问题位置</b></td><td><b>草稿说法</b></td><td><b>对应事实</b></td><td><b>风险 / 冲突</b></td><td><b>修正建议</b></td></tr>'
+        + lines.filter(l => l.includes('|')).map(l => {
+            const cols = l.split('|').map(c => c.trim());
+            while (cols.length < 5) cols.push('');
+            return '<tr>' + cols.slice(0, 5).map(c => '<td>' + esc(c) + '</td>').join('') + '</tr>';
+          }).join('')
+        + '</table>';
+      const other = lines.filter(l => !l.includes('|') && !/^不可发布$/.test(l));
+      if (other.length) html += '<div style="font-size:12.5px;color:var(--text-faint);margin-top:6px">' + other.map(esc).join('<br>') + '</div>';
+    }
+    box.innerHTML = html;
+    showMsg(m, 'ok', 'AI 校验完成（模型 ' + esc(d.model || '') + '）。');
+  } catch (e) {
+    showMsg(m, 'err', esc(e.message));
+    logErr(e);
+  } finally {
+    btn.disabled = false; btn.textContent = '开始 AI 上架前校验';
+  }
+});
+
 /* ---------- 步骤 4：变体 ---------- */
-document.getElementById('btnAddVar').addEventListener('click', () => {
-  if (VARS.length >= 3){
-    showMsg(document.getElementById('msgVar'), 'err', 'Etsy 最多支持 3 个变体维度。');
+/* ---------- 变体组合矩阵（SOP 06）：维度在第 4 步勾选属性值生成，这里只填每行的价格/库存/SKU ---------- */
+function cartesian(dims){
+  let combos = [[]];
+  for (const d of dims){
+    const next = [];
+    for (const c of combos) for (const v of d) next.push(c.concat([v]));
+    combos = next;
+  }
+  return combos;
+}
+function renderVarRows(){
+  const box = document.getElementById('varBox');
+  if (!VARDIMS.length){
+    box.innerHTML = '<div style="font-size:12.5px;color:var(--text-faint);padding:8px 0">暂无变体。要加变体，去第 4 步「类目与属性」勾选属性值作为变体维度。</div>';
     return;
   }
-  VARS.push({ name: '', price: fPrice.value, quantity: document.getElementById('fQty').value, sku: '' });
-  renderVars();
-});
-function renderVars(){
-  const box = document.getElementById('varBox');
-  if (!VARS.length){ box.innerHTML = '<div style="font-size:12.5px;color:var(--text-faint);padding:8px 0">暂无变体，将使用上面的主价格与数量。</div>'; return; }
-  box.innerHTML = VARS.map((v, i) =>
-    '<div class="row3" style="margin-bottom:9px">' +
-    '<input type="text" data-i="' + i + '" data-f="name" value="' + esc(v.name) + '" placeholder="款式名，如 Blue & Blue" />' +
-    '<input type="number" data-i="' + i + '" data-f="price" step="0.01" min="0" value="' + esc(v.price) + '" placeholder="该款总价" />' +
-    '<input type="number" data-i="' + i + '" data-f="quantity" step="1" min="0" value="' + esc(v.quantity) + '" placeholder="库存" />' +
-    '</div>').join('');
-  box.querySelectorAll('input').forEach(inp => inp.addEventListener('input', () => {
-    VARS[Number(inp.dataset.i)][inp.dataset.f] = inp.value;
+  const combos = cartesian(VARDIMS.map(d => d.values));
+  if (VARROWS.length !== combos.length){
+    // 组合数变了，重建空行（价格默认沿用主价格，库存沿用主数量）
+    VARROWS = combos.map(() => ({ sku: '', price: fPrice.value, quantity: document.getElementById('fQty').value }));
+  }
+  box.innerHTML =
+    '<div style="font-size:12px;color:var(--text-faint);margin-bottom:8px">'
+    + VARDIMS.map(d => esc(d.name) + '（' + d.values.length + ' 值）').join(' × ') + ' = ' + combos.length + ' 个组合</div>'
+    + combos.map((c, i) => {
+      const label = c.map(v => v.value).join(' + ');
+      const r = VARROWS[i] || {};
+      return '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">'
+        + '<div style="flex:1.4;min-width:140px;font-size:12px;font-weight:600">' + esc(label) + '</div>'
+        + '<input type="text" data-var-row="' + i + '" data-f="sku" value="' + esc(r.sku || '') + '" placeholder="SKU（可空）" style="flex:1" />'
+        + '<input type="number" data-var-row="' + i + '" data-f="price" step="0.01" min="0" value="' + esc(r.price || '') + '" placeholder="该款总价" style="flex:1" />'
+        + '<input type="number" data-var-row="' + i + '" data-f="quantity" step="1" min="0" value="' + esc(r.quantity || '') + '" placeholder="库存" style="flex:1" />'
+        + '</div>';
+    }).join('')
+    + '<div class="msg warn" style="margin-top:6px"><b>价格必须填该款总价</b>，不是「比主商品贵多少」。填成加价会导致买家按错价下单。</div>';
+  box.querySelectorAll('[data-var-row]').forEach(inp => inp.addEventListener('input', () => {
+    const i = Number(inp.dataset.varRow);
+    if (!VARROWS[i]) VARROWS[i] = { sku: '', price: '', quantity: '' };
+    VARROWS[i][inp.dataset.f] = inp.value;
   }));
-  showMsg(document.getElementById('msgVar'), 'warn',
-    '<b>变体价格必须填该款总价。</b>Etsy 的 price 是「这个变体卖多少钱」，不是「比主商品贵多少」。' +
-    '填成加价会导致买家按错的价格下单。');
 }
 
 /* ---------- 步骤 5：写入草稿 / 发布 ---------- */
@@ -1353,16 +1573,6 @@ document.getElementById('btnDraft').addEventListener('click', async () => {
     saveCurrentForm();
     const body = collectForm();
     body.images = IMAGES.map((im, i) => ({ filename: im.filename, data: im.data, rank: i + 1 }));
-    if (VARS.length){
-      // ⚠️ 这里生成的是「一个变体属性」，property_id 由后端在拿到类目属性后确认。
-      // 前端只把款式名带过去，真正的 property_id / value_id 需要后端查属性表。
-      // 为避免猜错属性 ID 导致 Etsy 400，本版先不自动写变体，改为明确提示人工在后台补。
-      showMsg(m, 'warn',
-        '<b>检测到你填了 ' + VARS.length + ' 个变体，但本版不会自动写入变体。</b><br>' +
-        '原因：Etsy 的变体必须绑定真实的 property_id 与 value_id，' +
-        '这些 ID 依赖具体类目，不能靠猜。草稿建成后请到 Shop Manager → Listings 里手动加变体，' +
-        '价格与库存按你上面填的值填。<br>（避免写出价格错误或属性错位的在售商品，比慢一点更安全。）');
-    }
     const d = await apiCall('/api/etsy/draft', { body, timeout: 180000 });
     LAST_LISTING = d.listing_id;
     document.getElementById('draftBox').classList.remove('hidden');
@@ -1475,6 +1685,7 @@ window.fillFromJson = function(obj){
 
 // 首屏按默认类型（physical）把字段显隐摆对
 toggleItemType();
+renderVarRows();   // 首屏显示「暂无变体」提示，避免第 5 步空白
 // 提示词版本库要等 boot 里 STATUS 就绪（拿到 shop_id）后才能按店铺取版本，
 // 所以挂在 boot 的 then 上；取不到店铺时后端会退到 _default 桶，不影响使用。
 boot().then(async () => {
@@ -1583,7 +1794,8 @@ function saveCurrentForm(){
   try {
     if (typeof collectImportRowForm !== 'function') return;
     const f = collectImportRowForm();
-    f._vars = JSON.parse(JSON.stringify(VARS || []));
+    f._vardims = JSON.parse(JSON.stringify(VARDIMS || []));
+    f._varrows = JSON.parse(JSON.stringify(VARROWS || []));
     f._tax = PICKED_TAX ? { id: PICKED_TAX.id, name: PICKED_TAX.name } : null;
     it._form = f;
   } catch(e){ /* 表单未就绪时忽略 */ }
@@ -1608,8 +1820,11 @@ function switchToItem(idx){
     if (taxBox) taxBox.style.display = 'none';
   }
   // 变体
-  VARS = (it._form && Array.isArray(it._form._vars)) ? JSON.parse(JSON.stringify(it._form._vars)) : [];
-  renderVars();
+  VARDIMS = (it._form && Array.isArray(it._form._vardims)) ? JSON.parse(JSON.stringify(it._form._vardims)) : [];
+  VARROWS = (it._form && Array.isArray(it._form._varrows)) ? JSON.parse(JSON.stringify(it._form._varrows)) : [];
+  renderVarRows();
+  // 个性化定制开关
+  if (document.getElementById('fCustom')) document.getElementById('fCustom').checked = !!(it._form && it._form.is_customizable);
   // 图片按文件名匹配
   const matched = it._matched || matchPickedImages(it.images);
   if (matched.length) setPickedFiles(matched);

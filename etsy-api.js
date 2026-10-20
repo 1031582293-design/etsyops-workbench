@@ -847,6 +847,10 @@ function buildDraftForm(inp) {
     is_supply: inp.is_supply ? 'true' : 'false',
     taxonomy_id: String(inp.taxonomy_id),
   };
+  // 个性化定制（Personalization / Custom options）：Etsy 的 createDraftListing 用布尔开关，
+  // 「Text box / List of options / File upload」这些详细定制方式在 Shop Manager 里配，
+  // Open API 层面只暴露 is_customizable。
+  if (inp.is_customizable) form.is_customizable = 'true';
   // 数字商品没有配送模板与处理档案，带了反而可能被拒
   if (!isDigitalInput(inp)) {
     if (inp.shipping_profile_id) form.shipping_profile_id = String(inp.shipping_profile_id);

@@ -608,6 +608,9 @@ const AI_IMAGE_MODEL = process.env.AI_IMAGE_MODEL || 'cogview-3-flash'; // 免�
 const ETSY_AI_API_KEY = (process.env.ETSY_AI_API_KEY || '').trim() || AI_API_KEY;
 const ETSY_AI_BASE_URL = ((process.env.ETSY_AI_BASE_URL || '').trim() || AI_BASE_URL).replace(/\/+$/, '');
 const ETSY_AI_MODEL = (process.env.ETSY_AI_MODEL || '').trim() || AI_MODEL;
+// Etsy 场景图用的生图模型。留空 = 复用公众号那套的 AI_IMAGE_MODEL。
+// 换 OpenAI 时填 gpt-image-1（或 gpt-image-1.5 / gpt-image-2），走 ETSY_AI_BASE_URL + ETSY_AI_PROXY。
+const ETSY_AI_IMAGE_MODEL = (process.env.ETSY_AI_IMAGE_MODEL || '').trim() || AI_IMAGE_MODEL;
 
 /* 两套各自的出口。原理与 Etsy API 一样：Node 内置 fetch 忽略 HTTPS_PROXY
  * 与系统代理，必须显式写地址（已实测：设了环境变量后假代理收到 0 个请求）。
@@ -772,6 +775,39 @@ async function aiImage(prompt, size = '1440x720') {
   const d = await r.json().catch(() => ({}));
   const item = d.data?.[0];
   if (!item) throw new Error('AI 生图返回异常：' + JSON.stringify(d).slice(0, 400));
+  return { url: item.url || item.file_url || '', b64: item.b64_json || '' };
+}
+
+/* Etsy 场景图生图 —— 走 Etsy 那套出口（ETSY_AI_BASE_URL + ETSY_AI_PROXY），
+ * 与公众号的 aiImage 完全独立：换 OpenAI 时场景图跟着 ETSY_AI_PROXY 走代理。 */
+async function etsyAiImage(prompt, size = '1024x1024') {
+  if (!etsyAiConfigured()) {
+    throw new Error('Etsy 场景图未配置：请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL'
+      + '（留空则复用公众号那套 AI_* 配置），生图模型用 ETSY_AI_IMAGE_MODEL。');
+  }
+  const r = await etsyAiFetch()(`${ETSY_AI_BASE_URL}/images/generations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ETSY_AI_API_KEY}` },
+    body: JSON.stringify({ model: ETSY_AI_IMAGE_MODEL, prompt, size, n: 1 }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+  });
+  const d = await r.json().catch(() => ({}));
+  const item = d.data?.[0];
+  if (!item) {
+    // 与文本生成一致：把鉴权失败/余额用尽区分出来，别让用户看到一坨 JSON
+    const raw = (() => { try { return JSON.stringify(d).toLowerCase(); } catch { return ''; } })();
+    if (r.status === 401 || r.status === 403) {
+      throw new Error(`Etsy 场景图鉴权失败（HTTP ${r.status}）：${d.error?.message || ''} → 检查 ETSY_AI_API_KEY`);
+    }
+    if (r.status === 429 || /insufficient_quota|credit_balance_exhausted|no credits|余额不足|quota/.test(raw)) {
+      throw new Error('AI 账户额度已用尽（' + (r.status === 429 ? 'HTTP 429' : 'insufficient_quota') + '）→ 去服务商控制台充值，或换有免费额度的生图服务。');
+    }
+    if (r.status === 404) {
+      throw new Error(`生图模型名「${ETSY_AI_IMAGE_MODEL}」可能不存在（HTTP 404）→ 检查 ETSY_AI_IMAGE_MODEL 拼写。`);
+    }
+    throw new Error('Etsy 场景图返回异常：' + JSON.stringify(d).slice(0, 400));
+  }
+  // GPT image 系列默认返回 b64_json（不支持 url）；智谱 CogView 返回 url。两者都读。
   return { url: item.url || item.file_url || '', b64: item.b64_json || '' };
 }
 
@@ -1295,6 +1331,87 @@ async function handleApi(req, res) {
           + 'AI 不能生图也不能修图 —— 重绘产品违反 Etsy 实拍要求，真修图请用提示词 D 配合修图工具。' });
     } catch (e) {
       return json(res, 400, { error: 'image_plan_failed', note: e.message });
+    }
+  }
+
+  /* ★ 场景图生成（SOP 04）：文生图模型，走 Etsy 出口（ETSY_AI_*）。
+   * 两步：① 文本模型把「事实 + 场景描述」写成英文生图 prompt；② 生图模型出图。
+   * 边界（SOP 04 明示）：文生图无法严格保留实拍主体像素，场景图只作辅助参考，
+   * 首图必须用真实成品照。 */
+  if (p === '/api/etsy/ai/scene-image' && req.method === 'POST') {
+    if (!etsyAiConfigured()) {
+      return json(res, 400, { error: 'etsy_ai_not_configured', note: 'AI 未配置。' });
+    }
+    try {
+      const b = await readJson(req);
+      const facts = factsToText(b);
+      const product = String(b.product || '').trim();
+      const scene = String(b.scene || '').trim();
+      if (!facts.length && !scene && !product) {
+        return json(res, 400, { error: 'no_input', note: '没有产品事实，也没有场景描述。先在第 1 步填资料卡，或输入一句场景描述。' });
+      }
+      const prompt = await etsyAiGenerate(
+        '你是商品摄影场景设计助手。根据产品事实与场景要求，写一句英文生图提示词（prompt），'
+        + '用于文生图模型生成「产品在真实使用/展示场景中」的图。\n'
+        + '要求：主体产品的外观、颜色、材质、比例严格依据事实；不得新增事实里没有的款式、颜色或零件；'
+        + '场景自然、干净、光线真实、构图像商品摄影。只输出一句英文 prompt，不要任何解释或引号。',
+        '产品事实：\n' + (product ? '产品：' + product + '\n' : '') + (facts.length ? facts.join('\n') : '（无）')
+        + '\n\n场景要求：' + (scene || '（用户未指定，请按产品用途设计一个自然的使用/展示场景）'));
+      const img = await etsyAiImage(prompt.trim(), String(b.size || '1024x1024'));
+      return json(res, 200, {
+        ok: true, prompt: prompt.trim(), url: img.url, b64: img.b64, model: ETSY_AI_IMAGE_MODEL,
+        note: '场景图已生成。⚠️ 文生图无法严格保留实拍主体像素，主体细节可能与原图有差异 —— '
+          + '首图必须用真实成品照，场景图只作辅助参考。',
+      });
+    } catch (e) {
+      return json(res, 400, { error: 'scene_image_failed', note: e.message });
+    }
+  }
+
+  /* ★ AI 上架前校验（SOP 05）：独立一步，AI 对照事实字段审查完整草稿，
+   * 替代人工逐项交叉审核。输出问题清单（问题位置 / 草稿说法 / 对应事实 / 风险 / 修正建议）。 */
+  if (p === '/api/etsy/ai/precheck' && req.method === 'POST') {
+    if (!etsyAiConfigured()) {
+      return json(res, 400, { error: 'etsy_ai_not_configured', note: 'AI 未配置。' });
+    }
+    try {
+      const b = await readJson(req);
+      const facts = factsToText(b);
+      const draft = b.draft || {};
+      const lines = [];
+      lines.push('标题 Title：' + (draft.title || '（空）'));
+      lines.push('描述 Description：\n' + (draft.description || '（空）'));
+      const tags = Array.isArray(draft.tags) ? draft.tags.filter(Boolean) : [];
+      lines.push('标签 Tags（' + tags.length + ' 个）：' + (tags.length ? tags.join('、') : '（空）'));
+      lines.push('价格：$' + (draft.price || '（空）') + '　数量：' + (draft.quantity || '（空）'));
+      lines.push('who_made：' + (draft.who_made || '（空）') + '　when_made：' + (draft.when_made || '（空）'));
+      const vars = Array.isArray(draft.variations) ? draft.variations : [];
+      if (vars.length) {
+        lines.push('变体（' + vars.length + ' 个款式）：'
+          + vars.map(v => (v.name || '未命名') + ' 价$' + (v.price || '') + ' 库存' + (v.quantity || '')
+            + (v.sku ? ' sku=' + v.sku : '')).join('；'));
+      } else {
+        lines.push('变体：无（单规格商品）');
+      }
+      const imgs = Array.isArray(draft.images) ? draft.images : [];
+      if (imgs.length) {
+        lines.push('图片（' + imgs.length + ' 张）：'
+          + imgs.map(im => (im.filename || '图') + '[' + (im.purposeLabel || '未标用途') + ']').join('、'));
+      }
+      const report = await etsyAiGenerate(
+        '请作为事实审核员，对照「已确认事实字段」审查下面的 Listing 草稿。只使用事实字段与已确认信息，不自行增加事实。\n'
+        + '输出格式：每个问题一行，用「问题位置 | 草稿说法 | 对应事实 | 风险或冲突 | 修正建议」五列（用 | 分隔），'
+        + '没有问题的项不列。\n'
+        + '检查：标题、详情、13 个标签、属性、图片文字、变体是否相互一致；核算 cm 与 inches 换算；'
+        + '检查数量、配件、材质、交期、发货地和售后承诺。\n'
+        + '逐一实测标题与标签字符数；标签只能输出合规短语并去重；关键词不相关时说明依据。\n'
+        + '若仍有关键资料未确认，第一行输出「不可发布」，并列出具体原因。\n'
+        + '不要因为格式合规就判断事实正确。若完全没有问题，只输出一行「OK」。',
+        '已确认事实字段：\n' + (facts.length ? facts.join('\n') : '（无，请按缺失处理）')
+        + '\n\nListing 草稿：\n' + lines.join('\n'));
+      return json(res, 200, { ok: true, report, model: ETSY_AI_MODEL });
+    } catch (e) {
+      return json(res, 400, { error: 'precheck_failed', note: e.message });
     }
   }
 
