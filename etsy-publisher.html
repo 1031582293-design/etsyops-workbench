@@ -279,7 +279,7 @@
           <button class="btn" id="btnKwGen">AI 生成候选词池（全部条目）</button>
         </div>
         <div class="row2" style="margin-top:8px;align-items:center">
-          <button class="btn ghost" id="btnKwVerify" disabled>用 EverBee 核实</button>
+          <button class="btn ghost" id="btnKwVerify" disabled>用 EverBee 核实（全部条目）</button>
           <div id="ebStatus" class="msg info" style="margin:0">EverBee：检查中…</div>
         </div>
         <div id="kwMsg" class="msg"></div>
@@ -2309,10 +2309,10 @@ let EB_STATUS = null;
 function updateVerifyBtn(){
   const btn = document.getElementById('btnKwVerify');
   if (!btn) return;
-  const sku = (document.getElementById('kwSku') || {}).value || '';
-  const n = ((KW_POOL[sku] || {}).words || []).length;
-  btn.disabled = !(EB_STATUS && EB_STATUS.authorized && n > 0);
-  btn.title = !EB_STATUS || !EB_STATUS.authorized ? '先连接 EverBee' : (n ? '' : '先让 AI 出词');
+  // 批量核实：只要任一条目有词池就可点（不再要求当前下拉选中的那条有词）
+  const anyWords = Object.keys(KW_POOL).some(s => (KW_POOL[s].words || []).length);
+  btn.disabled = !(EB_STATUS && EB_STATUS.authorized && anyWords);
+  btn.title = !EB_STATUS || !EB_STATUS.authorized ? '点击直达 EverBee 授权' : (anyWords ? '' : '先让 AI 出词');
 }
 
 async function loadEverbeeStatus(){
@@ -2336,58 +2336,72 @@ async function loadEverbeeStatus(){
   updateVerifyBtn();
 }
 
-/* 把当前 SKU 的词池整批交给后端查 EverBee，回来后写进每条词的 eb 字段。
-   未收录的词只标「无数据」，绝不写 0 —— EverBee 没收录不等于没人搜。 */
+/* 把所有有词池的 SKU 整批交给 EverBee 核实（2026-10-21 从「下拉选一条」改为全部条目串行）。
+ * 未收录的词只标「无数据」，绝不写 0 —— EverBee 没收录不等于没人搜。
+ * 未授权时点击直接打开授权页，不再只是 disabled 干等。 */
 async function everbeeVerify(){
-  const sku = (document.getElementById('kwSku') || {}).value || '';
-  const words = (KW_POOL[sku] || {}).words || [];
-  if (!words.length) return kwMsg('warn', '这个 SKU 还没有候选词，先点「AI 生成候选词池」。');
-  if (!EB_STATUS || !EB_STATUS.authorized) return kwMsg('warn', '还没连接 EverBee，先点上面的「点此授权」。');
+  if (!EB_STATUS || !EB_STATUS.authorized){
+    kwMsg('warn', '还没连接 EverBee —— 已为你打开授权页：登录 EverBee → Approve（一次可用 60 天），'
+      + '授权完成后回到本页再点一次「用 EverBee 核实」。');
+    window.open(API_BASE + '/api/everbee/auth', '_blank', 'noopener');
+    return;
+  }
+  const skus = Object.keys(KW_POOL).filter(s => (KW_POOL[s].words || []).length);
+  if (!skus.length) return kwMsg('warn', '还没有任何候选词，先点「AI 生成候选词池（全部条目）」。');
 
   const btn = document.getElementById('btnKwVerify');
   const old = btn.textContent;
-  btn.disabled = true; btn.textContent = '核实中…';
-  kwMsg('info', '正在向 EverBee 查询 <b>' + words.length + '</b> 个词，约需 '
-    + Math.max(5, Math.ceil(words.length * 0.7)) + ' 秒，请勿关闭页面。');
-  try {
-    const d = await apiCall('/api/everbee/keywords', {
-      method: 'POST', timeout: 180000, label: 'EverBee 核实',
-      body: { terms: words.map(w => w.en) },
-    });
-    let hit = 0, miss = 0;
-    (d.results || []).forEach((r, i) => {
-      const w = words[i];
-      if (!w) return;
-      w.eb = { at: Date.now(), source: 'everbee' };
-      if (r.ok && r.exact){
-        w.eb.vol = r.exact.vol;
-        w.eb.competition = r.exact.competition;
-        w.eb.score = r.exact.score;
-        w.eb.newVolume = r.exact.new_volume;
-        w.checkedAt = Date.now();
-        w.source = 'everbee';
-        if ((w.status || 'candidate') === 'candidate') w.status = 'verified';
-        hit++;
-      } else if (r.ok){
-        w.eb.miss = true;
-        w.eb.nearest = r.nearest || (r.suggestions && r.suggestions[0] ? r.suggestions[0].keyword : '');
-        miss++;
-      } else {
-        w.eb.error = r.error || '查询失败';
-        miss++;
-      }
-    });
-    await saveKeywords(sku);
+  btn.disabled = true;
+  let done = 0, fail = 0, hitTotal = 0, missTotal = 0;
+  for (const sku of skus){
+    const words = KW_POOL[sku].words;
+    btn.textContent = '核实中 ' + (done + fail + 1) + '/' + skus.length + '…';
+    kwMsg('info', 'EverBee 核实中：<b>' + (done + fail + 1) + ' / ' + skus.length + '</b> 条（'
+      + esc(sku) + '，' + words.length + ' 词，约 ' + Math.max(5, Math.ceil(words.length * 0.7)) + ' 秒）…');
+    try {
+      const d = await apiCall('/api/everbee/keywords', {
+        method: 'POST', timeout: 180000, label: 'EverBee 核实',
+        body: { terms: words.map(w => w.en) },
+      });
+      let hit = 0, miss = 0;
+      (d.results || []).forEach((r, i) => {
+        const w = words[i];
+        if (!w) return;
+        w.eb = { at: Date.now(), source: 'everbee' };
+        if (r.ok && r.exact){
+          w.eb.vol = r.exact.vol;
+          w.eb.competition = r.exact.competition;
+          w.eb.score = r.exact.score;
+          w.eb.newVolume = r.exact.new_volume;
+          w.checkedAt = Date.now();
+          w.source = 'everbee';
+          if ((w.status || 'candidate') === 'candidate') w.status = 'verified';
+          hit++;
+        } else if (r.ok){
+          w.eb.miss = true;
+          w.eb.nearest = r.nearest || (r.suggestions && r.suggestions[0] ? r.suggestions[0].keyword : '');
+          miss++;
+        } else {
+          w.eb.error = r.error || '查询失败';
+          miss++;
+        }
+      });
+      await saveKeywords(sku);
+      done++; hitTotal += hit; missTotal += miss;
+      log('EverBee 核实（' + sku + '）：命中 ' + hit + '，未收录/失败 ' + miss, 's');
+    } catch(e){
+      fail++;
+      log('EverBee 核实失败（' + sku + '）：' + e.message, 'e');
+      kwMsg('err', esc(sku) + ' 核实失败：' + esc(e.message) + '（自动继续下一条）');
+    }
     renderKwTable();
-    kwMsg('ok', 'EverBee 核实完成：命中 <b>' + hit + '</b>，未收录/失败 <b>' + miss + '</b>。'
-      + (miss ? '未收录只是「EverBee 词库里没有」，不代表搜索量为 0 —— 需要的话用「去 Etsy 搜」人工确认。' : '')
-      + '（耗时 ' + ((d.ms || 0) / 1000).toFixed(1) + 's）');
-  } catch(e){
-    kwMsg('err', 'EverBee 核实失败：' + esc(e.message));
-  } finally {
-    btn.textContent = old;
-    updateVerifyBtn();
   }
+  btn.textContent = old;
+  updateVerifyBtn();
+  kwMsg(fail ? 'warn' : 'ok',
+    'EverBee 批量核实完成：成功 <b>' + done + '</b> 条' + (fail ? '，失败 <b>' + fail + '</b> 条' : '')
+    + '；命中 <b>' + hitTotal + '</b> 词，未收录/失败 <b>' + missTotal + '</b> 词。'
+    + (missTotal ? '未收录只是「EverBee 词库里没有」，不代表搜索量为 0 —— 需要的话用「去 Etsy 搜」人工确认。' : ''));
 }
 
 function renderKwTable(){

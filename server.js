@@ -794,13 +794,18 @@ async function etsyAiImage(prompt, size = '1024x1024') {
   const d = await r.json().catch(() => ({}));
   const item = d.data?.[0];
   if (!item) {
-    // 与文本生成一致：把鉴权失败/余额用尽区分出来，别让用户看到一坨 JSON
+    // 额度用尽（看错误码）与限流/过载（429 + overloaded）分开报 —— 别把「繁忙」说成「没钱」
     const raw = (() => { try { return JSON.stringify(d).toLowerCase(); } catch { return ''; } })();
     if (r.status === 401 || r.status === 403) {
       throw new Error(`Etsy 场景图鉴权失败（HTTP ${r.status}）：${d.error?.message || ''} → 检查 ETSY_AI_API_KEY`);
     }
-    if (r.status === 429 || /insufficient_quota|credit_balance_exhausted|no credits|余额不足|quota/.test(raw)) {
-      throw new Error('AI 账户额度已用尽（' + (r.status === 429 ? 'HTTP 429' : 'insufficient_quota') + '）→ 去服务商控制台充值，或换有免费额度的生图服务。');
+    if (/insufficient_quota|credit_balance_exhausted|no credits|余额不足/.test(raw)) {
+      throw new Error('AI 账户额度已用尽 → 去服务商控制台充值，或换有免费额度的生图服务。'
+        + '原始信息：' + (() => { try { return JSON.stringify(d).slice(0, 200); } catch { return ''; } })());
+    }
+    if (r.status === 429) {
+      throw new Error('AI 模型繁忙或触发限流（HTTP 429）→ 通常等几十秒重试即可，不是额度问题。'
+        + '原始信息：' + (() => { try { return JSON.stringify(d).slice(0, 200); } catch { return ''; } })());
     }
     if (r.status === 404) {
       throw new Error(`生图模型名「${ETSY_AI_IMAGE_MODEL}」可能不存在（HTTP 404）→ 检查 ETSY_AI_IMAGE_MODEL 拼写。`);
@@ -1525,10 +1530,15 @@ async function handleApi(req, res) {
           note: `AI 鉴权失败（HTTP ${r.status}）：检查 ETSY_AI_API_KEY 是否正确、是否过期。` });
       }
       const raw = (() => { try { return JSON.stringify(d).toLowerCase(); } catch { return ''; } })();
-      if (r.status === 429 || /insufficient_quota|credit_balance_exhausted|no credits|余额不足|quota/.test(raw)) {
+      if (/insufficient_quota|credit_balance_exhausted|no credits|余额不足/.test(raw)) {
         return json(res, 200, { ok: false, reason: 'quota',
           note: 'AI 账户额度已用尽。去服务商控制台充值，或把 .env 的 ETSY_AI_* 换成有免费额度的服务'
             + '（例如智谱 glm-4-flash）；改完必须重启后端。' });
+      }
+      if (r.status === 429) {
+        return json(res, 200, { ok: false, reason: 'busy',
+          note: 'AI 模型繁忙或触发限流（HTTP 429）→ 通常等几十秒重试即可，不是额度问题。原始信息：'
+            + (() => { try { return JSON.stringify(d).slice(0, 160); } catch { return ''; } })() });
       }
       if (r.status === 404) {
         return json(res, 200, { ok: false, reason: 'model',
@@ -1890,14 +1900,21 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
       throw new Error(`Etsy 文案生成鉴权失败（HTTP ${r.status}）：${msg} → `
         + '请检查 .env 里的 ETSY_AI_API_KEY 是否正确、是否已过期。');
     }
-    // ★ 余额/额度用尽：OpenAI 系返回 429 + insufficient_quota / credit_balance_exhausted，
-    //   智谱等国内服务用 1113 / 余额不足 之类。这是最常见的一类失败，
-    //   笼统显示成「返回异常 + 一坨 JSON」会让人以为网络坏了。
+    // ★ 额度用尽与限流/过载必须分开 —— 两类都常是 HTTP 429，但含义完全不同：
+    //   额度用尽看错误码（insufficient_quota / credit_balance_exhausted / 余额不足），
+    //   与状态码无关；429 但消息是 overloaded / rate limit 的是「临时繁忙，重试即可」。
+    //   （真实踩坑：中转站上游过载返回 429 "The model is overloaded"，
+    //   被误报成「额度已用尽」，用户以为自己刚充的钱没了。）
     const _raw = (() => { try { return JSON.stringify(d).toLowerCase(); } catch { return ''; } })();
-    if (r.status === 429 || /insufficient_quota|credit_balance_exhausted|no credits|余额不足|quota/.test(_raw)) {
-      throw new Error('AI 账户额度已用尽（' + (r.status === 429 ? 'HTTP 429' : 'insufficient_quota') + '）→ '
+    const _orig = (() => { try { return JSON.stringify(d).slice(0, 200); } catch { return ''; } })();
+    if (/insufficient_quota|credit_balance_exhausted|no credits|余额不足/.test(_raw)) {
+      throw new Error('AI 账户额度已用尽 → '
         + '去服务商控制台充值，或把 .env 里的 ETSY_AI_* 换成有免费额度的服务（例如智谱 glm-4-flash）。'
-        + '原始信息：' + (() => { try { return JSON.stringify(d).slice(0, 200); } catch { return ''; } })());
+        + '原始信息：' + _orig);
+    }
+    if (r.status === 429) {
+      throw new Error('AI 模型繁忙或触发限流（HTTP 429）→ 通常等几十秒重试即可，不是额度问题。'
+        + '连续出现再查服务商状态页。原始信息：' + _orig);
     }
     if (r.status === 404) {
       throw new Error(`Etsy 文案生成返回 404：模型名「${ETSY_AI_MODEL}」可能不存在 → `
