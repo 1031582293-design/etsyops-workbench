@@ -2,6 +2,17 @@
 
 改动 `server.js`、`etsy-api.js` 或前端 HTML 后，**先跑这些脚本再推**。
 
+## 每次跑两遍
+
+偶发缺陷（网络抖动、并发时序）**单次跑可能抓不到**。本项目真踩过：
+EverBee 并发时服务端偶发返回「空壳」，只有连续多轮才会露出来。
+所以规矩是：**每一套自测都连跑两遍**，两遍结果一致才算过；不一致说明有偶发问题，
+别拿「第二遍过了」糊弄，要把触发条件找出来。
+
+```bash
+for i in 1 2; do node test/selftest.everbee.mjs; node test/selftest.frontend.mjs; node test/selftest.import.mjs; done
+```
+
 ## 为什么不用真实 HTTP
 
 沙盒环境会拦截所有本地端口（任意端口的 `127.0.0.1` 请求都返回 502），
@@ -45,7 +56,7 @@ fs.writeFileSync("server.test.js", lines.join("\n"));
 node --check server.test.js
 AI_API_KEY=sk-test AI_BASE_URL=http://127.0.0.1:1/v1 AI_MODEL=mock node test/selftest.server.mjs
 node test/selftest.etsy.mjs
-for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.mjs; done
+for f in frontend preview canvas cover filestyle runs everbee; do node test/selftest.$f.mjs; done
 ```
 
 > `selftest.etsy.mjs` 必须在 `server.test.js` 生成之后跑（它会测真实 handleApi 的路由）。
@@ -120,6 +131,20 @@ for f in frontend preview canvas cover filestyle runs; do node test/selftest.$f.
 
 其余：`selftest.preview.mjs`（28）、`selftest.canvas.mjs`（74）、
 `selftest.cover.mjs`（22）、`selftest.filestyle.mjs`（22）、`selftest.runs.mjs`（23）。
+
+**EverBee selftest.everbee.mjs（18 项，零网络依赖）**
+- 纯函数：`normalizeKeyword`（字符串数值转数字）、`parseRpcBody`（SSE 与纯 JSON 两种响应）
+- `authUrl`：PKCE S256、challenge + state 齐全
+- `exchangeCode`：换 token、落盘、清 pending
+- **网络错误重试**：前两次抛错、第三次成功（mock 断言实际调了 3 次）
+- **空响应重试**：第一次返回空壳 → 触发一次重试 → 拿到精确值
+  （防「响应丢了」被误判成「这个词没数据」）
+- `lookup`：结果顺序与输入一致、未收录给「最接近词」
+- 错误映射：无 token → `everbee_not_authorized`
+- `status`：不吐 token 字段
+
+> 该自测用 mock `fetchImpl`，不碰真实 EverBee，所以沙盒里、CI 里都能跑。
+> 真实网络路径用 `EVERBEE_LIVE` 时另行验证（需有效 token，见模块内注释）。
 
 ## 历史：自测抓出过的真实缺陷（别再犯）
 
