@@ -406,7 +406,7 @@ function collectImportRowForm() {
  */
 function parseAiCopy(content) {
   const raw = String(content || '');
-  const out = { raw, title: '', description: '', tags: [] };
+  const out = { raw, title: '', description: '', tags: [], cn: '' };
   if (!raw.trim()) return { ...out, parsed: false, empty: true };
 
   /* 找段起点。★ 必须返回**段标题之后的真实内容起点**，
@@ -421,6 +421,7 @@ function parseAiCopy(content) {
   const tSeg = findSeg('TITLE');
   const dSeg = findSeg('DESCRIPTION');
   const gSeg = findSeg('TAGS');
+  const cSeg = findSeg('CN_CHECK');   // 中文核对稿（给运营核对，不发布）
 
   const clean = (s) => String(s || '')
     .replace(/^\s*\*\*|\*\*\s*$/g, '')     // 去 markdown 粗体
@@ -439,11 +440,15 @@ function parseAiCopy(content) {
     out.description = out.description.replace(/\n{3,}/g, '\n\n');
   }
   if (gSeg) {
-    out.tags = raw.slice(gSeg.body)
+    const end = cSeg ? cSeg.start : raw.length;
+    out.tags = raw.slice(gSeg.body, end)
       .split(/[,，\n]/)
       .map(x => clean(x))
       .filter(Boolean)
       .slice(0, 13);
+  }
+  if (cSeg) {
+    out.cn = clean(raw.slice(cSeg.body));
   }
 
   // ★ 必须真解析出东西才算成功。parsed=false 时前端要显示 raw 原文，

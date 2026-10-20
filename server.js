@@ -652,10 +652,11 @@ const ETSY_AI_DEFAULT_PROMPT = `你是一名熟悉 Etsy SEO 与欧美买家搜�
 4. 数字商品必须在描述里明确说明「不会寄出实体物品」以及买家会拿到什么文件、什么格式。
 5. TAGS 恰好 13 个，每个不超过 20 个字符（空格计入）。不加 #，不放中文译文。
    覆盖物品词、同义词、材质形态、真实用途与使用场景，彼此不要重复。
-6. 只输出三段，格式严格如下（不要加任何其它说明）：
+6. 只输出四段，格式严格如下（不要加任何其它说明）：
 TITLE: <标题>
 DESCRIPTION: <描述正文>
-TAGS: <tag1, tag2, ...>`;
+TAGS: <tag1, tag2, ...>
+CN_CHECK: <中文核对稿——把上面三段的关键事实逐条列成中文要点（物品/材质/尺寸/数量/交期/包含物/承诺），供运营核对，不会发布>`;
 
 /* Fursuit / 兽装店铺专用的内置种子版本。
  * 这是工作台早期为一间 fursuit 店铺定制的写法，原样保留下来作为可选版本，
@@ -675,10 +676,11 @@ const ETSY_AI_FURSUIT_PROMPT = `你是一名熟悉 Etsy SEO、欧美 Furry 市�
    未在资料中出现的物种、风格、配件一律不得提及。真实性优先于流量。
 7. TAGS 恰好 13 个，每个不超过 20 个字符，需覆盖：核心产品词、同义词、风格词、
    物种词、颜色/结构特征、定制意图、使用场景、目标用户。彼此不要重复。
-8. 只输出三段，格式严格如下（不要加任何其它说明）：
+8. 只输出四段，格式严格如下（不要加任何其它说明）：
 TITLE: <标题>
 DESCRIPTION: <描述正文>
-TAGS: <tag1, tag2, ...>`;
+TAGS: <tag1, tag2, ...>
+CN_CHECK: <中文核对稿——把上面三段的关键事实逐条列成中文要点，供运营核对，不会发布>`;
 
 /* ---------------- Etsy 提示词版本库 ----------------
  * 为什么落盘到 data/ 而不是前端 localStorage：运营可能在多台机器上用，
@@ -778,19 +780,54 @@ async function aiImage(prompt, size = '1440x720') {
   return { url: item.url || item.file_url || '', b64: item.b64_json || '' };
 }
 
+/* 手工构造 multipart/form-data —— 自研代理 fetch（createProxyFetch）只吃 string/Buffer，
+ * 不支持 FormData，所以图生图的 /images/edits 必须自己拼 multipart 体。 */
+function buildMultipart(parts) {
+  const boundary = '----etsyops' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const chunks = [];
+  for (const p of parts) {
+    if (p.filename) {
+      chunks.push(Buffer.from('--' + boundary + '\r\nContent-Disposition: form-data; name="' + p.name
+        + '"; filename="' + p.filename + '"\r\nContent-Type: ' + (p.type || 'application/octet-stream') + '\r\n\r\n'));
+      chunks.push(p.buf, Buffer.from('\r\n'));
+    } else {
+      chunks.push(Buffer.from('--' + boundary + '\r\nContent-Disposition: form-data; name="' + p.name
+        + '"\r\n\r\n' + p.value + '\r\n'));
+    }
+  }
+  chunks.push(Buffer.from('--' + boundary + '--\r\n'));
+  return { body: Buffer.concat(chunks), contentType: 'multipart/form-data; boundary=' + boundary };
+}
+
 /* Etsy 场景图生图 —— 走 Etsy 那套出口（ETSY_AI_BASE_URL + ETSY_AI_PROXY），
- * 与公众号的 aiImage 完全独立：换 OpenAI 时场景图跟着 ETSY_AI_PROXY 走代理。 */
-async function etsyAiImage(prompt, size = '1024x1024') {
+ * 与公众号的 aiImage 完全独立：换 OpenAI 时场景图跟着 ETSY_AI_PROXY 走代理。
+ * refB64 非空时走 /images/edits 图生图（以实拍图为参考，更保留主体）——
+ * 需要 OpenAI 官方或支持 edits 的服务；部分中转站没有该路由（实测 gptsapi 404）。 */
+async function etsyAiImage(prompt, size = '1024x1024', refB64 = '') {
   if (!etsyAiConfigured()) {
     throw new Error('Etsy 场景图未配置：请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL'
       + '（留空则复用公众号那套 AI_* 配置），生图模型用 ETSY_AI_IMAGE_MODEL。');
   }
-  const r = await etsyAiFetch()(`${ETSY_AI_BASE_URL}/images/generations`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ETSY_AI_API_KEY}` },
-    body: JSON.stringify({ model: ETSY_AI_IMAGE_MODEL, prompt, size, n: 1 }),
-    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
-  });
+  const auth = { Authorization: `Bearer ${ETSY_AI_API_KEY}` };
+  let url = `${ETSY_AI_BASE_URL}/images/generations`;
+  let init;
+  if (refB64) {
+    const mp = buildMultipart([
+      { name: 'model', value: ETSY_AI_IMAGE_MODEL },
+      { name: 'prompt', value: prompt },
+      { name: 'size', value: size },
+      { name: 'n', value: '1' },
+      { name: 'image', filename: 'reference.png', type: 'image/png', buf: Buffer.from(refB64, 'base64') },
+    ]);
+    url = `${ETSY_AI_BASE_URL}/images/edits`;
+    init = { method: 'POST', headers: Object.assign({ 'Content-Type': mp.contentType }, auth),
+      body: mp.body, signal: AbortSignal.timeout(AI_TIMEOUT_MS) };
+  } else {
+    init = { method: 'POST', headers: Object.assign({ 'Content-Type': 'application/json' }, auth),
+      body: JSON.stringify({ model: ETSY_AI_IMAGE_MODEL, prompt, size, n: 1 }),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS) };
+  }
+  const r = await etsyAiFetch()(url, init);
   const d = await r.json().catch(() => ({}));
   const item = d.data?.[0];
   if (!item) {
@@ -1366,7 +1403,8 @@ async function handleApi(req, res) {
         + '场景自然、干净、光线真实、构图像商品摄影。只输出一句英文 prompt，不要任何解释或引号。',
         '产品事实：\n' + (product ? '产品：' + product + '\n' : '') + (facts.length ? facts.join('\n') : '（无）')
         + '\n\n场景要求：' + (scene || '（用户未指定，请按产品用途设计一个自然的使用/展示场景）'));
-      const img = await etsyAiImage(prompt.trim(), String(b.size || '1024x1024'));
+      // 勾了「参考实拍图」就带上第 1 张图的 base64 走 /images/edits 图生图（更保留主体）
+      const img = await etsyAiImage(prompt.trim(), String(b.size || '1024x1024'), String(b.refB64 || ''));
       return json(res, 200, {
         ok: true, prompt: prompt.trim(), url: img.url, b64: img.b64, model: ETSY_AI_IMAGE_MODEL,
         note: '场景图已生成。⚠️ 文生图无法严格保留实拍主体像素，主体细节可能与原图有差异 —— '
@@ -1600,6 +1638,7 @@ async function handleApi(req, res) {
       // 后台串行跑，不 await —— 立即返回 jobId 让前端轮询
       (async () => {
         for (const item of ready) {
+          job.curSku = item.sku; job.curStartedAt = Date.now();
           if (job.stopRequested) {
             job.status = 'stopped';
             etsyLog(`Etsy 文案批次 ${id} 被手动中断（已完成 ${job.done}/${job.total}）`);
@@ -1609,13 +1648,18 @@ async function handleApi(req, res) {
             const content = await etsyAiGenerate(systemPrompt,
               '请为下面这个产品生成一套完整的英文 Etsy Listing。严格按系统提示词里的格式输出：\n'
               + 'TITLE（不超过 140 字符）\nDESCRIPTION（手机端可读，段落简短）\n'
-              + 'TAGS（13 个，逗号分隔，每个不超过 20 字符）\n\n'
+              + 'TAGS（13 个，逗号分隔，每个不超过 20 字符）\n'
+              + 'CN_CHECK（中文核对稿：把上述内容的关键事实列成中文要点，供运营核对，不发布）\n\n'
               + '产品事实（只能依据这些，不要编造未提及的规格）：\n' + item.facts);
             const parsed = parseEtsyCopy(content);
             job.results.push({ index: item.index, sku: item.sku, ...parsed });
-            if (parsed.parsed) job.okCount++;
-            else job.failures.push({ index: item.index, sku: item.sku,
-              reason: 'AI 返回的内容无法解析出 TITLE/DESCRIPTION/TAGS（可能格式跑偏了，可点该条「换一版」重试）' });
+            if (parsed.parsed) {
+              job.okCount++;
+              etsyLog(`Etsy 文案批次 ${id} [${job.done + 1}/${job.total}] ${item.sku} 完成（耗时 ${Math.round((Date.now() - job.curStartedAt) / 1000)}s）`);
+            } else {
+              job.failures.push({ index: item.index, sku: item.sku,
+                reason: 'AI 返回的内容无法解析出 TITLE/DESCRIPTION/TAGS（可能格式跑偏了，可点该条「换一版」重试）' });
+            }
           } catch (e) {
             // ★ 单条失败不中断整批 —— 用户明确选了「跳过 + 列清单」
             job.failures.push({ index: item.index, sku: item.sku, reason: e.message });
@@ -1644,6 +1688,8 @@ async function handleApi(req, res) {
     return json(res, 200, {
       ok: true, jobId: job.id, status: job.status, total: job.total, done: job.done,
       okCount: job.okCount, results: job.results, failures: job.failures,
+      curSku: job.curSku || '',
+      curElapsedSec: job.curStartedAt ? Math.round((Date.now() - job.curStartedAt) / 1000) : 0,
       note: job.status === 'running' ? '生成中…' : (job.status === 'stopped' ? '已中断' : '已完成'),
     });
   }
@@ -1680,7 +1726,8 @@ async function handleApi(req, res) {
 
       const content = await etsyAiGenerate(systemPrompt,
         '请为下面这个产品生成一套完整的英文 Etsy Listing。严格按系统提示词里的格式输出：\n'
-        + 'TITLE（不超过 140 字符）\nDESCRIPTION（手机端可读，段落简短）\nTAGS（13 个，逗号分隔，每个不超过 20 字符）\n\n'
+        + 'TITLE（不超过 140 字符）\nDESCRIPTION（手机端可读，段落简短）\nTAGS（13 个，逗号分隔，每个不超过 20 字符）\n'
+        + 'CN_CHECK（中文核对稿：把上述内容的关键事实列成中文要点，供运营核对，不发布）\n\n'
         + '产品事实（只能依据这些，不要编造未提及的规格）：\n' + factsText.join('\n'));
 
       const out = parseEtsyCopy(content);
@@ -1700,8 +1747,6 @@ async function handleApi(req, res) {
       }
       return json(res, 200, { ok: true, ...out,
         note: 'AI 只依据你给的事实生成。它不会也不能替你判断材质真伪、授权情况与合规性——那些仍需人工确认。' });
-
-      return json(res, 200, { ok: true, ...out, note: 'AI 只依据你给的事实生成。它不会也不能替你判断材质真伪、授权情况与合规性——那些仍需人工确认。' });
     } catch (e) {
       etsyLog('Etsy 文案生成失败：' + e.message);
       return json(res, 500, { error: 'etsy_ai_failed', note: e.message });
@@ -1827,7 +1872,7 @@ function factsEnough(item) {
  */
 function parseEtsyCopy(content) {
   const raw = String(content == null ? '' : content);
-  const out = { raw, title: '', description: '', tags: [] };
+  const out = { raw, title: '', description: '', tags: [], cn_check: '' };
   if (!raw.trim()) return { ...out, parsed: false, empty: true };
 
   /* 返回**段标题之后的真实内容起点**，而不只是段标题位置 ——
@@ -1845,6 +1890,7 @@ function parseEtsyCopy(content) {
   const tSeg = findSeg('TITLE');
   const dSeg = findSeg('DESCRIPTION');
   const gSeg = findSeg('TAGS');
+  const cSeg = findSeg('CN_CHECK');   // 中文核对稿（SOP 04：给运营核对用，不发布）
 
   if (tSeg) {
     const end = dSeg ? dSeg.start : (gSeg ? gSeg.start : raw.length);
@@ -1855,7 +1901,11 @@ function parseEtsyCopy(content) {
     out.description = clean(raw.slice(dSeg.body, end)).replace(/\n{3,}/g, '\n\n');
   }
   if (gSeg) {
-    out.tags = raw.slice(gSeg.body).split(/[,，\n]/).map(clean).filter(Boolean).slice(0, 13);
+    const end = cSeg ? cSeg.start : raw.length;
+    out.tags = raw.slice(gSeg.body, end).split(/[,，\n]/).map(clean).filter(Boolean).slice(0, 13);
+  }
+  if (cSeg) {
+    out.cn_check = clean(raw.slice(cSeg.body)).replace(/\n{3,}/g, '\n\n');
   }
 
   out.parsed = Boolean(out.title || out.description || out.tags.length);

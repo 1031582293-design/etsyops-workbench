@@ -169,7 +169,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">ee68bfd</span>
+  <span class="vtag" id="verTag">2d28572</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -344,6 +344,10 @@
         </div>
         <label class="fld">场景描述（可选）<span class="hint">英文更准；留空则由 AI 按产品用途自动设计</span></label>
         <input type="text" id="fScene" placeholder="例如：on a wooden shelf with a small plant beside it" />
+        <label style="display:flex;gap:6px;align-items:center;font-size:12px;margin-top:8px">
+          <input type="checkbox" id="refImgOn" />
+          以第 1 张实拍图为参考（图生图 /images/edits，更保留主体；需 OpenAI 官方等支持 edits 的服务）
+        </label>
         <div class="btnrow" style="margin-top:8px">
           <button class="btn sm" id="btnSceneImg">生成场景图</button>
         </div>
@@ -1566,8 +1570,11 @@ document.getElementById('btnSceneImg').addEventListener('click', async () => {
     const ai = AI_RESULTS.find(x => x.i === CURRENT_IDX);
     // 产品是什么：优先用已生成的英文标题，其次类目名
     const product = (ai && ai.title) || (PICKED_TAX && PICKED_TAX.name) || '';
+    const refOn = document.getElementById('refImgOn') && document.getElementById('refImgOn').checked;
+    if (refOn && !IMAGES[0]) { showMsg(m, 'warn', '勾了「参考实拍图」但还没有上传图片 —— 先在第 1 步传图，或取消勾选。'); btn.disabled = false; btn.textContent = '生成场景图'; return; }
     const d = await apiCall('/api/etsy/ai/scene-image', {
-      body: Object.assign({}, facts, { product, scene, size: '1024x1024' }),
+      body: Object.assign({}, facts, { product, scene, size: '1024x1024',
+        refB64: (refOn && IMAGES[0]) ? IMAGES[0].data : '' }),
       timeout: 180000,
     });
     _sceneImg = d;
@@ -2336,6 +2343,50 @@ async function loadEverbeeStatus(){
   updateVerifyBtn();
 }
 
+/* ★ Agent 收敛 13 个标签（SOP 02）：EverBee 核实完自动跑。
+ * 规则：硬淘汰（超 20 字符 / 品牌角色词 / 与已选词重叠过高，近义词只留最高分）→ 按 score 排序 →
+ * 配额 What 2 / Who 3 / Where 2 / When 3 / Why 3，某维合格不足时保底 1、名额让给全局最高分补足 13。
+ * 只有 EverBee 有数据的词参选（未收录的没有分数依据，不入选）。 */
+const KW_QUOTA = { What: 2, Who: 3, Where: 2, When: 3, Why: 3 };
+function agentPick13(sku){
+  const pool = KW_POOL[sku];
+  if (!pool || !Array.isArray(pool.words)) return [];
+  const words = pool.words;
+  words.forEach(w => { if (w.status === 'adopted') w.status = 'verified'; });   // 重选前先复位
+  const cand = words.filter(w => w.eb && w.eb.vol != null)
+    .sort((a, b) => (b.eb.score || 0) - (a.eb.score || 0));
+  const toks = x => String(x || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const ok = [];
+  for (const w of cand){
+    const en = String(w.en || '');
+    if (en.length > 20) continue;                                    // 硬淘汰：超 20 字符
+    if (KW_BRANDS.find(b => en.toLowerCase().includes(b))) continue; // 硬淘汰：品牌/角色词
+    const t = toks(en);
+    const dup = ok.some(x => {
+      const x2 = toks(x.en);
+      const inter = t.filter(v => x2.includes(v)).length;
+      const uni = new Set(t.concat(x2)).size;
+      return uni > 0 && inter / uni > 0.6;
+    });
+    if (dup) continue;
+    ok.push(w);
+  }
+  const dimOf = w => String(w.w || 'What');
+  const picked = [];
+  const freeIn = d => ok.filter(w => dimOf(w) === d && !picked.includes(w));
+  Object.keys(KW_QUOTA).forEach(d => freeIn(d).slice(0, KW_QUOTA[d]).forEach(w => picked.push(w)));
+  Object.keys(KW_QUOTA).forEach(d => {                               // 每维保底 1
+    if (!picked.some(w => dimOf(w) === d)) { const f = freeIn(d)[0]; if (f) picked.push(f); }
+  });
+  for (const w of ok){                                               // 剩余名额补足 13
+    if (picked.length >= 13) break;
+    if (!picked.includes(w)) picked.push(w);
+  }
+  const final13 = picked.slice(0, 13);
+  words.forEach(w => { if (final13.includes(w) && w.status === 'verified') w.status = 'adopted'; });
+  return final13;
+}
+
 /* 把所有有词池的 SKU 整批交给 EverBee 核实（2026-10-21 从「下拉选一条」改为全部条目串行）。
  * 未收录的词只标「无数据」，绝不写 0 —— EverBee 没收录不等于没人搜。
  * 未授权时点击直接打开授权页，不再只是 disabled 干等。 */
@@ -2376,6 +2427,8 @@ async function everbeeVerify(){
           w.checkedAt = Date.now();
           w.source = 'everbee';
           if ((w.status || 'candidate') === 'candidate') w.status = 'verified';
+          // ★ Agent 按真实搜索量自动评量级（≥1000 很多 / 100–999 中等 / <100 很少），人工可改
+          w.volume = r.exact.vol >= 1000 ? 'many' : (r.exact.vol >= 100 ? 'some' : 'few');
           hit++;
         } else if (r.ok){
           w.eb.miss = true;
@@ -2386,9 +2439,11 @@ async function everbeeVerify(){
           miss++;
         }
       });
+      const picked13 = agentPick13(sku);
       await saveKeywords(sku);
       done++; hitTotal += hit; missTotal += miss;
-      log('EverBee 核实（' + sku + '）：命中 ' + hit + '，未收录/失败 ' + miss, 's');
+      log('EverBee 核实（' + sku + '）：命中 ' + hit + '，未收录/失败 ' + miss
+        + '；Agent 入选 ' + picked13.length + ' 个标签', 's');
     } catch(e){
       fail++;
       log('EverBee 核实失败（' + sku + '）：' + e.message, 'e');
@@ -2401,7 +2456,8 @@ async function everbeeVerify(){
   kwMsg(fail ? 'warn' : 'ok',
     'EverBee 批量核实完成：成功 <b>' + done + '</b> 条' + (fail ? '，失败 <b>' + fail + '</b> 条' : '')
     + '；命中 <b>' + hitTotal + '</b> 词，未收录/失败 <b>' + missTotal + '</b> 词。'
-    + (missTotal ? '未收录只是「EverBee 词库里没有」，不代表搜索量为 0 —— 需要的话用「去 Etsy 搜」人工确认。' : ''));
+    + 'Agent 已按 5W 配额收敛标签（What 2 / Who 3 / Where 2 / When 3 / Why 3，不足让位补足 13），入选的标「采纳」，生成文案时优先使用。'
+    + (missTotal ? '未收录只是「EverBee 词库里没有」，不代表搜索量为 0。' : ''));
 }
 
 function renderKwTable(){
@@ -2420,6 +2476,8 @@ function renderKwTable(){
     '<div style="font-size:12px;color:var(--text-faint);margin:6px 0">'
     + words.length + ' 个候选词 · 改状态/量级即自动保存'
     + (ebHit ? '　<span style="color:var(--good)">EverBee 已核实 ' + ebHit + ' 个</span>' : '')
+    + (words.filter(w => w.status === 'adopted').length
+        ? '　<span style="color:var(--good)">Agent 已选 ' + words.filter(w => w.status === 'adopted').length + ' 个标签</span>' : '')
     + (badN ? '　<span style="color:var(--warn)">词面自检发现 ' + badN + ' 处问题（见行内标黄）</span>' : '　词面自检通过')
     + '</div>'
     + '<table class="kv" style="width:100%">'
@@ -2438,6 +2496,7 @@ function renderKwTable(){
             + (eb.error ? '<br><span style="color:var(--bad);font-size:11px">' + esc(eb.error).slice(0, 40) + '</span>' : ''));
       return '<tr>'
         + '<td style="width:26%"><b>' + esc(w.en) + '</b>'
+        + ((w.status || '') === 'adopted' ? ' <span style="color:var(--good);font-size:11px">入选13</span>' : '')
         + (probs.length ? '<br><span style="color:var(--warn);font-size:11px">' + probs.map(esc).join('；') + '</span>' : '')
         + '</td>'
         + '<td style="width:12%">' + esc(w.zh || '')
@@ -2447,7 +2506,7 @@ function renderKwTable(){
         + '<td style="width:18%;font-size:11.5px">'
         + '<button class="btn sm ghost" data-kw-search="' + i + '">去 Etsy 搜 ↗</button>'
         + '<select data-kw-vol="' + i + '" style="margin-top:4px">'
-        + [['', '结果量级？'], ['many', '很多'], ['some', '中等'], ['few', '很少']].map(([v, t]) =>
+        + [['', w.volume ? '量级（Agent 已评，可改）' : '量级（Agent 按 EverBee 搜索量自动评）'], ['many', '很多'], ['some', '中等'], ['few', '很少']].map(([v, t]) =>
             '<option value="' + v + '"' + ((w.volume || '') === v ? ' selected' : '') + '>' + t + '</option>').join('')
         + '</select>'
         + '</td>'
@@ -2459,8 +2518,8 @@ function renderKwTable(){
     }).join('')
     + '</table>'
     + '<div class="msg info" style="margin-top:8px">'
-    + '<b>两个数据源别混用：</b>EverBee 给的是<b>具体数值</b>（近 30 天搜索量 / 竞争 listing 数 / 综合分），'
-    + '「结果量级」是你在 Etsy 搜索页看到的<b>档位</b>。'
+    + '<b>量级由 Agent 按 EverBee 真实搜索量自动评定</b>（≥1000 很多 / 100–999 中等 / <100 很少），可手工改；'
+    + '「去 Etsy 搜 ↗」保留为备选的人工查证方式。'
     + '「未收录」只表示 EverBee 词库里没有这个词，<b>不等于搜索量为 0</b>。</div>';
 
   box.querySelectorAll('[data-kw-search]').forEach(b => b.addEventListener('click', () => {
@@ -2622,7 +2681,7 @@ async function startAiBatch(auto){
   AI_RESULTS.length = 0;
   IMPORT_BATCH.forEach((it, i) => AI_RESULTS.push({
     i, row: it._row, sku: it.sku, status: skip.includes(it) ? 'skip' : 'wait',
-    title: '', description: '', tags: [],
+    title: '', description: '', tags: [], cn: '',
   }));
 
   // ★ 开跑前先 ping 一次 AI。受理成功但出口不通时，第一条要等满超时才报错，
@@ -2706,7 +2765,10 @@ function pollAiBatch(jobId, total) {
         loadQuota();   // 每条生成会消耗 Etsy/AI 额度，顺手刷新侧栏用量
       }
       lastDone = done;
-      setAiProgress(done, total, r.note || '');
+      const curNote = (r.curSku && done < total)
+        ? '　当前：' + r.curSku + '（本条已等 ' + (r.curElapsedSec || 0) + ' 秒；走中转站时一条可能 1~2 分钟）'
+        : '';
+      setAiProgress(done, total, (r.note || '') + curNote);
       // 用后端返回的 results 覆盖（断点续跑：刷新页面后接着看）
       if (Array.isArray(r.results)) {
         r.results.forEach((x, k) => {
@@ -2714,6 +2776,7 @@ function pollAiBatch(jobId, total) {
           if (!slot) return;
           slot.status = x.status; slot.title = x.title || '';
           slot.description = x.description || ''; slot.tags = x.tags || [];
+          slot.cn = x.cn_check || '';
           slot.error = x.error || '';
         });
       }
@@ -2779,8 +2842,10 @@ function renderAiList() {
         + '<b style="font-size:13px">' + esc(x.sku || ('第 ' + x.row + ' 行')) + '</b>'
         + '<span style="font-size:11.5px;color:' + color + '">' + (label[x.status] || x.status) + '</span></div>'
         + body
-        + '<div class="btnrow" style="margin-top:8px">'
-        + '<button class="btn sm" data-ai-fill="' + k + '"' + (x.status === 'done' ? '' : ' disabled') + '>设为当前条目 →</button>'
+      + (x.cn ? '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:11.5px;color:var(--text-faint)">中文核对稿（给运营核对事实用，不发布）</summary>'
+          + '<pre style="white-space:pre-wrap;font-size:12px;line-height:1.7;background:var(--bg-soft,rgba(127,127,127,.08));padding:10px;border-radius:8px;overflow:auto">' + esc(x.cn) + '</pre></details>' : '')
+      + '<div class="btnrow" style="margin-top:8px">'
+      + '<button class="btn sm" data-ai-fill="' + k + '"' + (x.status === 'done' ? '' : ' disabled') + '>设为当前条目 →</button>'
         + '<button class="btn sm ghost" data-ai-regen="' + k + '"' + (x.status === 'skip' ? ' disabled' : '') + '>换一版</button>'
         + '</div></div>';
     }).join('');
@@ -2840,7 +2905,7 @@ function renderAiList() {
           label: 'AI 文案生成',
         });
         x.title = r.title || ''; x.description = r.description || '';
-        x.tags = r.tags || []; x.status = 'done'; x.error = '';
+        x.tags = r.tags || []; x.cn = r.cn_check || ''; x.status = 'done'; x.error = '';
         const warn = [];
         if (x.title.length > 140) warn.push('标题超 140 字符');
         if (x.tags.length > 13) warn.push('标签超 13 个');
