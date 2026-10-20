@@ -969,7 +969,11 @@ async function handleApi(req, res) {
     const r = await mailNotify.notifyMail(sample, Buffer.from(raw), {
       webhook: FEISHU_WEBHOOK, secret: FEISHU_SECRET, baseUrl: PUBLIC_BASE,
     });
-    return json(res, r.ok ? 200 : 502, r);
+    if (!r.ok) console.warn('[notify] 测试推送失败:', JSON.stringify(r));
+    // ★ 必须用 4xx，不能用 502：Cloudflare 会把源站的 5xx 换成它自己的错误页
+    //   （只剩一句 "error code: 502"），飞书返回的真实原因就被吞掉了。
+    //   2026-10-21 实测踩过：webhook 地址错 → 飞书 404 → 公网只显示 502。
+    return json(res, r.ok ? 200 : 422, r);
   }
 
   if (p === '/api/notify/status' && req.method === 'GET') {
