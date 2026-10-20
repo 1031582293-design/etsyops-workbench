@@ -12,6 +12,7 @@ import { execSync } from 'node:child_process';
 import * as etsy from './etsy-api.js';
 import * as everbee from './etsy-everbee.js';
 import * as mail from './mail-ingest.js';
+import * as mailNotify from './mail-notify.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)));
 
@@ -433,6 +434,14 @@ const API_KEY = process.env.API_KEY || '';
 // 没配这个变量时，投递一律拒收（避免公网接口变成任人写盘的口子）。
 const MAIL_INGEST_SECRET = process.env.MAIL_INGEST_SECRET || '';
 const MAIL_DATA_DIR = process.env.MAIL_DATA_DIR || join(DATA_DIR, 'mail');
+
+// ★ 飞书通知（2026-10-20）：邮件到达后推一条卡片到群机器人。
+// 为什么用群机器人而不是飞书自建应用：只要一个 webhook，不用建应用、不用管理员审核、
+// 不用维护 app_id/secret，失败了重发一次就完事。
+const FEISHU_WEBHOOK = process.env.FEISHU_WEBHOOK || '';
+const FEISHU_SECRET = process.env.FEISHU_SECRET || '';
+const PUBLIC_BASE = process.env.PUBLIC_BASE || 'https://etsyops-workbench.pages.dev/';
+
 function corsHeaders(res, req) {
   // 回显来源（没有 origin 时放行 *），确保 pages.dev / localhost / 127.0.0.1 / file:// 等任意页面 fetch 都不被浏览器 CORS 拦截
   const origin = req.headers.origin;
@@ -822,7 +831,7 @@ async function handleApi(req, res) {
   //  - /api/mail/status 只返回「配没配密钥 / 收了几封 / 最后一封时间」，不含任何邮件内容，
   //    定位「信到底有没有到」时最需要它。
   if (API_KEY && p !== '/api/wechat/status' && p !== '/api/wechat/ip' && p !== '/api/ai/status'
-      && p !== '/api/mail/ingest' && p !== '/api/mail/status'
+      && p !== '/api/mail/ingest' && p !== '/api/mail/status' && p !== '/api/notify/status'
       && !ETSY_OPEN_PATHS.includes(p) && !ETSY_AI_BATCH_OPEN) {
     const url = new URL(req.url, 'http://localhost');
     const provided = req.headers['x-api-key'] || url.searchParams.get('key');
@@ -868,6 +877,22 @@ async function handleApi(req, res) {
     console.log('[mail]', JSON.stringify({
       ok: r.ok, id: r.id, dup: !!r.duplicate, subject: r.subject || '', size: r.size || 0,
     }));
+
+    // 飞书通知：故意不 await——邮件已经落盘，通知失败不能反过来影响收信。
+    // 重复投递不再提醒，否则 Worker 重试会把群刷屏。
+    if (r.ok && !r.duplicate && FEISHU_WEBHOOK) {
+      try {
+        const rawBuf = Buffer.from(body.rawB64, 'base64');
+        mailNotify.notifyMail(r, rawBuf, {
+          webhook: FEISHU_WEBHOOK, secret: FEISHU_SECRET, baseUrl: PUBLIC_BASE,
+        }).then((x) => {
+          if (!x.ok) console.warn('[mail] 飞书通知失败:', x.error || x.code);
+        }).catch((e) => console.warn('[mail] 飞书通知异常:', e && e.message));
+      } catch (e) {
+        console.warn('[mail] 飞书通知准备失败:', e && e.message);
+      }
+    }
+
     return json(res, r.ok ? 200 : (r.status || 500), r);
   }
 
@@ -886,6 +911,37 @@ async function handleApi(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const r = await mail.recent(MAIL_DATA_DIR, url.searchParams.get('limit'));
     return json(res, 200, r);
+  }
+
+  // 飞书通知自检：手动发一条卡片，确认 webhook 与签名都对。
+  // 不用等真实邮件，配置完就能立刻验证「通知这条路通不通」。
+  if (p === '/api/notify/test' && req.method === 'POST') {
+    if (!FEISHU_WEBHOOK) {
+      return json(res, 503, {
+        ok: false, error: 'no_webhook',
+        note: '未配置 FEISHU_WEBHOOK。请在 .env 加一行 FEISHU_WEBHOOK=<群机器人地址> 后重启后端。',
+      });
+    }
+    const body = await readJson(req).catch(() => ({}));
+    const sample = {
+      subject: body.subject || 'You sold an item!（测试消息）',
+      from: body.from || 'transaction@etsy.com',
+      at: new Date().toISOString(),
+    };
+    const raw = body.raw || '这是一条测试通知，用来确认飞书 webhook 与签名是否正确。'
+      + ' 如果你看到这张卡片，说明配置已经生效。';
+    const r = await mailNotify.notifyMail(sample, Buffer.from(raw), {
+      webhook: FEISHU_WEBHOOK, secret: FEISHU_SECRET, baseUrl: PUBLIC_BASE,
+    });
+    return json(res, r.ok ? 200 : 502, r);
+  }
+
+  if (p === '/api/notify/status' && req.method === 'GET') {
+    return json(res, 200, {
+      configured: Boolean(FEISHU_WEBHOOK),
+      signed: Boolean(FEISHU_SECRET),
+      note: FEISHU_WEBHOOK ? '已配置飞书 webhook，等待邮件触发。' : '未配置 FEISHU_WEBHOOK，邮件到达时不会推送。',
+    });
   }
 
   // 绑定状态检测
