@@ -1,120 +1,219 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>消息中心 · EtsyOps</title>
-<script src="config.js"></script>
+<script src="./config.js"></script>
 <style>
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 24px 16px 64px;
-    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-    background: #f5f5f4; color: #1c1c1a; font-size: 14px; line-height: 1.6;
+  :root{
+    --bg:#070b16; --panel:rgba(255,255,255,.045); --panel-2:rgba(255,255,255,.07);
+    --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.18);
+    --text:#e7ecf5; --text-dim:#9aa6bd; --text-faint:#69748c;
+    --accent:#7c5cff; --accent-2:#22d3ee; --etsy:#f1641e;
+    --good:#34d399; --warn:#fbbf24; --bad:#fb7185;
+    --radius:18px; --radius-sm:13px;
   }
-  .wrap { max-width: 860px; margin: 0 auto; }
-  header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; gap: 12px; flex-wrap: wrap; }
-  h1 { font-size: 20px; font-weight: 500; margin: 0 0 4px; }
-  .sub { font-size: 13px; color: #6b6a65; }
-  .btns { display: flex; gap: 8px; }
-  button {
-    font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px;
-    border: 1px solid #d6d4cd; background: #fff; color: #1c1c1a; cursor: pointer;
+  *{box-sizing:border-box}
+  body{
+    margin:0; color:var(--text); min-height:100vh; line-height:1.65;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    background:
+      radial-gradient(1100px 640px at 8% -12%,rgba(124,92,255,.20),transparent 60%),
+      radial-gradient(900px 600px at 102% -4%,rgba(34,211,238,.10),transparent 55%),
+      radial-gradient(700px 500px at 50% 108%,rgba(241,100,30,.08),transparent 60%),
+      var(--bg);
   }
-  button:hover { border-color: #b4b1a8; }
-  button.primary { background: #185FA5; border-color: #185FA5; color: #fff; }
-  button:disabled { opacity: .5; cursor: default; }
-  .stats { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; margin-bottom: 20px; }
-  .stat { background: #fff; border: 1px solid #e7e5df; border-radius: 12px; padding: 14px 16px; }
-  .stat .k { font-size: 13px; color: #6b6a65; margin-bottom: 4px; }
-  .stat .v { font-size: 24px; font-weight: 500; }
-  .stat .v.danger { color: #A32D2D; }
-  .stat .v.muted { color: #8a8880; }
-  .filters { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
-  .filters button.on { border-color: #185FA5; color: #185FA5; background: #E6F1FB; }
-  .card { background: #fff; border: 1px solid #e7e5df; border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; }
-  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .tag { font-size: 12px; padding: 2px 8px; border-radius: 5px; white-space: nowrap; }
-  .t-message { background: #E6F1FB; color: #185FA5; }
-  .t-order { background: #EAF3DE; color: #3B6D11; }
-  .t-case { background: #FCEBEB; color: #A32D2D; }
-  .t-review { background: #FAEEDA; color: #854F0B; }
-  .t-other, .t-policy { background: #F1EFE8; color: #5F5E5A; }
-  .who { font-weight: 500; }
-  .muted { color: #6b6a65; font-size: 13px; }
-  .age { margin-left: auto; font-size: 12px; color: #6b6a65; white-space: nowrap; }
-  .age.warn { color: #854F0B; }
-  .age.danger { color: #A32D2D; }
-  .summary { margin: 8px 0 0; color: #52504b; font-size: 13px; }
-  .actions { display: flex; gap: 8px; margin-top: 12px; }
-  .empty { text-align: center; color: #8a8880; padding: 40px 0; font-size: 13px; }
-  .section-title { font-size: 13px; color: #6b6a65; margin: 24px 0 10px; display: flex; align-items: center; gap: 8px; }
-  .section-title .count { background: #e7e5df; border-radius: 5px; padding: 1px 7px; }
-  .ship { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
-  .ship .lines { font-size: 13px; color: #6b6a65; }
-  .banner { background: #FCEBEB; border: 1px solid #F7C1C1; color: #791F1F; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px; }
-  .low { margin-top: 24px; }
-  .low summary { cursor: pointer; color: #6b6a65; font-size: 13px; }
-  .hint { font-size: 12px; color: #8a8880; margin: 0 0 12px; }
-  @media (max-width: 640px) {
-    .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .wrap{max-width:1080px;margin:0 auto;padding:26px 20px 60px}
+
+  .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+  .avatar{width:42px;height:42px;border-radius:13px;display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--accent),var(--accent-2));font-weight:600;color:#fff;font-size:17px}
+  .top h1{font-size:19px;margin:0;letter-spacing:.2px}
+  .top .sub{font-size:12.5px;color:var(--text-faint)}
+  .top .spacer{margin-left:auto}
+  a.btn,button.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:11px;
+    border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px;
+    cursor:pointer;text-decoration:none;font-family:inherit;transition:.15s}
+  a.btn:hover,button.btn:hover{border-color:var(--border-strong);background:rgba(255,255,255,.1)}
+  .btn.ghost{background:transparent}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+
+  .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+  .kpi{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;
+    position:relative;overflow:hidden}
+  .kpi::after{content:"";position:absolute;inset:0 0 auto 0;height:1px;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.18),transparent)}
+  .kpi .k{font-size:12.5px;color:var(--text-faint);margin-bottom:6px}
+  .kpi .v{font-size:28px;font-weight:600;letter-spacing:-.5px;line-height:1.1}
+  .kpi .n{font-size:11.5px;color:var(--text-faint);margin-top:5px}
+  .kpi.hot .v{color:var(--bad)}
+  .kpi.warm .v{color:var(--warn)}
+  .kpi.etsy .v{color:var(--etsy)}
+  .kpi .v.dim{color:var(--text-faint)}
+
+  .notice{font-size:12.5px;color:var(--text-dim);background:rgba(124,92,255,.09);
+    border:1px solid rgba(124,92,255,.25);border-radius:var(--radius-sm);padding:11px 14px;margin-bottom:16px}
+  .banner{font-size:13px;background:rgba(251,113,133,.10);border:1px solid rgba(251,113,133,.3);
+    color:#ffc2cb;border-radius:var(--radius-sm);padding:12px 15px;margin-bottom:16px;line-height:1.8}
+  .banner b{color:#fff;font-weight:500}
+
+  .head{display:flex;align-items:center;gap:10px;margin:0 0 14px;flex-wrap:wrap}
+  .head .bar{width:3px;height:15px;border-radius:2px;background:linear-gradient(180deg,var(--accent),var(--accent-2))}
+  .head h2{font-size:14.5px;margin:0;font-weight:500}
+  .head .count{font-size:11.5px;color:var(--text-faint);background:var(--panel-2);padding:1px 8px;border-radius:20px}
+  .head .spacer{margin-left:auto}
+
+  .filters{display:flex;gap:8px;flex-wrap:wrap}
+  .filters button{font:inherit;font-size:12.5px;padding:5px 12px;border-radius:20px;border:1px solid var(--border);
+    background:transparent;color:var(--text-dim);cursor:pointer;transition:.15s}
+  .filters button:hover{border-color:var(--border-strong);color:var(--text)}
+  .filters button.on{background:rgba(124,92,255,.16);border-color:rgba(124,92,255,.45);color:#c9bcff}
+
+  .list{display:flex;flex-direction:column;gap:10px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);padding:15px 18px;
+    transition:.15s;border-left:3px solid transparent}
+  .card:hover{border-color:var(--border-strong);background:rgba(255,255,255,.06)}
+  .card.lv-message{border-left-color:var(--accent-2)}
+  .card.lv-order{border-left-color:var(--etsy)}
+  .card.lv-case{border-left-color:var(--bad)}
+  .card.lv-review{border-left-color:var(--good)}
+  .row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .tag{font-size:11.5px;padding:2px 9px;border-radius:6px;white-space:nowrap;font-weight:500}
+  .t-message{background:rgba(34,211,238,.14);color:#8fe8f7}
+  .t-order{background:rgba(241,100,30,.16);color:#ffb282}
+  .t-case{background:rgba(251,113,133,.16);color:#ffb3bf}
+  .t-review{background:rgba(52,211,153,.14);color:#93ecc8}
+  .t-other{background:rgba(255,255,255,.08);color:var(--text-dim)}
+  .who{font-size:14px;font-weight:500}
+  .muted{font-size:12.5px;color:var(--text-faint)}
+  .age{font-size:12px;color:var(--text-faint);margin-left:auto;white-space:nowrap}
+  .age.warn{color:var(--warn)}
+  .age.danger{color:var(--bad)}
+  .summary{font-size:13px;color:var(--text-dim);margin:9px 0 0}
+  .actions{display:flex;gap:8px;margin-top:12px}
+  .actions button{font:inherit;font-size:12.5px;padding:5px 12px;border-radius:9px;
+    border:1px solid var(--border-strong);background:transparent;color:var(--text-dim);cursor:pointer}
+  .actions button:hover{color:var(--text);background:rgba(255,255,255,.07)}
+  .ship{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:flex-start}
+  .lines{font-size:12.5px;color:var(--text-faint);margin-top:6px}
+  .empty{color:var(--text-faint);font-size:13px;padding:26px 0;text-align:center;
+    border:1px dashed var(--border);border-radius:var(--radius)}
+
+  .low{margin-top:26px}
+  .low summary{cursor:pointer;color:var(--text-faint);font-size:13px;user-select:none;padding:6px 0}
+  .low summary:hover{color:var(--text-dim)}
+  .low .list{margin-top:12px}
+
+  @media (max-width:720px){
+    .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .wrap{padding:20px 14px 48px}
+    .age{margin-left:0;width:100%}
   }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <header>
+
+  <div class="top">
+    <div class="avatar">✉</div>
     <div>
       <h1>消息中心</h1>
       <div class="sub" id="sub">正在加载…</div>
     </div>
-    <div class="btns">
-      <button id="refresh">刷新</button>
+    <div class="spacer"></div>
+    <button class="btn" id="refresh">刷新</button>
+    <a class="btn ghost" href="./index.html">返回工作台</a>
+  </div>
+
+  <div class="notice">
+    这里只做提醒。回复买家、发货、退款等操作请到 Etsy 后台完成，工作台不代办。
+  </div>
+
+  <div class="kpis">
+    <div class="kpi">
+      <div class="k">未处理咨询</div>
+      <div class="v" id="s-msg">0</div>
+      <div class="n">买家消息通知</div>
     </div>
-  </header>
+    <div class="kpi hot">
+      <div class="k">超过 24 小时</div>
+      <div class="v" id="s-over">0</div>
+      <div class="n">按收到时间算，需尽快处理</div>
+    </div>
+    <div class="kpi etsy">
+      <div class="k">待发货</div>
+      <div class="v" id="s-ship">–</div>
+      <div class="n">来自 Etsy 订单接口 receipts</div>
+    </div>
+    <div class="kpi">
+      <div class="k">今日新订单</div>
+      <div class="v" id="s-today">0</div>
+      <div class="n">24 小时内的订单邮件</div>
+    </div>
+  </div>
 
   <div id="banner"></div>
 
-  <section class="stats">
-    <div class="stat"><div class="k">未处理咨询</div><div class="v" id="s-msg">–</div></div>
-    <div class="stat"><div class="k">超过 24 小时</div><div class="v" id="s-over">–</div></div>
-    <div class="stat"><div class="k">待发货订单</div><div class="v" id="s-ship">–</div></div>
-    <div class="stat"><div class="k">今日新订单</div><div class="v" id="s-today">–</div></div>
-  </section>
+  <div class="head">
+    <span class="bar"></span>
+    <h2>待办</h2>
+    <span class="count" id="todo-count">0</span>
+    <div class="spacer"></div>
+    <nav class="filters" id="filters">
+      <button class="on" data-f="todo">全部待办</button>
+      <button data-f="message">咨询</button>
+      <button data-f="order">订单</button>
+      <button data-f="case">纠纷</button>
+      <button data-f="all">全部邮件</button>
+    </nav>
+  </div>
 
-  <p class="hint">这里只做提醒。回复买家、发货等操作请到 Etsy 后台完成，工作台不代办。</p>
-
-  <nav class="filters" id="filters">
-    <button data-f="todo" class="on">待处理</button>
-    <button data-f="message">咨询</button>
-    <button data-f="order">订单</button>
-    <button data-f="case">纠纷</button>
-    <button data-f="all">全部</button>
-  </nav>
-
-  <main id="list"><div class="empty">正在加载…</div></main>
+  <main class="list" id="list"><div class="empty">正在加载…</div></main>
 
   <div class="low">
     <details id="low-box">
-      <summary><span id="low-title">低优先</span></summary>
-      <div id="low-list"></div>
+      <summary><span id="low-title">低优先 / 已处理</span></summary>
+      <div class="list" id="low-list"></div>
     </details>
   </div>
+
 </div>
 
 <script>
 (function () {
-  var API = (window.ETSYOPS_API_BASE || '').replace(/\/$/, '');
+  var API = (window.getApiBase ? window.getApiBase() : '').replace(/\/$/, '');
   var KEY = window.ETSYOPS_API_KEY || '';
 
-  var S = { events: [], orders: [], orderErr: '', filter: 'todo', loading: false, syncAt: 0 };
+  var S = { events: [], orders: [], orderErr: '', eventErr: '', filter: 'todo', loading: false, syncAt: 0 };
 
+  /** 统一请求：非 JSON、超时、网络错误都归一成 Error，绝不把 HTML 丢给 JSON.parse */
   function api(path, opts) {
     opts = opts || {};
     var headers = Object.assign({ 'content-type': 'application/json' }, opts.headers || {});
     if (KEY) headers['x-api-key'] = KEY;
-    return fetch(API + path, Object.assign({}, opts, { headers: headers }))
-      .then(function (r) { return r.json(); });
+    var timeout = opts.timeout || 30000;
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, timeout);
+    return fetch(API + path, Object.assign({}, opts, { headers: headers, signal: ctrl.signal }))
+      .then(function (r) {
+        return r.text().then(function (t) {
+          var ct = (r.headers.get('content-type') || '').toLowerCase();
+          if (ct.indexOf('json') < 0) {
+            throw new Error('后端返回的是网页而不是数据（HTTP ' + r.status + '），接口地址可能不对：' + (API || '同源'));
+          }
+          try {
+            return JSON.parse(t);
+          } catch (e) {
+            throw new Error('返回内容不是合法 JSON（HTTP ' + r.status + '）');
+          }
+        });
+      })
+      .catch(function (e) {
+        if (e && e.name === 'AbortError') throw new Error('请求超时（' + Math.round(timeout / 1000) + ' 秒无响应）');
+        throw e;
+      })
+      .finally(function () { clearTimeout(timer); });
   }
 
   function esc(s) {
@@ -126,26 +225,30 @@
   function typeClass(t) {
     return ['message', 'order', 'case', 'review'].indexOf(t) >= 0 ? 't-' + t : 't-other';
   }
-
+  function levelClass(t) {
+    return ['message', 'order', 'case', 'review'].indexOf(t) >= 0 ? 'lv-' + t : '';
+  }
   function ageText(h) {
     if (h < 1) return '刚刚';
     if (h < 24) return '已等 ' + h + ' 小时';
     return '已等 ' + Math.floor(h / 24) + ' 天';
   }
-
   function ageClass(h) {
     if (h >= 24) return 'danger';
     if (h >= 8) return 'warn';
     return '';
   }
-
   function isTodo(e) { return e.status === 'pending' || e.status === 'opened'; }
+  function isLow(e) {
+    return e.type === 'other' || e.type === 'policy' || e.status === 'ignored' || e.status === 'done';
+  }
 
   function cardHtml(e) {
     var title = e.buyer || e.subject || '(无主题)';
     var sub = e.buyer && e.shop ? ('· ' + e.shop) : '';
     var summary = e.buyer ? e.subject : '';
-    return '<article class="card">'
+    var doneBtn = isTodo(e) ? '<button data-done="' + esc(e.id) + '">标记已处理</button>' : '';
+    return '<article class="card ' + levelClass(e.type) + '">'
       + '<div class="row">'
       + '<span class="tag ' + typeClass(e.type) + '">' + esc(e.label) + '</span>'
       + '<span class="who">' + esc(title) + '</span>'
@@ -153,41 +256,58 @@
       + '<span class="age ' + ageClass(e.ageHours) + '">' + ageText(e.ageHours) + '</span>'
       + '</div>'
       + (summary ? '<p class="summary">' + esc(summary) + '</p>' : '')
-      + '<div class="actions">'
-      + '<button data-done="' + esc(e.id) + '">标记已处理</button>'
-      + '</div>'
+      + (doneBtn ? '<div class="actions">' + doneBtn + '</div>' : '')
       + '</article>';
+  }
+
+  function shipHtml() {
+    if (!S.orders.length) return '';
+    var h = '<div class="head" style="margin-top:24px">'
+      + '<span class="bar"></span><h2>待发货</h2>'
+      + '<span class="count">' + S.orders.length + '</span>'
+      + '<div class="spacer"></div><span class="muted">数据来自 Etsy 订单接口</span></div>'
+      + '<div class="list">';
+    S.orders.forEach(function (o) {
+      var lines = (o.lines || []).map(function (l) { return esc(l.title) + ' ×' + l.qty; }).join('；');
+      h += '<article class="card lv-order"><div class="ship">'
+        + '<div><span class="tag t-order">待发货</span> '
+        + '<span class="who">' + esc(o.buyer || ('订单 #' + o.id)) + '</span>'
+        + '<div class="lines">' + (lines || '—') + '</div></div>'
+        + '<div class="muted">' + esc(o.currency) + ' ' + Number(o.total || 0).toFixed(2) + '</div>'
+        + '</div></article>';
+    });
+    return h + '</div>';
   }
 
   function render() {
     var ev = S.events.slice();
-
     var todo = ev.filter(isTodo);
     var msgs = todo.filter(function (e) { return e.type === 'message'; });
     var over = todo.filter(function (e) { return e.ageHours >= 24; });
     var today = ev.filter(function (e) { return e.type === 'order' && e.ageHours < 24; });
 
     document.getElementById('s-msg').textContent = msgs.length;
-    var overEl = document.getElementById('s-over');
-    overEl.textContent = over.length;
-    overEl.className = 'v' + (over.length ? ' danger' : '');
+    document.getElementById('s-over').textContent = over.length;
+    document.getElementById('todo-count').textContent = todo.length;
+    document.getElementById('s-today').textContent = today.length;
 
     var shipEl = document.getElementById('s-ship');
     if (S.orderErr) {
-      shipEl.textContent = '—';
-      shipEl.className = 'v muted';
-      document.getElementById('banner').innerHTML =
-        '<div class="banner">待发货数取不到：' + esc(S.orderErr) + '</div>';
+      shipEl.textContent = '–';
+      shipEl.className = 'v dim';
+      document.getElementById('banner').innerHTML = '<div class="banner"><b>待发货数暂时取不到</b><br>'
+        + esc(S.orderErr) + '<br><span class="muted">这个数来自 Etsy 订单接口，跟邮件无关；'
+        + '多半是出口代理抖动，点右上角「刷新」重试。</span></div>';
     } else {
       shipEl.textContent = S.orders.length;
-      shipEl.className = 'v' + (S.orders.length ? '' : ' muted');
-      document.getElementById('banner').innerHTML = '';
+      shipEl.className = 'v' + (S.orders.length ? '' : ' dim');
+      document.getElementById('banner').innerHTML = S.eventErr
+        ? '<div class="banner"><b>邮件列表没取到</b><br>' + esc(S.eventErr) + '</div>' : '';
     }
-    document.getElementById('s-today').textContent = today.length;
 
     document.getElementById('sub').textContent = S.syncAt
       ? ('最近同步 ' + new Date(S.syncAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-         + ' · 共 ' + S.events.length + ' 封')
+        + ' · 共 ' + S.events.length + ' 封邮件')
       : '正在加载…';
 
     var f = S.filter;
@@ -195,30 +315,13 @@
     list.sort(function (a, b) { return b.ageHours - a.ageHours; });
 
     var listEl = document.getElementById('list');
-    if (!list.length) {
-      listEl.innerHTML = '<div class="empty">这里现在是空的 —— 没有需要处理的事。</div>';
-    } else {
-      var shipHtml = '';
-      if (S.orders.length && (f === 'todo' || f === 'order' || f === 'all')) {
-        shipHtml = '<div class="section-title">待发货（来自 Etsy 订单接口）<span class="count">'
-          + S.orders.length + '</span></div>';
-        S.orders.forEach(function (o) {
-          var lines = (o.lines || []).map(function (l) { return esc(l.title) + ' ×' + l.qty; }).join('；');
-          shipHtml += '<article class="card"><div class="ship">'
-            + '<div><span class="tag t-order">待发货</span> '
-            + '<span class="who">' + esc(o.buyer || ('订单 #' + o.id)) + '</span>'
-            + '<div class="lines">' + (lines || '—') + '</div></div>'
-            + '<div class="muted">' + esc(o.currency) + ' ' + Number(o.total).toFixed(2) + '</div>'
-            + '</div></article>';
-        });
-      }
-      listEl.innerHTML = shipHtml + list.map(cardHtml).join('');
-    }
+    var body = list.length
+      ? '<div class="list">' + list.map(cardHtml).join('') + '</div>'
+      : '<div class="empty">这里现在是空的 —— 没有需要处理的事。</div>';
+    var ship = (f === 'todo' || f === 'all' || f === 'order') ? shipHtml() : '';
+    listEl.innerHTML = body + ship;
 
-    // 低优先：营销 / 已忽略
-    var low = ev.filter(function (e) {
-      return e.type === 'other' || e.type === 'policy' || e.status === 'ignored' || e.status === 'done';
-    });
+    var low = ev.filter(isLow);
     document.getElementById('low-title').textContent = '低优先 / 已处理 ' + low.length + ' 封';
     document.getElementById('low-list').innerHTML = low.length
       ? low.slice(0, 50).map(cardHtml).join('')
@@ -229,13 +332,19 @@
     if (S.loading) return;
     S.loading = true;
     document.getElementById('refresh').disabled = true;
+    S.eventErr = '';
 
     Promise.all([
-      api('/api/mail/events?limit=200').catch(function (e) { return { ok: false, note: String(e) }; }),
-      api('/api/orders/pending').catch(function (e) { return { ok: false, note: String(e) }; })
+      api('/api/mail/events?limit=200').catch(function (e) { return { ok: false, note: String(e.message || e) }; }),
+      api('/api/orders/pending', { timeout: 45000 }).catch(function (e) { return { ok: false, note: String(e.message || e) }; })
     ]).then(function (res) {
       var ev = res[0], od = res[1];
-      S.events = (ev && ev.items) || [];
+      if (ev && ev.ok) {
+        S.events = ev.items || [];
+      } else {
+        S.events = [];
+        S.eventErr = (ev && (ev.note || ev.error)) || '接口没有返回';
+      }
       if (od && od.ok) {
         S.orders = od.items || [];
         S.orderErr = '';
@@ -257,7 +366,8 @@
         if (!r || !r.ok) return;
         S.events.forEach(function (e) { if (e.id === id) e.status = status; });
         render();
-      });
+      })
+      .catch(function () { /* 标记失败不打断页面 */ });
   }
 
   document.getElementById('refresh').addEventListener('click', load);
@@ -274,9 +384,7 @@
 
   document.addEventListener('click', function (ev) {
     var doneBtn = ev.target.closest('button[data-done]');
-    if (doneBtn) {
-      mark(doneBtn.getAttribute('data-done'), 'done');
-    }
+    if (doneBtn) mark(doneBtn.getAttribute('data-done'), 'done');
   });
 
   load();
