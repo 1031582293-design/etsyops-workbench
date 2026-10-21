@@ -199,13 +199,20 @@ console.log('\n【5】createDraftListing 请求体组装');
       digital_files: [{ name: 'b.pdf', data: Buffer.from('pdfbytes').toString('base64') }],
     });
     const imgCall = calls.find(c => c.path === '/listings/999/images');
-    const fileCall = calls.find(c => c.path === '/shops/67875620/listings/999/files');
     ok(Boolean(imgCall && imgCall.opts.multipart), '带图建草稿：图片 multipart 已组装（Node 24 不再抛 Blob TypeError）');
     ok(imgCall && imgCall.opts.multipart.get('image') instanceof Blob,
       '图片部分是 Blob 实例（image/png）', imgCall && imgCall.opts.multipart.get('image') && imgCall.opts.multipart.get('image').type);
+    ok(r2.listing_id === 999, 'draftListing 正常返回 listing_id');
+    // 数字商品分支：item_type=digital 才会挂交付文件
+    await etsy.draftListing(mockClient, {
+      title: 'T', description: 'D', tags: [], price: '1.00', quantity: '1',
+      taxonomy_id: '1', who_made: 'i_did', when_made: 'made_to_order', is_supply: false,
+      item_type: 'digital',
+      digital_files: [{ name: 'b.pdf', data: Buffer.from('pdfbytes').toString('base64') }],
+    });
+    const fileCall = calls.find(c => c.path === '/shops/67875620/listings/999/files');
     ok(fileCall && fileCall.opts.multipart.get('file') instanceof Blob,
       '数字交付文件部分是 Blob 实例（application/pdf）', fileCall && fileCall.opts.multipart.get('file') && fileCall.opts.multipart.get('file').type);
-    ok(r2.listing_id === 999, 'draftListing 正常返回 listing_id');
   }
   ok(typeof form.tags === 'string' && typeof form.materials === 'string', 'tags/materials 类型确为 string');
   ok(form.shipping_profile_id === '111' && form.readiness_state_id === '222', '实物必填两项都在');

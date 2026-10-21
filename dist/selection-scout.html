@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>选品情报员 · 电商数字员工</title>
+<script src="./config.js"></script>
+<style>
+  :root{
+    --bg:#0b0e1a; --bg2:#0f1426; --panel:rgba(255,255,255,.045); --panel-2:rgba(255,255,255,.07);
+    --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.18);
+    --text:#eaf0ff; --text-dim:#aab3d0; --text-faint:#6b7596;
+    --accent:#7c5cff; --accent-2:#22d3ee; --etsy:#f1641e;
+    --good:#34d399; --warn:#ffb86b; --bad:#ff6b81;
+    --radius:18px; --radius-sm:13px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:radial-gradient(1200px 700px at 10% -10%,rgba(124,92,255,.18),transparent 60%),
+      radial-gradient(900px 600px at 100% 0%,rgba(34,211,238,.10),transparent 55%),var(--bg);
+    color:var(--text);min-height:100vh;line-height:1.7}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 20px 60px}
+  .top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:22px}
+  .top h1{font-size:20px;margin:0;letter-spacing:.3px}
+  .top .sub{font-size:12.5px;color:var(--text-faint)}
+  .top .spacer{margin-left:auto}
+  a.btn,button.btn{display:inline-flex;align-items:center;gap:6px;padding:11px 18px;border-radius:12px;
+    border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-size:13px;
+    cursor:pointer;text-decoration:none;font-family:inherit}
+  a.btn:hover,button.btn:hover{border-color:var(--border-strong)}
+  .btn.primary{background:var(--accent);border:none;color:#fff}
+  .btn.primary:hover{filter:brightness(1.07)}
+  .btn.ghost{background:transparent}
+  .btn.sm{padding:7px 12px;font-size:12px;border-radius:9px}
+  .btn.danger{color:var(--bad)}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btnrow{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;align-items:center}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);
+    padding:22px 24px;margin-bottom:18px}
+  .panel h3{margin:0 0 6px;font-size:15px}
+  .ph-sub{font-size:12.8px;color:var(--text-dim);margin-bottom:12px;line-height:1.75}
+  .msg{padding:13px 16px;border-radius:12px;font-size:13px;line-height:1.75;margin:14px 0;display:none}
+  .msg.show{display:block}
+  .msg.ok{background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.32);color:#b6f2d8}
+  .msg.err{background:rgba(255,107,129,.1);border:1px solid rgba(255,107,129,.32);color:#ffc2cb}
+  .msg.warn{background:rgba(255,184,107,.1);border:1px solid rgba(255,184,107,.32);color:#ffdfb5}
+  .msg.info{background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.28);color:#b8ecf7}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px}
+  .grid label{font-size:11.5px;color:var(--text-faint);display:block;margin-bottom:4px}
+  .grid input{width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);
+    border-radius:9px;padding:8px 10px;font-size:13px;font-family:inherit}
+  .grid input:focus{border-color:var(--accent);outline:none}
+  input[type=text]{width:100%;background:var(--bg2);border:1px solid var(--border);
+    color:var(--text);border-radius:10px;padding:10px 12px;font-size:14px;font-family:inherit}
+  input[type=text]:focus{border-color:var(--accent);outline:none}
+  .seedrow{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:8px}
+  .seedfield label{font-size:11.5px;color:var(--text-faint);display:block;margin-bottom:5px}
+  .seedfield .inrow{display:flex;gap:8px}
+  .seedfield .inrow input{flex:1;min-width:0}
+  .zhhint{font-size:11.8px;color:var(--text-faint);line-height:1.8;margin:0 0 4px}
+  .zhhint b{color:var(--text-dim)}
+  .zhhint.ok{color:#b6f2d8}
+  .zhhint.err{color:#ffc2cb}
+  .chk{display:inline-flex;align-items:center;gap:7px;font-size:12.3px;color:var(--text-dim);
+    cursor:pointer;user-select:none}
+  .chk input{width:14px;height:14px;accent-color:#7c5cff;margin:0}
+  .adjust{margin-top:14px;border:1px solid rgba(124,92,255,.35);background:rgba(124,92,255,.08);
+    border-radius:12px;padding:12px 15px}
+  .adjust .t{font-size:12px;font-weight:700;color:var(--accent-2);margin-bottom:5px}
+  .adjust ul{margin:0;padding-left:18px}
+  .adjust li{font-size:12.2px;color:var(--text-dim);margin:4px 0;line-height:1.7}
+  .hidden{display:none!important}
+  .stages{margin-top:14px;font-size:12.5px}
+  .stages .row{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px dashed var(--border)}
+  .stages .dot{width:9px;height:9px;border-radius:50%;background:var(--text-faint);flex:0 0 auto}
+  .stages .row.doing .dot{background:var(--accent-2);box-shadow:0 0 8px var(--accent-2)}
+  .stages .row.done .dot{background:var(--good)}
+  .stages .row.fail .dot{background:var(--bad)}
+  .stages .row .note{color:var(--text-faint);margin-left:auto;font-size:11.5px;text-align:right}
+  .bar{height:7px;border-radius:99px;background:var(--bg2);overflow:hidden;margin-top:12px}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-2));
+    width:0%;transition:width .6s}
+  .report{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;
+    font-size:13px;line-height:1.85;overflow-x:auto}
+  .report h1{font-size:18px;margin:6px 0 12px}
+  .report h2{font-size:15px;margin:18px 0 8px;color:var(--accent-2)}
+  .report blockquote{margin:10px 0;padding:10px 14px;border-left:3px solid var(--warn);
+    background:rgba(255,184,107,.08);border-radius:8px;color:#ffdfb5;font-size:12.5px}
+  .report table{border-collapse:collapse;font-size:12px;margin:10px 0;width:100%}
+  .report th,.report td{border:1px solid var(--border-strong);padding:6px 9px;text-align:left;white-space:nowrap}
+  .report th{background:rgba(255,255,255,.05)}
+  .report li{margin:4px 0}
+  .report code{background:rgba(124,92,255,.14);padding:1px 6px;border-radius:6px;font-size:12px}
+  .report .grade-S{color:var(--good);font-weight:800}
+  .report .grade-A{color:var(--accent-2);font-weight:800}
+  .grade-pill{display:inline-block;min-width:22px;text-align:center;border-radius:8px;font-weight:800;
+    font-size:11px;padding:2px 7px}
+  .grade-pill.S{background:rgba(52,211,153,.18);color:var(--good)}
+  .grade-pill.A{background:rgba(34,211,238,.16);color:var(--accent-2)}
+  .grade-pill.B{background:rgba(255,184,107,.16);color:var(--warn)}
+  .grade-pill.C{background:rgba(255,255,255,.09);color:var(--text-faint)}
+  .rrow{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);font-size:12.5px}
+  .rrow .seed{font-weight:700}
+  .rrow .meta{color:var(--text-faint);font-size:11.5px}
+  .rrow .acts{margin-left:auto;display:flex;gap:6px}
+  details{margin-top:10px}
+  summary{cursor:pointer;font-size:12.5px;color:var(--text-dim)}
+  @media(max-width:640px){.wrap{padding:18px 14px 40px}.panel{padding:18px 16px}.seedrow{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a class="btn sm ghost" href="./index.html">← 回总览</a>
+    <div>
+      <h1>🔭 选品情报员</h1>
+      <div class="sub">电商数字员工 · 词根进 → 七阶段选品报告出（数据全部来自 EverBee 预估值，产出需人工复核）</div>
+    </div>
+    <div class="spacer"></div>
+    <a class="btn sm ghost" href="./etsy-publisher.html">去上架页 →</a>
+  </div>
+
+  <div id="gate" class="panel"></div>
+
+  <div id="main" class="hidden">
+    <section class="panel">
+      <h3>发起选品</h3>
+      <div class="ph-sub">
+        流程：词根扩词 → 蓝海词池 → 批量海选 → 单品诊断 → 店铺交叉核验 → S/A/B/C 评级 + AI 差异化 → 报告。
+        全程约 <b>1~3 分钟</b>（自动放宽/扩词会更久，页面会实时写清它改了什么）。
+        中文可以直接填，会先翻成英文再搜 —— Etsy / EverBee 的搜索量数据只认英文查询词。
+        EverBee 数据全部是<b>预估值</b>，报告只做参考，上架决策必须人工复核。
+      </div>
+      <div id="formMsg" class="msg"></div>
+      <div class="seedrow">
+        <div class="seedfield">
+          <label>中文关键词（可留空 · 自动翻成英文）</label>
+          <div class="inrow">
+            <input type="text" id="seedZh" placeholder="例如：陶瓷马克杯" />
+            <button class="btn sm ghost" id="btnZh2En" title="翻译并覆盖右边英文框">译 →</button>
+          </div>
+        </div>
+        <div class="seedfield">
+          <label>英文搜索词（真正拿去搜的词）</label>
+          <input type="text" id="seed" placeholder="ceramic mug / pet portrait / fursuit" />
+        </div>
+      </div>
+      <div class="zhhint" id="zhHint"></div>
+      <div class="btnrow" style="margin-top:12px">
+        <button class="btn primary" id="btnRun">开始选品</button>
+        <label class="chk"><input type="checkbox" id="optAuto" checked />
+          自动放宽阈值 + 自动扩词（AI 介入，改了什么会写在页面和报告里）</label>
+      </div>
+      <details>
+        <summary>高级设置（默认档来自选品 SOP；勾了自动放宽时，系统会自己从默认档放宽到宽松档）</summary>
+        <div class="grid">
+          <div><label>价格下限 $</label><input id="t_price_min" type="text" /></div>
+          <div><label>价格上限 $</label><input id="t_price_max" type="text" /></div>
+          <div><label>月销量下限</label><input id="t_min_monthly_sales" type="text" /></div>
+          <div><label>月销量上限</label><input id="t_max_monthly_sales" type="text" /></div>
+          <div><label>评价数上限</label><input id="t_max_reviews" type="text" /></div>
+          <div><label>上架月数上限</label><input id="t_listing_age_max_months" type="text" /></div>
+          <div><label>搜索量下限</label><input id="t_search_volume_min" type="text" /></div>
+          <div><label>搜索量上限</label><input id="t_search_volume_max" type="text" /></div>
+          <div><label>蓝海词下限</label><input id="t_min_keywords" type="text" /></div>
+          <div><label>海选词数</label><input id="t_keywords_to_search" type="text" /></div>
+          <div><label>成本占售价比例</label><input id="t_cost_rate" type="text" /></div>
+        </div>
+        <div class="btnrow"><button class="btn sm ghost" id="btnResetTh">恢复默认</button></div>
+      </details>
+
+      <div id="jobBox" class="hidden" style="margin-top:20px">
+        <div class="stages" id="stageList"></div>
+        <div class="bar"><i id="barFill"></i></div>
+        <div id="jobMsg" class="msg"></div>
+        <div id="adjustBox" class="adjust hidden"></div>
+        <div class="btnrow hidden" id="relaxRow">
+          <button class="btn" id="btnRelax">放宽阈值重跑</button>
+          <span class="sub" style="font-size:12px;color:var(--text-faint)">用宽松档（价格 8-60 / 评价≤500 / 上架≤12 个月）再跑一遍，并继续自动扩词</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="reportPanel">
+      <h3>选品报告</h3>
+      <div class="ph-sub" id="reportSub">跑完的报告存在后端本机（data/selection-reports.json），不丢、不上云。</div>
+      <div id="reportMsg" class="msg"></div>
+      <div class="btnrow" style="margin-top:0">
+        <button class="btn sm" id="btnReports">刷新报告列表</button>
+      </div>
+      <div id="reportList" style="margin-top:10px"></div>
+      <div id="reportView" class="report hidden" style="margin-top:16px"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+const API_BASE = (window.getApiBase && window.getApiBase()) || '';
+
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+  ));
+}
+function showMsg(el, kind, html){
+  if (!el) return;
+  el.className = 'msg show ' + kind;
+  el.innerHTML = html;
+}
+function hideMsg(el){ if (el) el.className = 'msg'; }
+function fetchT(url, ms, opts){
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
+  return fetch(url, Object.assign({}, opts || {}, { signal: c.signal })).finally(() => clearTimeout(t));
+}
+async function apiCall(path, opts){
+  opts = opts || {};
+  const ms = opts.timeout || 60000;
+  const label = opts.label || path;
+  const headers = Object.assign(window.apiAuthHeaders ? window.apiAuthHeaders() : {},
+    { 'Accept-Encoding': 'identity' }, opts.headers || {});
+  const r = await fetchT(API_BASE + path, ms, {
+    method: opts.method || (opts.body ? 'POST' : 'GET'),
+    headers, body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const ct = r.headers.get('content-type') || '';
+  let txt = '';
+  try { txt = await r.text(); } catch (te) { throw new Error(label + '：响应体传输中断（HTTP ' + r.status + '）'); }
+  let d;
+  try { d = JSON.parse(txt || '{}'); }
+  catch (pe) { throw new Error(label + '：响应不是合法 JSON（HTTP ' + r.status + '）。开头：' + txt.slice(0, 120)); }
+  if (!r.ok) throw new Error((d && (d.note || d.error)) || (label + ' 失败（HTTP ' + r.status + '）'));
+  if (d && d.ok === false) throw new Error((d && (d.note || d.error)) || (label + ' 返回 ok:false'));
+  return d;
+}
+
+const STAGES = [
+  ['stage1', '① 词根扩词 & 蓝海词池'],
+  ['stage2', '② 批量商品海选'],
+  ['stage3', '③ 单品诊断（标签/IP/利润）'],
+  ['stage4', '④ 店铺交叉核验'],
+  ['stage6', '⑤ S/A/B/C 评级 + AI 差异化'],
+  ['stage7', '⑥ 生成报告'],
+];
+let CUR_JOB_ID = null;
+let POLL_TIMER = null;
+let LAST_SEED = '';
+let LAST_TRANSLATION = '';      // 最近一次自动翻译回填到英文框的值
+let ZH_TIMER = null;
+const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff]/;
+const ZH_HINT_DEFAULT = '中文框只是翻译入口，实际搜索用右边英文框；两个都填时以英文框为准。'
+  + '翻译由 AI 完成，译出来的词会填进英文框，可以手动改。';
+
+function msgErrText(m){
+  const m0 = String(m == null ? '' : m);
+  return esc(m0) + (/not_found/.test(m0)
+    ? '<br>后端可能跑的还是旧代码 —— 选品接口是本次新增的，<b>重启后端（start-backend.bat）</b>后再试。'
+    : '');
+}
+
+/* ---------- 中文 → 英文（中文框是入口，英文框才是真正搜的词） ---------- */
+function setZhHint(html, cls){
+  const el = document.getElementById('zhHint');
+  if (!el) return;
+  el.className = 'zhhint' + (cls ? ' ' + cls : '');
+  el.innerHTML = html || ZH_HINT_DEFAULT;
+}
+
+async function translateToEn(zh, force){
+  const seedEl = document.getElementById('seed');
+  const d = await apiCall('/api/selection/translate', { body: { text: zh }, timeout: 30000, label: '中文翻译' });
+  const en = String(d.en || '').trim();
+  if (!en) throw new Error('翻译结果为空');
+  const cur = seedEl.value.trim();
+  const writable = Boolean(force) || !cur || cur === LAST_TRANSLATION;
+  if (writable){ seedEl.value = en; LAST_TRANSLATION = en; }
+  setZhHint('中文「' + esc(zh) + '」→ 英文「<b>' + esc(en) + '</b>」'
+    + (writable ? '（已填进右边英文框，可手动改）'
+      : '（英文框里已有你自己填的词，没覆盖；要用翻译词就清空它，或点「译 →」）'), 'ok');
+  return en;
+}
+
+function onZhInput(){
+  clearTimeout(ZH_TIMER);
+  const zh = (document.getElementById('seedZh').value || '').trim();
+  if (!zh){ setZhHint(''); return; }
+  if (!CJK_RE.test(zh)){ setZhHint('这看起来不是中文 —— 英文直接填右边框就行，中文框留空。', 'err'); return; }
+  setZhHint('正在翻译成英文…');
+  ZH_TIMER = setTimeout(async () => {
+    try { await translateToEn(zh, false); }
+    catch (e) { setZhHint('翻译失败：' + esc(e.message) + '<br>可以直接在右边英文框填英文词。', 'err'); }
+  }, 700);
+}
+
+async function translateNow(){
+  const zh = (document.getElementById('seedZh').value || '').trim();
+  if (!zh){ setZhHint('先在左边填中文词，例如「陶瓷马克杯」。', 'err'); return; }
+  if (!CJK_RE.test(zh)){ setZhHint('左边填的不是中文 —— 直接用右边英文框搜就行。', 'err'); return; }
+  const btn = document.getElementById('btnZh2En');
+  btn.disabled = true;
+  setZhHint('正在翻译成英文…');
+  try { await translateToEn(zh, true); }
+  catch (e) { setZhHint('翻译失败：' + esc(e.message) + '<br>可以直接在右边英文框填英文词。', 'err'); }
+  finally { btn.disabled = false; }
+}
+
+/* 点「开始选品」时决定用哪个词：
+   - 英文框有词 → 用它（中文框留空时就是纯英文搜索；两个都填以英文框为准）
+   - 英文框空、中文框有中文 → 先翻译，用翻译词
+   - 英文框空、中文框里其实是英文 → 直接搬过去 */
+async function resolveSeed(){
+  const seedEl = document.getElementById('seed');
+  const zh = (document.getElementById('seedZh').value || '').trim();
+  let en = seedEl.value.trim();
+  if (en){
+    if (zh && CJK_RE.test(zh)) setZhHint('两个框都填了 → 本次用英文框「<b>' + esc(en) + '</b>」搜。');
+    return en;
+  }
+  if (!zh) return '';
+  if (!CJK_RE.test(zh)){ seedEl.value = zh; LAST_TRANSLATION = zh; return zh; }
+  setZhHint('先把中文翻成英文…');
+  en = await translateToEn(zh, true);
+  return en;
+}
+
+/* ---------- 阈值表单 ---------- */
+const TH_DEFAULTS = {
+  price_min: 12, price_max: 35, min_monthly_sales: 20, max_monthly_sales: 300,
+  max_reviews: 80, listing_age_max_months: 6, search_volume_min: 100, search_volume_max: 8000,
+  min_keywords: 8, keywords_to_search: 5, cost_rate: 0.30,
+};
+function thFill(vals){
+  for (const k of Object.keys(TH_DEFAULTS)) {
+    const el = document.getElementById('t_' + k);
+    if (el) el.value = vals && vals[k] != null ? vals[k] : TH_DEFAULTS[k];
+  }
+}
+function thCollect(){
+  const o = {};
+  for (const k of Object.keys(TH_DEFAULTS)) {
+    const el = document.getElementById('t_' + k);
+    if (!el) continue;
+    const raw = String(el.value).trim();
+    if (raw === '') continue;
+    const n = Number(raw);
+    if (!isNaN(n)) o[k] = n;
+  }
+  return o;
+}
+
+/* ---------- 发起选品 ---------- */
+async function startRun(extra){
+  const msgEl = document.getElementById('formMsg');
+  const btn = document.getElementById('btnRun');
+  btn.disabled = true;
+  try {
+    let seed = '';
+    try { seed = await resolveSeed(); }
+    catch (e) { showMsg(msgEl, 'err', '翻译失败，没能开始：' + msgErrText(e.message) + '<br>可以直接在右边英文框填英文词再点。'); return; }
+    if (!seed){
+      showMsg(msgEl, 'warn', '先填词：中文框或英文框填一个就行（例如 <b>陶瓷马克杯</b> 或 <b>ceramic mug</b>）。');
+      return;
+    }
+    LAST_SEED = seed;
+    const overrides = Object.assign({}, thCollect(), extra || {});
+    const autoEl = document.getElementById('optAuto');
+    if (autoEl && !autoEl.checked) overrides.auto = false;
+    hideMsg(msgEl);
+    document.getElementById('reportView').classList.add('hidden');
+    renderAdjust([]);
+    const d = await apiCall('/api/selection/run', { body: { seed, overrides }, timeout: 60000, label: '提交选品任务' });
+    CUR_JOB_ID = d.jobId;
+    renderStages(null);
+    document.getElementById('jobBox').classList.remove('hidden');
+    document.getElementById('relaxRow').classList.add('hidden');
+    showMsg(document.getElementById('jobMsg'), 'info', '任务已提交（' + esc(d.jobId) + '），正在跑：' + esc(seed));
+    pollOnce();
+    if (POLL_TIMER) clearInterval(POLL_TIMER);
+    POLL_TIMER = setInterval(pollOnce, 3000);
+  } catch (e) {
+    showMsg(msgEl, 'err', '提交失败：' + msgErrText(e.message));
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderStages(job){
+  const box = document.getElementById('stageList');
+  box.textContent = '';
+  const curIdx = job ? STAGES.findIndex(s => s[0] === job.stage) : -1;
+  const finished = Boolean(job && job.status === 'done');
+  const halted = Boolean(job && (job.status === 'need_keywords' || job.status === 'need_relax' || job.status === 'error'));
+  STAGES.forEach(([key, label], idx) => {
+    const row = document.createElement('div');
+    let cls = 'row', note = '';
+    if (finished){ cls += ' done'; note = '✓'; }
+    else if (halted){
+      /* 停在哪一步就标红哪一步 —— 以前这里把 6 步全打勾、进度条却停在 10%，
+         看着像"全跑完了但没结果"，误导排查方向。 */
+      if (curIdx >= 0 && idx < curIdx){ cls += ' done'; note = '✓'; }
+      else if (idx === curIdx){ cls += ' fail'; note = '✕ 停在这里'; }
+      else note = '—';
+    } else if (job && job.status === 'running'){
+      if (curIdx >= 0 && idx < curIdx){ cls += ' done'; note = '✓'; }
+      else if (idx === curIdx){ cls += ' doing'; note = job.message || '进行中'; }
+      else note = '—';
+    }
+    row.className = cls;
+    const dot = document.createElement('span'); dot.className = 'dot';
+    const t = document.createElement('span'); t.textContent = label;
+    const n = document.createElement('span'); n.className = 'note'; n.textContent = note;
+    row.appendChild(dot); row.appendChild(t); row.appendChild(n);
+    box.appendChild(row);
+  });
+  const pct = job ? Math.max(0, Math.min(100, job.pct || 0)) : 0;
+  document.getElementById('barFill').style.width = pct + '%';
+}
+
+/* 自动调整记录（放宽阈值/扩词）：实时显示，用户得知道系统替他改了什么 */
+function renderAdjust(list){
+  const box = document.getElementById('adjustBox');
+  if (!box) return;
+  const arr = Array.isArray(list) ? list.filter(a => a && a.text) : [];
+  if (!arr.length){ box.classList.add('hidden'); box.textContent = ''; return; }
+  box.classList.remove('hidden');
+  box.textContent = '';
+  const t = document.createElement('div');
+  t.className = 't';
+  t.textContent = '自动调整记录（改的是搜索条件，不是数据）';
+  const ul = document.createElement('ul');
+  for (const a of arr){
+    const li = document.createElement('li');
+    li.textContent = a.text;
+    ul.appendChild(li);
+  }
+  box.appendChild(t); box.appendChild(ul);
+}
+
+async function pollOnce(){
+  if (!CUR_JOB_ID) return;
+  let d;
+  try { d = await apiCall('/api/selection/job?id=' + encodeURIComponent(CUR_JOB_ID), { label: '查询任务进度' }); }
+  catch (e) { return; /* 网络抖动，下轮再试 */ }
+  renderStages(d);
+  renderAdjust(d.adjust || (d.result && d.result.adjust));
+  const msgEl = document.getElementById('jobMsg');
+  if (d.status === 'running'){
+    showMsg(msgEl, 'info', esc(d.message || '进行中…'));
+    return;
+  }
+  clearInterval(POLL_TIMER); POLL_TIMER = null;
+  if (d.status === 'done'){
+    showMsg(msgEl, 'ok', '报告已生成（候选 ' + (d.result && d.result.candidates || 0) + ' 条，淘汰 '
+      + (d.result && d.result.eliminated || 0) + ' 条）。已自动打开。');
+    if (d.result && d.result.reportId) openReport(d.result.reportId);
+    loadReports();
+  } else if (d.status === 'need_keywords' || d.status === 'need_relax'){
+    showMsg(msgEl, 'warn', esc((d.result && d.result.message) || d.message || '需要调整后重跑。'));
+    if (d.status === 'need_relax') document.getElementById('relaxRow').classList.remove('hidden');
+  } else if (d.status === 'error'){
+    const code = (d.result && d.result.code) || '';
+    const head = code === 'everbee_empty' ? '<b>取数失败（不是词冷门）</b><br>' : '任务失败：';
+    showMsg(msgEl, 'err', head + msgErrText(d.message || ''));
+    if (code === 'everbee_empty') document.getElementById('relaxRow').classList.add('hidden');
+  }
+}
+
+/* ---------- 报告 ---------- */
+/* 极简 Markdown 渲染：先整体 esc 防注入，再放行白名单结构。
+   支持标题/引用/表格/列表/加粗/行内代码 —— 报告就是这些，够用。 */
+function mdRender(md){
+  const lines = String(md || '').split('\n');
+  let html = '', inTable = false, inList = false;
+  const closeAll = () => {
+    if (inTable){ html += '</tbody></table>'; inTable = false; }
+    if (inList){ html += '</ul>'; inList = false; }
+  };
+  const inline = (s) => esc(s)
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+  for (const raw of lines){
+    const line = raw.replace(/\s+$/, '');
+    if (/^\s*\|.*\|\s*$/.test(line)){
+      const cells = line.trim().replace(/^\||\|$/g, '').split('|');
+      if (cells.every(c => /^\s*:?-{2,}/.test(c))) continue; // 分隔行
+      if (!inTable){ closeAll(); html += '<table><tbody>'; inTable = true; }
+      html += '<tr>' + cells.map(c => '<td>' + inline(c.trim()) + '</td>').join('') + '</tr>';
+      continue;
+    }
+    if (inTable){ html += '</tbody></table>'; inTable = false; }
+    if (/^\s*-\s+\[[ x]\]\s+/.test(line)){
+      if (!inList){ html += '<ul>'; inList = true; }
+      html += '<li>☐ ' + inline(line.replace(/^\s*-\s+\[[ x]\]\s+/, '')) + '</li>';
+      continue;
+    }
+    if (/^\s*-\s+/.test(line)){
+      if (!inList){ html += '<ul>'; inList = true; }
+      html += '<li>' + inline(line.replace(/^\s*-\s+/, '')) + '</li>';
+      continue;
+    }
+    if (inList){ html += '</ul>'; inList = false; }
+    if (/^###\s/.test(line)) html += '<h3>' + inline(line.slice(4)) + '</h3>';
+    else if (/^##\s/.test(line)) html += '<h2>' + inline(line.slice(3)) + '</h2>';
+    else if (/^#\s/.test(line)) html += '<h1>' + inline(line.slice(2)) + '</h1>';
+    else if (/^>\s?/.test(line)) html += '<blockquote>' + inline(line.replace(/^>\s?/, '')) + '</blockquote>';
+    else if (line.trim() === '') html += '';
+    else html += '<div>' + inline(line) + '</div>';
+  }
+  closeAll();
+  return html;
+}
+
+async function loadReports(){
+  const box = document.getElementById('reportList');
+  try {
+    const d = await apiCall('/api/selection/reports', { label: '读取报告列表' });
+    box.textContent = '';
+    if (!d.reports.length){
+      box.innerHTML = '<div style="font-size:12.5px;color:var(--text-faint)">还没有报告 —— 上面跑一次就会出现在这里。</div>';
+      return;
+    }
+    for (const r of d.reports){
+      const row = document.createElement('div'); row.className = 'rrow';
+      const grades = r.summary && r.summary.grades || {};
+      const gtxt = ['S','A','B','C'].map(g => grades[g] ? g + '=' + grades[g] : '').filter(Boolean).join(' / ') || '—';
+      row.innerHTML = '<span class="seed"></span><span class="meta"></span>'
+        + '<span class="acts"><button class="btn sm ghost act-view">查看</button>'
+        + '<button class="btn sm ghost danger act-del">删除</button></span>';
+      row.querySelector('.seed').textContent = r.seed;
+      const when = new Date(r.createdAt).toLocaleString('zh-CN', { hour12: false });
+      row.querySelector('.meta').textContent = when + ' · 候选 '
+        + ((r.summary && r.summary.candidates) || 0) + ' · ' + gtxt + (r.relaxed ? ' · 宽松档' : '');
+      row.querySelector('.act-view').addEventListener('click', () => openReport(r.id));
+      row.querySelector('.act-del').addEventListener('click', async () => {
+        if (!confirm('删除报告「' + r.seed + '」（' + when + '）？不可恢复。')) return;
+        try {
+          await apiCall('/api/selection/report/delete', { body: { id: r.id }, label: '删除报告' });
+          loadReports();
+        } catch (e) { showMsg(document.getElementById('reportMsg'), 'err', '删除失败：' + msgErrText(e.message)); }
+      });
+      box.appendChild(row);
+    }
+  } catch (e) {
+    box.innerHTML = '';
+    showMsg(document.getElementById('reportMsg'), 'err', '报告列表读取失败：' + msgErrText(e.message));
+  }
+}
+
+async function openReport(id){
+  const view = document.getElementById('reportView');
+  try {
+    const d = await apiCall('/api/selection/report?id=' + encodeURIComponent(id), { label: '读取报告' });
+    view.innerHTML = mdRender(d.report.markdown);
+    view.classList.remove('hidden');
+    view.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e) {
+    showMsg(document.getElementById('reportMsg'), 'err', '报告读取失败：' + msgErrText(e.message));
+  }
+}
+
+/* ---------- 门禁 ---------- */
+async function gateCheck(){
+  const gate = document.getElementById('gate');
+  try {
+    const st = await apiCall('/api/everbee/status', { label: 'EverBee 状态' });
+    if (!st.authorized){
+      gate.classList.remove('hidden');
+      gate.innerHTML = '<h3>先连接 EverBee</h3><div class="ph-sub">选品数据全部来自 EverBee（预估值）。'
+        + '还没授权 —— 去 <a href="./etsy-publisher.html" style="color:var(--accent-2)">Listing 优化师页</a> '
+        + '点「连接 EverBee」完成一次授权（60 天有效），再回到本页。</div>';
+      return;
+    }
+    gate.classList.add('hidden');
+    document.getElementById('main').classList.remove('hidden');
+    loadReports();
+  } catch (e) {
+    gate.classList.remove('hidden');
+    gate.innerHTML = '<h3>连不上后端</h3><div class="ph-sub">' + esc(e.message)
+      + '<br>确认后端已启动（start-backend.bat / start-mac.sh），且本页网址带了正确的 ?api= / ?apikey= 参数。</div>';
+  }
+}
+
+/* ---------- 绑定 ---------- */
+document.getElementById('btnRun').addEventListener('click', () => startRun());
+document.getElementById('seed').addEventListener('keydown', (e) => { if (e.key === 'Enter') startRun(); });
+document.getElementById('seedZh').addEventListener('input', onZhInput);
+document.getElementById('seedZh').addEventListener('keydown', (e) => { if (e.key === 'Enter'){ clearTimeout(ZH_TIMER); startRun(); } });
+document.getElementById('btnZh2En').addEventListener('click', translateNow);
+document.getElementById('btnRelax').addEventListener('click', () => startRun({ relaxed: true }));
+document.getElementById('btnReports').addEventListener('click', loadReports);
+document.getElementById('btnResetTh').addEventListener('click', () => thFill(null));
+thFill(null);
+setZhHint('');
+gateCheck();
+</script>
+</body>
+</html>

@@ -171,7 +171,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">aba9016</span>
+  <span class="vtag" id="verTag">bc09e99</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -245,7 +245,7 @@
 
         <div class="subhead">2. 上架表格<span class="hint">从飞书 / Excel 复制整块粘进来，或选 CSV 文件。列名模板见「下载模板」。</span></div>
         <textarea id="importText" rows="6" class="hidden"
-          placeholder="第一行是列名，之后每行一个商品&#10;图片文件名&#9;价格&#9;数量&#9;制作方&#9;制作时间&#9;材质&#9;产品净重&#9;长度&#9;宽度&#9;高度&#9;类目ID&#10;6-狼头套-1.jpg&#9;30.70&#9;10&#9;someone_else&#9;2020_2026&#9;EVA, 三明治网布&#9;2250&#9;50&#9;50&#9;30&#9;"></textarea>
+          placeholder="第一行是列名，之后每行一个商品&#10;图片文件名&#9;价格&#9;数量&#9;制作方&#9;制作时间&#9;材质&#9;产品净重&#9;长度&#9;宽度&#9;高度&#9;类目ID&#10;6-狼头套-1.jpg&#9;30.70&#9;10&#9;i_did&#9;2020_2026&#9;EVA, 三明治网布&#9;2250&#9;50&#9;50&#9;30&#9;"></textarea>
         <div class="btnrow">
           <button class="btn sm" id="btnImportToggle">粘贴表格内容</button>
           <button class="btn sm" id="btnImportFile">选择 CSV 文件</button>
@@ -660,16 +660,34 @@ async function apiCallOnce(path, opts){
   const label = opts.label || path;
   const headers = Object.assign(window.apiAuthHeaders ? window.apiAuthHeaders() : {},
     { 'Accept-Encoding': 'identity' }, opts.headers || {});
-  const r = await fetchT(API_BASE + path, ms, {
-    method: opts.method || (opts.body ? 'POST' : 'GET'),
-    // ★ body 允许传「对象」（这里 stringify 一次）或「已是字符串」（原样发，不再编码）。
-    // 之前无条件 JSON.stringify(opts.body)，而 startAiBatch / copy 等几处传的是
-    // JSON.stringify(...) 的字符串 → 被二次编码成 `"\"{...}\""`，后端 readJson 解析成
-    // string 而非 object，batch 返回 400「items 为空」→ 批量文案永远「待生成」。
-    headers, body: (opts.body == null)
-      ? undefined
-      : (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body)),
-  });
+  let r;
+  try {
+    r = await fetchT(API_BASE + path, ms, {
+      method: opts.method || (opts.body ? 'POST' : 'GET'),
+      // ★ body 允许传「对象」（这里 stringify 一次）或「已是字符串」（原样发，不再编码）。
+      // 之前无条件 JSON.stringify(opts.body)，而 startAiBatch / copy 等几处传的是
+      // JSON.stringify(...) 的字符串 → 被二次编码成 `"\"{...}\""`，后端 readJson 解析成
+      // string 而非 object，batch 返回 400「items 为空」→ 批量文案永远「待生成」。
+      headers, body: (opts.body == null)
+        ? undefined
+        : (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body)),
+    });
+  } catch (ne) {
+    // ★ 浏览器的原始报错（Firefox「NetworkError when attempting to fetch resource.」、
+    //   abort 的「The operation was aborted.」、Chrome「Failed to fetch」）对运营毫无信息量，
+    //   看起来像系统坏了。实际绝大多数是：后端刚重启、隧道抖动、或等待超时 —— 重试即可。
+    //   注意：这里**不自动重试**（POST 可能已到后端产生副作用，比如草稿已建），只把话说清。
+    const raw = String((ne && ne.message) || ne || '');
+    const isAbort = /abort/i.test(raw);
+    const err = new Error(label + '：'
+      + (isAbort
+          ? '等待后端响应超时（' + Math.round(ms / 1000) + ' 秒）。'
+          : '网络连接中断（请求或响应在传输中丢失）。')
+      + '常见原因：后端刚重启、Cloudflare 隧道抖动。请等几秒重试一次；'
+      + '反复出现就先看第 1 步的服务器状态是否在线。原始错误：' + (raw || '(空)'));
+    err.noAutoRetry = true;   // 请求可能已到后端（有副作用），禁止 apiCall 自动重试
+    throw err;
+  }
   const ct = r.headers.get('content-type') || '';
   let txt = '';
   try { txt = await r.text(); }
@@ -708,7 +726,11 @@ async function apiCall(path, opts){
       return await apiCallOnce(path, opts);
     } catch(e){
       const msg = String((e && e.message) || e || '');
-      const retriable = /1033|Failed to fetch|ECONN|ENET|502|503|520|521|522|523|524|525/i.test(msg);
+      // ★ 网络层中断（apiCallOnce 包装的 transport 错误）带 noAutoRetry 标记：
+      //   POST 请求可能已经到达后端并产生副作用（比如草稿已建），自动重发会重复建草稿，
+      //   所以这类错误只把话说清、让运营手动重试。
+      const retriable = !e || (e.noAutoRetry !== true)
+        && /1033|Failed to fetch|ECONN|ENET|502|503|520|521|522|523|524|525/i.test(msg);
       if (!retriable || attempt >= tries || opts.noRetry) throw e;
       await new Promise(res => setTimeout(res, 400 * (attempt + 1)));
     }
@@ -763,6 +785,12 @@ function showMsg(el, kind, html){
 let STATUS = null;
 let PREF = null;
 let IMAGES = [];   // { filename, data(base64), rank }
+/* ★ IMAGES 属主标记：IMAGES 当前装的是哪个条目的图（批量模式）。
+ *   批量建草稿/切条目是异步装载（读文件有延迟），装载窗口里 IMAGES 还装着
+ *   上一条的图 —— 2026-10-21 串图事故（第 1 条混进第 2、3 条的图）根因就是
+ *   这个窗口里 saveCurrentForm 把别人的图固化进了当前条目。
+ *   规矩：只有 IMAGES_OWNER === it 时才允许把 IMAGES 固化进该条目。 */
+let IMAGES_OWNER = null;
 let VARDIMS = [];  // 变体维度 [{ property_id, name, scale_id, values:[{value_id, value}] }]，第 4 步勾选属性值生成
 let VARROWS = [];  // 组合矩阵行 [{ sku, price, quantity }]，对应 VARDIMS 的笛卡尔积
 let ATTRS = [];    // 普通属性（不做变体）[{ property_id, name, value_ids:[], values:[值] }]，从给料「属性」列自动映射
@@ -1674,6 +1702,12 @@ function addFiles(files){
     r.readAsDataURL(f);
   }))).then(list => {
     list.filter(Boolean).forEach(o => IMAGES.push(o));
+    // ★ 批量模式下，第 1 步上传的图是「给料池」（按文件名匹配用），
+    //   不是当前条目的图片 —— 之前直接 push 进全局 IMAGES，而批量模式里
+    //   IMAGES 代表「当前条目」，一次 saveCurrentForm 就把整池图固化进
+    //   当前条目（2026-10-21 串图事故的另一半根因）。
+    //   所以批量模式：灌进池子后立刻把属主摘掉，条目图片等按名匹配。
+    if (IMPORT_BATCH.length) IMAGES_OWNER = null;
     renderThumbs();
     refreshImportImageMatch();   // 后选图片也要让批量条目立刻对上号
     const n = list.filter(Boolean).length;
@@ -1783,6 +1817,18 @@ async function ensureItemImages(it){
   it._form._images = list.slice();
   return list;
 }
+/* matchPickedImages 同款的「去扩展名」工具 */
+function stripExtForMatch(s){ return String(s).toLowerCase().replace(/\.[a-z0-9]+$/, ''); }
+/* 算「给料写了但没匹配上」的文件名（给第 5 步的提示用，实时计算不落状态） */
+function missingImageNames(it){
+  if (!it || !Array.isArray(it.images) || !it.images.length) return [];
+  const matched = matchPickedImages(it.images);
+  const got = new Set(matched.map(f => String(f.name).toLowerCase()));
+  return it.images
+    .map(n => String(n).trim().split(/[\\/]/).pop())
+    .filter(w => w && !got.has(w.toLowerCase())
+      && !matched.some(f => stripExtForMatch(f.name) === stripExtForMatch(w)));
+}
 /* SOP 09：8 类图的用途。标记存内存（IMAGES[].purpose），上传时按文件名自动标记，可人工改。 */
 const IMG_PURPOSES = [
   ['main', '01 首图'], ['angle', '02 侧/背面'], ['craft', '03 工艺近照'],
@@ -1822,6 +1868,7 @@ async function renderStep5Images(){
   const src = await ensureItemImages(it);
   IMAGES.length = 0;
   src.forEach(o => IMAGES.push(o));
+  IMAGES_OWNER = it;   // ★ 防串图：标记全局 IMAGES 的属主（见 IMAGES_OWNER 注释）
   box.innerHTML = src.map((im, i) =>
     '<div class="thumb' + (i === 0 ? ' first' : '') + '" data-s5i="' + i + '">' +
     '<img src="data:image/jpeg;base64,' + im.data + '" alt="" />' +
@@ -1849,16 +1896,32 @@ async function renderStep5Images(){
     log('主图已换为原第 ' + (i + 1) + ' 张');
   }));
   const m = document.getElementById('msgImg5');
-  if (m) showMsg(m, src.length ? 'info' : 'warn',
-    (src.length ? '当前条目 ' + src.length + ' 张图片，第 1 张为主图' : '当前条目还没有图片')
-    + '。可点上方直接添加（加到当前条目）。');
+  if (m){
+    const missing = missingImageNames(it);
+    let extra = '';
+    if (missing.length){
+      extra = '<br><b style="color:var(--bad)">给料写了但没匹配上的文件：' + esc(missing.join('、'))
+        + '</b> —— 请核对文件名是否与第 1 步上传的图片一致（忽略大小写与扩展名差异，路径只取最后一段）。';
+    }
+    showMsg(m, src.length && !missing.length ? 'info' : 'warn',
+      (src.length ? '当前条目 ' + src.length + ' 张图片，第 1 张为主图' : '当前条目还没有图片')
+      + '。可点上方直接添加（加到当前条目）。' + extra);
+  }
 }
 
-function addStep5Files(files){
+async function addStep5Files(files){
   const arr = Array.from(files || []);
   if (!arr.length) return;
   const it = IMPORT_BATCH[CURRENT_IDX];
   if (!it) return;
+  // ★ 防串图：全局 IMAGES 若还装着别的条目（属主不一致/装载窗口），先装载本条目再添加
+  if (IMAGES_OWNER !== it){
+    const imgs = await ensureItemImages(it);
+    if (IMPORT_BATCH[CURRENT_IDX] !== it) return;   // 期间切走了
+    IMAGES.length = 0;
+    imgs.forEach(o => IMAGES.push(o));
+    IMAGES_OWNER = it;
+  }
   if (IMAGES.length + arr.length > 20){
     showMsg(document.getElementById('msgImg5'), 'err', '图片最多 20 张，当前已有 ' + IMAGES.length + ' 张。');
     return;
@@ -2455,7 +2518,13 @@ function saveCurrentForm(){
     f._varrows = JSON.parse(JSON.stringify(VARROWS || []));
     f._attrs = JSON.parse(JSON.stringify(ATTRS || []));
     f._tax = PICKED_TAX ? { id: PICKED_TAX.id, name: PICKED_TAX.name } : null;
-    f._images = IMAGES.slice();   // ★ 当前条目图片（给料 + 场景图 + 手工增删）固化，切走不丢
+    // ★ 图片只在「全局 IMAGES 确实装的是本条目」时才固化（见 IMAGES_OWNER 注释）。
+    //   异步装载窗口里 IMAGES 还是上一条的图，直接固化 = 串图事故。
+    if (IMAGES_OWNER === it){
+      f._images = IMAGES.slice();
+    } else if (Object.prototype.hasOwnProperty.call(prev, '_images')) {
+      f._images = prev._images;   // 保持本条目已有值不动，等装载完成后由 switchToItem 写入
+    }
     if (prev && prev._precheck) f._precheck = prev._precheck;   // 校验结果别被整体替换抹掉
     it._form = f;
   } catch(e){ /* 表单未就绪时忽略 */ }
@@ -2498,6 +2567,7 @@ async function switchToItem(idx){
   if (IMPORT_BATCH[CURRENT_IDX] !== it) return;   // 期间又切走了，放弃本次渲染
   IMAGES.length = 0;
   imgs.forEach(o => IMAGES.push(o));
+  IMAGES_OWNER = it;   // ★ 标记全局 IMAGES 现在装的是本条目（防串图，见 IMAGES_OWNER 注释）
   renderThumbs();
   renderStep5Images();
   renderChecklist();   // 图片数影响右侧核对清单，图就位后重算一次
@@ -2650,7 +2720,7 @@ document.getElementById('btnImportTpl').addEventListener('click', () => {
      'made_to_order / 2020_2026', '逗号分隔', '英文属性名逗号分隔，如 Primary color, Size', '是 / 否',
      '克或千克', 'cm', 'cm', 'cm', '非 Etsy 字段，建议写进描述',
      '留空则用类目关键词自动查', '可留空由 AI 生成', '可留空由 AI 生成', '逗号分隔，最多 13 个', '可留空'],
-    ['wolf-head-01.jpg', 'fursuit head base', '30.70', '10', 'someone_else', '2020_2026', 'EVA foam, sandwich mesh', 'Primary color, Size', '否', '2250', '50', '50', '30',
+    ['wolf-head-01.jpg', 'fursuit head base', '30.70', '10', 'i_did', '2020_2026', 'EVA foam, sandwich mesh', 'Primary color, Size', '否', '2250', '50', '50', '30',
      'Standard size with adjustable foam blocks', '', '（示例行，用前请删除）', '（示例行）', 'wolf fursuit head, wolf mask', ''],
   ];
   const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
@@ -3435,6 +3505,7 @@ function renderAiList() {
       if (IMPORT_BATCH[CURRENT_IDX] === it){
         IMAGES.length = 0;
         imgs.forEach(o => IMAGES.push(o));
+        IMAGES_OWNER = it;   // ★ 防串图：同步属主标记
         renderThumbs();
         renderStep5Images();
       }
