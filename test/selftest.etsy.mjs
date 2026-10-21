@@ -169,7 +169,11 @@ console.log('\n【5】createDraftListing 请求体组装');
     shipping_profile_id: '111', readiness_state_id: '222',
     materials: ['Ceramic'],
   });
-  ok(form.price === '2999', 'price 用 subunit 整数（不是 29.99）', form.price);
+  // ★ 2026-10-22 实锤修正：官方 OpenAPI spec 里 createDraftListing 的 price 是
+  //   number（浮点美元），不是 subunit 分 —— 之前 ×100 把 $24.50 发成 $2,450.00，
+  //   店铺里真出现过两千多美元的马克杯。
+  ok(form.price === '29.99', '★ price 是浮点美元字符串（不是 ×100 的 2999）', form.price);
+  ok(!Object.values(form).includes('2999'), '★ 表单里不含 ×100 的 2999（防 subunit 回潮）');
   ok(form.title === 'Ceramic Horse', '标题已trim', form.title);
   // ★ 自测抓出来的缺陷：tags/materials 曾以数组形式进 URLSearchParams，
   //   依赖了隐式的 toString 行为。现已显式 join 成逗号分隔字符串。
@@ -217,8 +221,35 @@ console.log('\n【5】createDraftListing 请求体组装');
   ok(typeof form.tags === 'string' && typeof form.materials === 'string', 'tags/materials 类型确为 string');
   ok(form.shipping_profile_id === '111' && form.readiness_state_id === '222', '实物必填两项都在');
   ok(form.is_supply === 'false', 'is_supply 转字符串');
-  // 反向保护：绝不能把 29.99 直接发出去
-  ok(!Object.values(form).includes('29.99'), '表单里不含裸小数价格（防止 100 倍事故）');
+
+  // ★ 2026-10-22 事故回归：create-form 价格 100 倍 + 库存 offerings 变 null。
+  //   buildVariationBody 产出的完整 products 必须原样 PUT，不得被 buildInventoryBody
+  //   按「行」二次重建（那会把 offerings 变成 price:null / quantity:0）。
+  {
+    const puts = [];
+    const mockClient = {
+      shopId: () => '67875620',
+      post: async (p) => (p === '/shops/67875620/listings' ? { listing_id: 888, state: 'draft' } : {}),
+      put: async (p, opts) => { puts.push({ path: p, body: opts && opts.json }); return {}; },
+    };
+    const products = [{
+      sku: '', property_values: [{ property_id: 100, property_name: 'Stoneware', scale_id: null, value_ids: [55], values: ['Grey'] }],
+      offerings: [{ price: 24.5, quantity: 6, is_enabled: true, readiness_state_id: 222 }],
+    }];
+    await etsy.draftListing(mockClient, {
+      title: 'T', description: 'D', tags: [], price: '24.50', quantity: '6',
+      taxonomy_id: '1', who_made: 'i_did', when_made: 'made_to_order', is_supply: false,
+      shipping_profile_id: '111', readiness_state_id: '222',
+      max_variations_supported: 1,
+      products,
+    });
+    const invPut = puts.find(x => x.path === '/listings/888/inventory');
+    ok(Boolean(invPut), '变体草稿：inventory PUT 已发起');
+    const off = invPut && invPut.body && invPut.body.products && invPut.body.products[0] && invPut.body.products[0].offerings[0];
+    ok(off && off.price === 24.5, '★ 库存 offerings 价格是浮点 24.5（不是 null）', String(off && off.price));
+    ok(off && off.quantity === 6, '★ 库存 offerings 数量是 6（不是 0）', String(off && off.quantity));
+    ok(off && off.readiness_state_id === 222, 'offerings 带处理档案 id');
+  }
 }
 
 // ========== 6. 库存整表合并（最容易造成真实损失的地方） ==========
@@ -310,13 +341,14 @@ console.log('\n【6b】inventory 价格格式：读是 Money 对象，写是浮�
     JSON.stringify(prices));
   ok(prices[0] === 29.99 && prices[1] === 45, '两行价格都正确还原', prices.join(', '));
 
-  // 建草稿表单的价格规则相反（subunit 整数），必须两者不互相污染
-  const form = etsy.buildDraftForm({
+  // ★ 2026-10-22 核对官方 OpenAPI spec：createDraftListing 的 price 是 number（浮点美元），
+  //   与 inventory 的 offerings 一致 —— 旧的「subunit 整数」假设是 100 倍事故的根源。
+  const form2 = etsy.buildDraftForm({
     title: 'T', description: 'D', tags: ['a'], price: '29.99', quantity: '1',
     taxonomy_id: '1', who_made: 'i_did', when_made: 'made_to_order', is_supply: false,
     shipping_profile_id: '1', readiness_state_id: '2',
   });
-  ok(form.price === '2999', '★ createDraftListing 仍是 subunit 整数 2999（与 inventory 规则相反）', form.price);
+  ok(form2.price === '29.99', '★ createDraftListing 价格是浮点美元（29.99，不是 ×100 的 2999）', form2.price);
 
   const invBody = etsy.buildInventoryBody({
     readiness_state_id: 222,
@@ -332,7 +364,7 @@ console.log('\n【6b】inventory 价格格式：读是 Money 对象，写是浮�
   const bad2 = etsy.buildDraftForm({ title: 'T', description: 'D', tags: ['a'], price: 29.99,
     quantity: '1', taxonomy_id: '1', who_made: 'i_did', when_made: 'made_to_order',
     is_supply: false, shipping_profile_id: '1', readiness_state_id: '2' });
-  ok(bad2.price !== '29.99', '★ 草稿表单绝不会把裸小数发出去', bad2.price);
+  ok(bad2.price === '29.99', '★ 草稿表单价格保持浮点原值（29.99 不会再被 ×100）', bad2.price);
 }
 
 // ========== 7. 写操作安全开关 ==========

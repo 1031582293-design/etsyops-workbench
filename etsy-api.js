@@ -899,11 +899,14 @@ function validateDraftInput(inp) {
 /* 组装 createDraftListing 的表单。Etsy 这个端点收 x-www-form-urlencoded（不是 JSON），
    且价格是 subunit 整数。少任何一个必填字段都会得到一个笼统的 400。 */
 function buildDraftForm(inp) {
+  // 2026-10-22 实锤修正：官方 OpenAPI 规范里 createDraftListing 的 price 是
+  // **number（浮点美元）**，不是 subunit 分！之前 toSubunit×100 → $24.50 变 $2,450.00
+  // （店铺里真出现过 2450 美元的马克杯）。inventory 的 offerings 也是浮点，两者一致。
   const form = {
     quantity: String(inp.quantity),
     title: String(inp.title).trim(),
     description: String(inp.description).trim(),
-    price: String(toSubunit(inp.price).amount), // 注意：只传 amount，divisor 固定 100
+    price: String(Number(inp.price)),   // 浮点美元，如 24.5
     who_made: String(inp.who_made),
     when_made: String(inp.when_made),
     is_supply: inp.is_supply ? 'true' : 'false',
@@ -1018,8 +1021,18 @@ async function draftListing(client, inp) {
   if (inp.products && inp.products.length) {
     try {
       const q = { max_variations_supported: String(inp.max_variations_supported || 2) };
+      // ★ inp.products 已经是完整的 products（buildVariationBody 的产出，offerings 齐全）。
+      //   之前这里误用 buildInventoryBody 再造一遍 —— 它按「行」（price 在顶层）取值，
+      //   对完整 products 会取出 undefined → offerings 变成 price:null/quantity:0，
+      //   变体价格库存全部丢失（2026-10-22 实锤）。这里直接原样提交。
+      const body = {
+        products: inp.products,
+        price_on_property: Array.isArray(inp.price_on_property) ? inp.price_on_property : [],
+        quantity_on_property: Array.isArray(inp.quantity_on_property) ? inp.quantity_on_property : [],
+        sku_on_property: Array.isArray(inp.sku_on_property) ? inp.sku_on_property : [],
+      };
       inventory = await client.put(`/listings/${listingId}/inventory`, {
-        json: buildInventoryBody(inp),
+        json: body,
         query: q,
       });
     } catch (e) {
