@@ -320,6 +320,9 @@ export function buildReport(ctx) {
     L.push('（AI 分析失败，不影响上面数据部分。原因：' + aiError + '）');
   } else if (aiAdvice) {
     L.push(aiAdvice);
+    L.push('');
+    L.push('> AI 只看到标题、标签、价格与预估数据，**没有看原款图片**；'
+      + '「原款是什么样」的判断可能不准，执行前先打开 listing 核对。');
   } else {
     L.push('（无）');
   }
@@ -420,7 +423,16 @@ export function createSelectionAgent(opts = {}) {
       }
 
       /* Stage2 批量海选 */
-      const topKw = pool.slice(0, th.keywords_to_search);
+      /* ★ 词根自身必须搜一次：
+         ① EverBee 的相关词里常有截断词（实测 "ceram mug"、"ceramic mugful"），
+            拿它们海选等于搜空气；
+         ② 词根本身搜索量常常超过 search_volume_max（Stage1 会把它过滤掉），
+            但它是需求最集中的查询，不能因为"太热"就不看。 */
+      const topKw = pool.slice(0, th.keywords_to_search).map((k) => ({ keyword: k.keyword }));
+      if (!topKw.some((k) => k.keyword.toLowerCase() === s.toLowerCase())) {
+        if (topKw.length >= th.keywords_to_search) topKw.pop();
+        topKw.unshift({ keyword: s });
+      }
       onProgress('stage2', 15, '海选 ' + topKw.length + ' 个词（每词 ' + th.results_per_keyword + ' 条）…');
       const raw = [];
       const seenIds = new Set();
@@ -504,10 +516,19 @@ export function createSelectionAgent(opts = {}) {
             pros: c.pros, cons: c.cons, keyword: c.keyword,
           }));
           const sys = '你是 Etsy POD 赛道的选品策划。只依据给出的预估数据给差异化建议，禁止编造数据。'
-            + 'EverBee 数据为预估值，你的输出也会被标注需人工复核。用简体中文。';
+            + 'EverBee 数据为预估值，你的输出也会被标注需人工复核。用简体中文。'
+            + '★ 差异化建议必须具体可执行：每条至少点明「换什么人群/场景」+「加什么元素（材质/文案/构图/配件）」+'
+            + '「和原款哪里不一样」。禁止复述原标题当建议（例如"做个性化咖啡杯"这种等于没说）。';
           const usr = '词根：' + s + '\n候选：\n' + JSON.stringify(compact, null, 1)
-            + '\n\n请输出：1) 每个候选 1-2 句差异化方向（怎么做出不同：人群/场景/材质/文案角度，别照抄原款）；'
-            + '2) 一段 80 字以内的整体建议（先测哪个、放弃哪个）。直接输出 Markdown，不要寒暄。';
+            + '\n\n请按下面格式输出 Markdown，不要寒暄、不要重复标题：\n'
+            + '### 逐个方向\n'
+            + '**#listing_id（级别）**\n'
+            + '- 改哪里：<人群或使用场景，例如"给养柯基的独居年轻人">\n'
+            + '- 加什么：<具体元素，例如"柯基屁股造型杯柄 + 内壁釉下彩狗爪印">\n'
+            + '- 差异化点：<一句话说清与原款的差别，例如"原款是通用祝福语，这款把祝福和宠物品种绑定">\n'
+            + '- 定价建议：<$区间，参考候选毛利给出>\n\n'
+            + '### 整体建议\n'
+            + '<80 字以内：先测哪个、砍哪个、为什么>'
           aiAdvice = await ai(sys, usr);
         }
       } catch (e) { aiError = String((e && e.message) || e); }

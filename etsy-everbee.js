@@ -326,14 +326,38 @@ export function createEverbee(opts = {}) {
     return _initialized;
   }
 
+  /* MCP 的 text 不一定是纯 JSON：部分工具（如 find_bestsellers）会在 JSON 前面
+     拼一段给 LLM 的说明文字（"In apps that show widgets…"），直接 JSON.parse 会失败，
+     结果被当成空数组 —— 选品流程曾因此整轮 0 候选。这里先整段解析，失败再取
+     第一个 { 到最后一个 } 的切片（实测 JSON 在尾部）。 */
+  function parseToolText(text) {
+    const s = String(text == null ? '' : text).trim();
+    if (!s) return null;
+    try {
+      const o = JSON.parse(s);
+      return o && typeof o === 'object' ? o : null;
+    } catch (e) { /* 继续尝试切片 */ }
+    const i = s.indexOf('{');
+    const j = s.lastIndexOf('}');
+    if (i >= 0 && j > i) {
+      try {
+        const o = JSON.parse(s.slice(i, j + 1));
+        if (o && typeof o === 'object') return o;
+      } catch (e) { /* 放弃，保留原文 */ }
+    }
+    return null;
+  }
+
   async function callTool(name, args = {}) {
     await ensureInitialized();
     const res = await rawRpc({ jsonrpc: '2.0', id: Date.now() % 1e6, method: 'tools/call', params: { name, arguments: args } });
-    // MCP 的内容是 [{type:'text', text:'<json>'}]
+    // MCP 的内容是 [{type:'text', text:'<json 或 说明文字+json>'}]
     const content = (res && res.content) || [];
     for (const c of content) {
       if (c && typeof c.text === 'string') {
-        try { return JSON.parse(c.text); } catch { return { _text: c.text }; }
+        const parsed = parseToolText(c.text);
+        if (parsed) return parsed;
+        return { _text: c.text };
       }
     }
     if (res && res.structuredContent) return res.structuredContent;

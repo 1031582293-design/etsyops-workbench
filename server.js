@@ -206,7 +206,7 @@ const SELECTION_REPORTS_FILE = join(DATA_DIR, 'selection-reports.json');
 const selectionLog = (...a) => console.log('[selection]', ...a);
 const selectionAgent = selection.createSelectionAgent({
   everbee: everbeeClient,
-  ai: (sys, usr) => etsyAiGenerate(sys, usr, { temperature: 0.6, max_tokens: 2000 }),
+  ai: (sys, usr) => etsyAiGenerate(sys, usr, { temperature: 0.6, max_tokens: 2000, model: SELECTION_AI_MODEL, label: '选品分析' }),
   log: selectionLog,
   storeFile: SELECTION_REPORTS_FILE,
 });
@@ -654,6 +654,10 @@ const AI_IMAGE_MODEL = process.env.AI_IMAGE_MODEL || 'cogview-3-flash'; // 免�
 const ETSY_AI_API_KEY = (process.env.ETSY_AI_API_KEY || '').trim() || AI_API_KEY;
 const ETSY_AI_BASE_URL = ((process.env.ETSY_AI_BASE_URL || '').trim() || AI_BASE_URL).replace(/\/+$/, '');
 const ETSY_AI_MODEL = (process.env.ETSY_AI_MODEL || '').trim() || AI_MODEL;
+// 选品分析单独一套模型：留空 = 复用 ETSY_AI_MODEL。
+// 用途：文案生成偏"照格式写"，选品分析偏"判断与推理"，想换更强的模型（如 deepseek-chat、
+// gpt-4o）只改这一个变量，不影响已有的文案管线。
+const SELECTION_AI_MODEL = (process.env.SELECTION_AI_MODEL || '').trim() || ETSY_AI_MODEL;
 // Etsy 场景图用的生图模型。留空 = 复用公众号那套的 AI_IMAGE_MODEL。
 // 换 OpenAI 时填 gpt-image-1（或 gpt-image-1.5 / gpt-image-2），走 ETSY_AI_BASE_URL + ETSY_AI_PROXY。
 const ETSY_AI_IMAGE_MODEL = (process.env.ETSY_AI_IMAGE_MODEL || '').trim() || AI_IMAGE_MODEL;
@@ -1078,7 +1082,7 @@ async function etsyAiChatOnce(systemPrompt, userPrompt, opts = {}) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ETSY_AI_API_KEY}` },
     body: JSON.stringify({
-      model: ETSY_AI_MODEL,
+      model: opts.model || ETSY_AI_MODEL,
       temperature: opts.temperature ?? 0.7,
       max_tokens: opts.max_tokens ?? 4000,
       messages: [
@@ -1131,7 +1135,7 @@ async function etsyAiGenerate(systemPrompt, userPrompt, opts = {}) {
     throw new Error('Etsy 文案生成未配置：请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL'
       + '（留空则复用公众号那套 AI_* 配置）。');
   }
-  return withAiRetry(() => etsyAiChatOnce(systemPrompt, userPrompt, opts), '文案生成', opts);
+  return withAiRetry(() => etsyAiChatOnce(systemPrompt, userPrompt, opts), opts.label || '文案生成', opts);
 }
 
 /* ★ 生稿任务缓存（模块顶层，供handleApi 与文件末尾的清理定时器共同访问）
