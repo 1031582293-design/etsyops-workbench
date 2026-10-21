@@ -2272,7 +2272,7 @@ document.getElementById('btnDraft').addEventListener('click', async () => {
     log('★草稿已建 listing_id=' + d.listing_id + '，图片 ' + okImg + ' 张，耗时 ' +
         ((Date.now() - t0) / 1000).toFixed(1) + 's', 's');
   } catch(e){
-    showMsg(m, 'err', esc(e.message));
+    showMsg(m, 'err', esc(e.message).replace(/\n/g, '<br>'));   // 错误详情列表按行显示
     logErr(e);
   } finally {
     btn.disabled = false; btn.textContent = '写入当前条目草稿';
@@ -2304,7 +2304,8 @@ document.getElementById('btnDraftAll').addEventListener('click', async () => {
       + rows.map(r => '<div style="font-size:12.5px;margin:3px 0">'
         + (r.ok
             ? '<span style="color:var(--good)">✓</span> ' + esc(r.name) + ' → listing ' + r.id
-            : '<span style="color:var(--bad)">✗</span> ' + esc(r.name) + '：' + esc(r.err))
+            // ★ 错误详情（后端 errors 列表）用 \n 分隔，innerHTML 里要转 <br> 才显示得出来
+            : '<span style="color:var(--bad)">✗</span> ' + esc(r.name) + '：' + esc(r.err).replace(/\n/g, '<br>'))
         + '</div>').join('');
   };
   render();

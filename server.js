@@ -3081,7 +3081,10 @@ async function handleApi(req, res) {
       const b = await readJson(req);
       const v = etsy.validateDraftInput(b);
       if (!v.ok) {
-        return json(res, 400, { error: 'validation_failed', note: '建草稿前校验没通过（已阻止请求，未消耗 Etsy 额度）：', errors: v.errors });
+        etsyLog('建草稿前字段校验失败（' + (b.sku || b.title || '').slice(0, 30) + '）：' + v.errors.join('；'));
+        return json(res, 400, { error: 'validation_failed',
+          note: '字段校验没通过（已阻止请求，未消耗 Etsy 额度）。<b>这不是 AI 审核</b>——AI 上架前校验只是辅助参考、永不拦截；这里拦的是 Etsy 的硬性字段规则，下面列出具体问题：',
+          errors: v.errors });
       }
       const imgCount = (b.images || []).length;
       if (imgCount > 20) {
