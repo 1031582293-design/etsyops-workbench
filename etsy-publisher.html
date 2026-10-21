@@ -1012,7 +1012,16 @@ document.getElementById('btnTax').addEventListener('click', async () => {
 
 /* 进第 4 步时自动触发：条目带「类目关键词」就自动搜 taxonomy，选最末级叶子 */
 async function autoPickTaxonomy(){
-  const it = IMPORT_BATCH[CURRENT_IDX];
+  let it = IMPORT_BATCH[CURRENT_IDX];
+  // ★ 批量流程下 CURRENT_IDX 可能还是 -1（没点过「设为当前条目」），
+  // IMPORT_BATCH[-1] = undefined → 关键词取空 → 直接 return 不搜（这就是「类目没自动搜」的根因）。
+  // 回退到第一个有条目关键词的条目并切过去，让类目页有可操作对象。
+  if (!it || !it.taxonomy_keyword){
+    const idx = IMPORT_BATCH.findIndex(x => x && x.taxonomy_keyword);
+    if (idx < 0) return;
+    if (CURRENT_IDX !== idx) switchToItem(idx);
+    it = IMPORT_BATCH[idx];
+  }
   const kw = it && it.taxonomy_keyword;
   if (!kw) return;
   if (PICKED_TAX) return;   // 已选过就不再自动改
@@ -2751,11 +2760,16 @@ function pollAiBatch(jobId, total) {
       setAiProgress(done, total, (r.note || '') + curNote);
       // 用后端返回的 results 覆盖（断点续跑：刷新页面后接着看）
       if (Array.isArray(r.results)) {
-        r.results.forEach((x, k) => {
-          const slot = AI_RESULTS[k];
+        r.results.forEach((x) => {
+          // ★ 后端 result 没有 status 字段（只有 index/sku/title/.../parsed 布尔），
+          // 之前 slot.status = x.status 恒为 undefined → renderAiList 认不出 → 一直「待生成」。
+          // 这里按 title 是否有值兜底判定 done/error；下标用 x.index（后端 todo 下标）而非数组下标 k。
+          const slot = AI_RESULTS[x.index];
           if (!slot) return;
-          slot.status = x.status; slot.title = x.title || '';
-          slot.description = x.description || ''; slot.tags = x.tags || [];
+          slot.status = x.status || (x.title ? 'done' : 'error');
+          slot.title = x.title || '';
+          slot.description = x.description || '';
+          slot.tags = x.tags || [];
           slot.cn = x.cn_check || '';
           slot.scene = x.scene || null;
           slot.error = x.error || '';

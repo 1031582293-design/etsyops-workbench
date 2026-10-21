@@ -35,6 +35,23 @@ export const EMPLOYEES = [
     ]
   },
   {
+    id: 'inbox', name: '消息中心', role: 'Inbox Triage', cat: '电商', icon: '📨',
+    color: 'linear-gradient(135deg,#3b82f6,#0ea5e9)', status: 'run',
+    tagline: '把 Etsy 的订单、咨询、纠纷汇成一条待办：谁在等、等了多久、还有几单没发。',
+    tool: 'etsy-inbox.html',
+    nodes: [
+      { t: '邮件汇总', skill: 'Mail Ingest', sop: '店主转发 Etsy 通知信 → Cloudflare 收信 → 推入工作台', d: '不登录店主邮箱、不拿 OAuth，只收被转出来的那几类信。', out: '原始邮件归档' },
+      { t: '分类降噪', skill: 'Classifier', sop: '按主题与正文判定订单/咨询/纠纷/营销', d: '营销只归档不提醒，订单与咨询必推。', out: '分级事件流' },
+      { t: '待办排序', skill: 'Triage', sop: '按等待时长排序，超 24 小时标红', d: '处理状态由人点，不假装能从邮件推断。', out: '待办清单' },
+      { t: '订单对账', skill: 'Order Sync', sop: '直连 Etsy receipts 取真实待发货', d: 'was_shipped 是唯一可信来源，不用邮件猜。', out: '待发货列表' },
+      { t: '即时提醒', skill: 'Alert', sop: '飞书群机器人推卡片，带直达链接', d: '点开就是 Etsy 对话页，不用自己找。', out: '飞书通知' }
+    ],
+    deliverables: [
+      { t: '消息中心', d: 'etsy-inbox.html · 今日待办 + 真实待发货 + 超时提醒' },
+      { t: '飞书实时提醒', d: '新订单/买家咨询到达即推，卡片带买家名与对话链接' }
+    ]
+  },
+  {
     id: 'pricer', name: '定价策略师', role: 'Pricing Strategist', cat: '电商', icon: '💰',
     color: 'linear-gradient(135deg,#ffb86b,#ff7ac3)', status: 'idle',
     tagline: '动态平衡利润与转化，给出阶梯定价、捆绑与促销建议。',
