@@ -171,7 +171,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">48bee39</span>
+  <span class="vtag" id="verTag">5023830</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -918,8 +918,8 @@ async function loadPreflight(force){
     document.getElementById('pfReady').textContent = (PREF.readinessStates || []).length
       ? PREF.readinessStates.map(x => x.title + '（' + x.id + '）').join('、') : '⚠️ 还没有处理档案';
 
-    fillSelect('fShip', PREF.shippingProfiles, '选择配送模板');
-    fillSelect('fReady', PREF.readinessStates, '选择处理档案');
+    fillSelect('fShip', PREF.shippingProfiles, '选择配送模板', true);
+    fillSelect('fReady', PREF.readinessStates, '选择处理档案', true);
     const secSel = document.getElementById('fSection');
     secSel.innerHTML = '<option value="">未分类</option>' +
       (PREF.sections || []).map(x => '<option value="' + x.id + '">' + esc(x.title) + '</option>').join('');
@@ -976,10 +976,12 @@ function validateProfileIds(){
   renderImportList();
 }
 
-function fillSelect(id, arr, placeholder){
+function fillSelect(id, arr, placeholder, autoPickSingle){
   const el = document.getElementById(id);
   el.innerHTML = '<option value="">' + placeholder + '</option>' +
     (arr || []).map(x => '<option value="' + x.id + '">' + esc(x.title) + '（' + x.id + '）</option>').join('');
+  // ★ 店铺只有一个模板/档案时自动选中 —— 实物必填项，多数店就一套，让用户逐条手选纯属重复劳动
+  if (autoPickSingle && Array.isArray(arr) && arr.length === 1) el.value = String(arr[0].id);
 }
 
 /* ---------- 步骤 2：类目 ---------- */
@@ -1109,7 +1111,7 @@ async function startCatBatch(auto){
 
   CAT_PLAN.length = 0;
   renderCatPlan();
-  catMsg('info', '开始批量定类目 <b>' + IMPORT_BATCH.length + '</b> 条（AI 给 3 个候选关键词 + 逐个搜 taxonomy，串行，较慢）。');
+  catMsg('info', '开始批量定类目 <b>' + IMPORT_BATCH.length + '</b> 条（一条接一条跑，避免触发 AI 限流；AI/搜索失败会自动重试）。');
   setCatProgress(0, IMPORT_BATCH.length, '排队中');
   try {
     const r = await apiCall('/api/etsy/category/batch', {
@@ -1155,6 +1157,8 @@ function pollCatBatch(jobId, total){
       if (Array.isArray(r.results)){
         r.results.forEach(x => {
           const prev = CAT_PLAN[x.index];
+          // ★ 失败也要进前端日志：之前只有界面红字，日志区一片「正常」，用户以为没报错
+          if (x.error && !(prev && prev.error)) log('定类目失败（' + (x.sku || ('第 ' + (x.index + 1) + ' 条')) + '）：' + x.error, 'e');
           CAT_PLAN[x.index] = { index: x.index, sku: x.sku, candidates: x.candidates || [],
             recommended: x.recommended, error: x.error || '',
             confirmed: !!(prev && prev.confirmed) };   // 保留已确认状态，别被轮询覆盖
@@ -1195,7 +1199,8 @@ function renderCatPlan(){
     if (p.error){
       return '<div style="padding:9px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;font-size:12.5px">'
         + '<div style="color:var(--bad)"><b>' + sku + '</b> 定类目失败：' + esc(p.error) + '</div>'
-        + '<div style="margin-top:4px;font-size:11.5px;color:var(--text-faint)">可点下方「手动搜索类目」兜底。</div></div>';
+        + '<div style="margin-top:6px;font-size:11.5px;color:var(--text-faint)">可点「手动搜索类目」兜底，或直接重跑这条： '
+        + ' <button class="btn sm ghost" data-cat-retry="' + p.index + '">↻ 重跑这条</button></div></div>';
     }
     const cds = (p.candidates || []).map((c, ci) => {
       const isRec = ci === p.recommended;
@@ -1217,6 +1222,51 @@ function renderCatPlan(){
   box.querySelectorAll('[data-cat-use]').forEach(b => b.addEventListener('click', () => {
     confirmCategory(Number(b.dataset.catUse), Number(b.dataset.catCi));
   }));
+  box.querySelectorAll('[data-cat-retry]').forEach(b => b.addEventListener('click', () => {
+    retryCatOne(Number(b.dataset.catRetry));
+  }));
+}
+
+/* ★ 单条重跑：失败条目不必整批重来。临时占用 CAT_BATCH_BUSY 防止和整批并行。 */
+async function retryCatOne(itemIdx){
+  const it = IMPORT_BATCH[itemIdx];
+  if (!it || CAT_BATCH_BUSY) return;
+  const btn = document.getElementById('btnCatBatch');
+  CAT_BATCH_BUSY = true;
+  btn.disabled = true;
+  catMsg('info', '重跑第 <b>' + (itemIdx + 1) + '</b> 条（' + esc(it.sku || '') + '）的类目…');
+  try {
+    const chk = await apiCall('/api/etsy/ai/check', { timeout: 30000, label: 'AI 连通检查' });
+    if (!chk.ok){ catMsg('err', 'AI 连不上，没有重跑。' + esc(chk.note)); return; }
+    const r = await apiCall('/api/etsy/category/batch', {
+      method: 'POST',
+      body: JSON.stringify({ items: [Object.assign({ index: 0 }, factsOf(it), { taxonomy_keyword: it.taxonomy_keyword || '' })] }),
+      timeout: 30000, label: '重跑定类目',
+    });
+    for (let i = 0; i < 120; i++){
+      await new Promise(rr => setTimeout(rr, 3000));
+      syncAiLogs();
+      const j = await apiCall('/api/etsy/category/batch?jobId=' + encodeURIComponent(r.jobId),
+        { timeout: 30000, label: '查询重跑进度' });
+      const x = (j.results || [])[0];
+      if (x && (x.error || x.candidates)){
+        CAT_PLAN[itemIdx] = { index: itemIdx, sku: it.sku, candidates: x.candidates || [],
+          recommended: x.recommended, error: x.error || '', confirmed: false };
+        renderCatPlan();
+        if (x.error) log('重跑定类目失败（' + (it.sku || '') + '）：' + x.error, 'e');
+        else log('重跑定类目成功（' + (it.sku || '') + '），请点「用这个」确认', 's');
+        return;
+      }
+      if (j.status === 'stopped'){ catMsg('warn', '重跑被中断。'); return; }
+    }
+    catMsg('warn', '重跑超时（6 分钟没出结果）。请稍后刷新重试。');
+  } catch(e){
+    logErr(e);
+    catMsg('err', '重跑失败：' + esc(e.message || e));
+  } finally {
+    CAT_BATCH_BUSY = false;
+    btn.disabled = false;
+  }
 }
 
 /* 人确认某个候选类目：锁定该类目 → 自动查属性 → 变体/属性按名称映射（标红没对上的）。 */
@@ -1817,7 +1867,7 @@ async function startPrecheck(){
     const sku = it.sku || ('第 ' + it._row + ' 行');
     btn.textContent = '批量校验中 ' + (done + 1) + '/' + todo.length + '…';
     showMsg(m, 'info', 'AI 上架前校验中：<b>' + (done + 1) + ' / ' + todo.length + '</b> 条（' + esc(sku) + '）…');
-    const f = it._form || it;
+    const f = mergedForm(it);   // 给料打底 + _form 覆盖：price/quantity 不会因为 AI 只回填了文案就丢
     const vd = Array.isArray(f._vardims) ? f._vardims : [];
     const vr = Array.isArray(f._varrows) ? f._varrows : [];
     const draft = {
@@ -1906,6 +1956,22 @@ function renderVarRows(){
 }
 
 /* ---------- 步骤 5：写入草稿 / 发布 ---------- */
+/* ★ 条目的「合并视图」：给料字段打底、_form 编辑值覆盖（_form 的空值不覆盖给料）。
+ * 之前 AI 回填 _form 只写 title/desc/tags，而 `it._form || it` 在 _form 存在时
+ * 不会回落到给料 —— price / quantity 等明明给料里有，批量校验却报「缺少 price」。
+ * 就是被这个假meld坑的：_form 有 → 用 _form（但没有 price）→ 也不会去看给料。 */
+function mergedForm(it){
+  const out = {};
+  Object.keys(it || {}).forEach(k => {
+    const v = it[k];
+    if (v !== '' && v !== null && v !== undefined) out[k] = v;
+  });
+  Object.keys((it && it._form) || {}).forEach(k => {
+    const v = it._form[k];
+    if (v !== '' && v !== null && v !== undefined && !(Array.isArray(v) && !v.length)) out[k] = v;
+  });
+  return out;
+}
 document.getElementById('btnDraft').addEventListener('click', async () => {
   const m = document.getElementById('msg5');
   const btn = document.getElementById('btnDraft');
@@ -3039,6 +3105,8 @@ function pollAiBatch(jobId, total) {
           slot.cn = x.cn_check || '';
           slot.scene = x.scene || null;
           slot.error = x.error || '';
+          // ★ 场景图失败也进前端日志：之前只有条目卡片里的红字，日志区完全看不到
+          if (x.scene && x.scene.error) log('场景图失败（' + (x.sku || '') + '）：' + x.scene.error, 'e');
           // ★ 成功结果自动写进条目 _form（原来要点「设为当前条目」才写入），
           //   第 5 步表单由此自动带出 AI 文案，不用逐条手点。
           const it = IMPORT_BATCH[slot.i];
@@ -3185,6 +3253,7 @@ function renderAiList() {
         x.scene = { prompt: d.prompt || '', url: d.url || '', b64: d.b64 || '', error: '' };
       } catch (e) {
         x.scene = { prompt: '', url: '', b64: '', error: e.message || String(e) };
+        log('场景图生成失败（' + (x.sku || '') + '）：' + (e.message || e), 'e');   // 日志区同步可见
       }
       renderAiList();
     });

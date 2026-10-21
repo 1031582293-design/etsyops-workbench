@@ -681,17 +681,67 @@ async function loadAll(client) {
 }
 
 /** 在 seller 类目树里按关键词找taxonomy_id。AI 给的类目名只是候选，必须用这个换真实 ID。 */
+/* ★ 全量拉卖家 taxonomy 并递归展开成扁平表（进程内缓存）。
+ * 官方端点 GET /v3/application/seller-taxonomy/nodes 的真实行为（2026-10-21 核对文档）：
+ * - 【没有任何 query 参数】——之前传的 keywords/limit 会被静默忽略，
+ *   返回的是整棵树， 于是「搜索」永远命中树前几个顶层节点（Accessories…），全都不是叶子。
+ * - 返回嵌套树：节点字段是 id / name / level / parent_id / children / full_path_taxonomy_ids。
+ *   【没有 is_leaf 字段】—— 叶子 = children 为空。
+ * - 【没有 taxonomy_id 字段】—— ID 叫 id。之前 n.taxonomy_id 全是 undefined。
+ * 树基本不变，拉一次展开缓存，后续所有搜索都在本地做。 */
+let _taxonomyFlatCache = null;
+async function fetchTaxonomyFlat(client) {
+  if (_taxonomyFlatCache) return _taxonomyFlatCache;
+  const d = await client.get('/seller-taxonomy/nodes');
+  const out = [];
+  const walk = (nodes, ancestors) => {
+    (nodes || []).forEach(n => {
+      const kids = Array.isArray(n.children) ? n.children : [];
+      out.push({
+        taxonomy_id: n.id,
+        name: n.name,
+        full_path: ancestors.concat([n.name]).join(' > '),
+        is_leaf: kids.length === 0,
+        level: n.level != null ? n.level : ancestors.length,
+      });
+      walk(kids, ancestors.concat([n.name]));
+    });
+  };
+  walk(d.results || [], []);
+  _taxonomyFlatCache = out;
+  return out;
+}
+
+/* 按「类目关键词」搜叶子类目。因为官方端点不支持服务端搜索，
+ * 这里拉全树后**本地匹配**：关键词分词、每个词都要命中（路径或名称）；
+ * 没有全词命中就放宽到按命中词数排序。叶子永远排在非叶子前面，
+ * 同为叶子时更贴近关键词、层级更深的排前面 —— 调用方取第一个就是最推荐的。 */
 async function searchTaxonomy(client, keyword, limit = 25) {
-  const k = String(keyword || '').trim();
+  const k = String(keyword || '').trim().toLowerCase();
   if (!k) throw new Error('请提供类目关键词');
-  const d = await client.get('/seller-taxonomy/nodes', { keywords: k, limit });
-  return (d.results || []).map(n => ({
-    taxonomy_id: n.taxonomy_id,
-    name: n.name,
-    full_path: (n.ancestors || []).map(a => a.name).concat([n.name]).join(' > '),
-    is_leaf: n.is_leaf,
-    is_taxonomy_root: n.is_taxonomy_root,
-  }));
+  const all = await fetchTaxonomyFlat(client);
+  const words = k.split(/[^a-z0-9']+/i).filter(Boolean);
+  const nmLo = n => n.name.toLowerCase();
+  const hay = n => (n.name + ' ' + n.full_path).toLowerCase();
+  // 全词阶段只看类目名：搜 "mug" 就该命中名为 Mugs 的类目，而不是路径里带 mug 的一串
+  let matches = all.filter(n => words.length ? words.every(w => nmLo(n).includes(w)) : nmLo(n).includes(k));
+  if (!matches.length) {
+    // 放宽：名称+路径里按命中词数排序
+    matches = all
+      .map(n => ({ n, score: words.filter(w => hay(n).includes(w)).length }))
+      .filter(x => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(x => x.n);
+  }
+  // 叶子永远排在非叶子前面；同为叶子时名称命中词更多、层级更深（更具体）的排前面
+  const nameHit = n => words.filter(w => nmLo(n).includes(w)).length;
+  matches.sort((a, b) => {
+    if (a.is_leaf !== b.is_leaf) return a.is_leaf ? -1 : 1;
+    const d = nameHit(b) - nameHit(a);
+    if (d) return d;
+    return (b.level || 0) - (a.level || 0);
+  });
+  return matches.slice(0, limit);
 }
 
 /** 查某个类目下有哪些属性可选（做 Attributes 那步要用）。 */

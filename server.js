@@ -910,6 +910,214 @@ async function readJson(req) {
   return JSON.parse(raw || '{}');
 }
 
+/* ---------- Etsy 文案生成：prompt 与 facts 的共用逻辑 ---------- */
+
+/* 读取提示词。优先级：请求里传的 > data/etsy-prompt.txt > 内置默认。
+ * 之所以做成「每次读盘」：运营可以在页面上改 prompt 并保存成那个文件，
+ * 改完下一次生成立即生效，不用重启后端、不用改代码。 */
+function readEtsyPrompt(override) {
+  const o = String(override || '').trim();
+  if (o) return o;
+  try {
+    const custom = readFileSync(join(DATA_DIR, 'etsy-prompt.txt'), 'utf8');
+    if (custom && custom.trim()) return custom;
+  } catch { /* 文件不存在就用内置的，不报错 —— 这是正常路径 */ }
+  return ETSY_AI_DEFAULT_PROMPT;
+}
+
+/* 把一条「事实记录」转成给 AI 的文字块。
+ * ★ 只拼已填的项：AI 拿不到没填的字段，就不会凭空编造规格。
+ *   这是 Etsy 合规的关键 —— 编造材质/配件/物种属于虚假描述。 */
+function factsToText(b) {
+  return [
+    b.sku ? `产品编号：${b.sku}` : '',
+    b.materials && b.materials.length ? `制作材料：${(b.materials || []).join('、')}` : '',
+    b.audience_note ? `适合人群/规格：${b.audience_note}` : '',
+    b.item_weight ? `净重：${b.item_weight} ${b.item_weight_unit || 'g'}` : '',
+    (b.item_length && b.item_width && b.item_height)
+      ? `尺寸：${b.item_length}×${b.item_width}×${b.item_height} ${b.item_dimensions_unit || 'cm'}` : '',
+    b.price ? `售价：$${b.price}` : '',
+    b.taxonomy_name ? `Etsy 类目：${b.taxonomy_name}` : '',
+    // SOP 03：人工验证过的关键词要传给 AI —— 生成文案时优先用这些词，
+    // 而不是让 AI 再自己发明一遍（验证记录在 data/etsy-keywords.json）
+    Array.isArray(b.verified_keywords) && b.verified_keywords.length
+      ? `已验证关键词（优先使用）：${b.verified_keywords.join(', ')}` : '',
+  ].filter(Boolean);
+}
+
+/* 判断一条商品是否「够 AI 生成」。
+ * ★ 判断依据必须是**具体的商品事实**（材质 / 适合人群 / 净重 / 完整三维尺寸），
+ *   不能只看 factsToText 的输出长度 —— 因为它还会拼上「产品编号」和「售价」，
+ *   只填了这两项时长度不为 0，AI 就会在没有材质尺寸的情况下凭空编描述。
+ *   那个错误在页面上看不出来，但写进 Etsy 就是「虚假描述」，属于合规问题。
+ *   必须与前端 aiRunnable()保持同一套判据，两边不一致会导致「前端能跑、后端全跳过」。 */
+function factsEnough(item) {
+  const b = item || {};
+  return Boolean(
+    (b.materials && b.materials.length) ||
+    b.audience_note ||
+    b.item_weight ||
+    (b.item_length && b.item_width && b.item_height)
+  );
+}
+
+/* 解析 AI 返回的 TITLE / DESCRIPTION / TAGS 三段。
+ * ★ 容错要点：模型可能用 markdown 粗体、可能漏标签行、可能多输出说明文字 ——
+ *   解析失败要**如实返回 raw** 并在 note 里说明，不能静默丢内容。 */
+/* 解析 AI 返回的 TITLE / DESCRIPTION / TAGS 三段。
+ *
+ * ★ 与页面侧 etsy-import.js 的 parseAiCopy 保持同一套实现与同一批边界处理。
+ *   之前后端用的是更简单的正则，遇到模型加粗（**TITLE:**）或描述里含冒号就会解析错 ——
+ *   而「解析失败」的表现是标题/描述/标签三个空框，用户会误以为是模型没生成。
+ *
+ * 容错要点（都是模型真实会犯的错）：
+ *   - markdown 粗体：**TITLE:**
+ *   - 中文冒号：TITLE：
+ *   - 描述里含冒号（"尺寸: 27cm"）→ 用「下一个已知段标题」作终止条件
+ *   - 标签用换行分隔而非逗号
+ *   - 完全没按格式输出 → parsed=false，并把 raw 原样带回
+ */
+function parseEtsyCopy(content) {
+  const raw = String(content == null ? '' : content);
+  const out = { raw, title: '', description: '', tags: [], cn_check: '' };
+  if (!raw.trim()) return { ...out, parsed: false, empty: true };
+
+  /* 返回**段标题之后的真实内容起点**，而不只是段标题位置 ——
+   * 否则切片会把 "TITLE:" 这几个字符带进内容里（标题变成 "TITLE:** Wolf Mask"）。 */
+  const findSeg = (name) => {
+    const re = new RegExp('^[ \\t]*(?:\\*\\*)?[ \\t]*' + name + '[ \\t]*(?:\\*\\*)?[ \\t]*[:：][ \\t]*', 'im');
+    const m = re.exec(raw);
+    return m ? { start: m.index, body: m.index + m[0].length } : null;
+  };
+  const clean = (s) => String(s == null ? '' : s)
+    .replace(/^\s*\*\*|\*\*\s*$/g, '')
+    .replace(/^[\s*_#`"'“”‘’]+|[\s*_#`"'“”‘’]+$/g, '')
+    .trim();
+
+  const tSeg = findSeg('TITLE');
+  const dSeg = findSeg('DESCRIPTION');
+  const gSeg = findSeg('TAGS');
+  const cSeg = findSeg('CN_CHECK');   // 中文核对稿（SOP 04：给运营核对用，不发布）
+
+  if (tSeg) {
+    const end = dSeg ? dSeg.start : (gSeg ? gSeg.start : raw.length);
+    out.title = clean(raw.slice(tSeg.body, end)).split('\n')[0].trim();
+  }
+  if (dSeg) {
+    const end = gSeg ? gSeg.start : raw.length;
+    out.description = clean(raw.slice(dSeg.body, end)).replace(/\n{3,}/g, '\n\n');
+  }
+  if (gSeg) {
+    const end = cSeg ? cSeg.start : raw.length;
+    out.tags = raw.slice(gSeg.body, end).split(/[,，\n]/).map(clean).filter(Boolean).slice(0, 13);
+  }
+  if (cSeg) {
+    out.cn_check = clean(raw.slice(cSeg.body)).replace(/\n{3,}/g, '\n\n');
+  }
+
+  out.parsed = Boolean(out.title || out.description || out.tags.length);
+  return out;
+}
+
+/* ---------- Etsy Listing 专用生成 ----------
+ *
+ * 与 aiGenerate 的差别只有三点：**配置源、出口、模型**。
+ * 请求体格式两者完全一致（都是 OpenAI 兼容的 /chat/completions），
+ * 所以不重复实现，直接复用同样的 body 结构。
+ *
+ * 配置留空时自动回落到上面那套（ETSY_AI_API_KEY = AI_API_KEY），
+ * 这样「只有一套 key」的老配置依然能工作，向后兼容。
+ */
+/* ★ 自动重试：哪些错「重试有用」、哪些「重试也白搭」。
+ * 可重试 = 临时性（429 限流/过载、5xx、超时、网络抖动）—— 等几秒再来通常能过。
+ * 不可重试 = 鉴权失败 / 额度用尽 / 模型名不存在 / 参数错误 —— 重试 N 次结果一样。 */
+function isRetryableAiError(e) {
+  const m = String((e && e.message) || e || '');
+  if (/鉴权失败|额度已用尽|账户额度|余额不足|insufficient_quota|credit_balance|no credits|HTTP 401|HTTP 403/i.test(m)) return false;
+  if (/404|模型名.*不存在|拼写|bad_request|HTTP 400/i.test(m)) return false;
+  return /429|繁忙|限流|overload|rate.?limit|502|503|504|500|超时|timeout|aborted|网络|ECONN|fetch failed|ENOTFOUND|ETIMEDOUT|socket/i.test(m);
+}
+
+/* 带指数退避的重试壳。maxTries 次里每次失败都写进 aiLog，前端能看得到真实过程。 */
+async function withAiRetry(fn, label, opts = {}) {
+  const maxTries = opts.retries ?? 3;
+  let lastErr;
+  for (let attempt = 1; attempt <= maxTries; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (attempt >= maxTries || !isRetryableAiError(e)) throw e;
+      const wait = Math.min(1500 * Math.pow(2, attempt - 1), 12000); // 1.5s → 3s → 6s
+      aiLog(`[重试 ${attempt}/${maxTries - 1}] ${label} 失败：${(e && e.message) || e} → ${Math.round(wait / 1000)}s 后重试`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
+
+/* 单次 chat 调用（无重试）。与 aiGenerate 的差别只有三点：配置源、出口、模型。 */
+async function etsyAiChatOnce(systemPrompt, userPrompt, opts = {}) {
+  const r = await etsyAiFetch()(`${ETSY_AI_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ETSY_AI_API_KEY}` },
+    body: JSON.stringify({
+      model: ETSY_AI_MODEL,
+      temperature: opts.temperature ?? 0.7,
+      max_tokens: opts.max_tokens ?? 4000,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+  });
+  const d = await r.json().catch(() => ({}));
+  let content = d.choices?.[0]?.message?.content;
+  if (!content) {
+    // ★ 把「代理不通」与「服务返回错误」区分开 ——
+    //   换 OpenAI 时最常见的是代理没配/端口变了，裸错误根本看不出来。
+    if (r.status === 401 || r.status === 403) {
+      const msg = d.error?.message || JSON.stringify(d).slice(0, 200);
+      throw new Error(`Etsy 文案生成鉴权失败（HTTP ${r.status}）：${msg} → `
+        + '请检查 .env 里的 ETSY_AI_API_KEY 是否正确、是否已过期。');
+    }
+    // ★ 额度用尽与限流/过载必须分开 —— 两类都常是 HTTP 429，但含义完全不同：
+    //   额度用尽看错误码（insufficient_quota / credit_balance_exhausted / 余额不足），
+    //   与状态码无关；429 但消息是 overloaded / rate limit 的是「临时繁忙，重试即可」。
+    //   （真实踩坑：中转站上游过载返回 429 "The model is overloaded"，
+    //   被误报成「额度已用尽」，用户以为自己刚充的钱没了。）
+    const _raw = (() => { try { return JSON.stringify(d).toLowerCase(); } catch { return ''; } })();
+    const _orig = (() => { try { return JSON.stringify(d).slice(0, 200); } catch { return ''; } })();
+    if (/insufficient_quota|credit_balance_exhausted|no credits|余额不足/.test(_raw)) {
+      throw new Error('AI 账户额度已用尽 → '
+        + '去服务商控制台充值，或把 .env 里的 ETSY_AI_* 换成有免费额度的服务（例如智谱 glm-4-flash）。'
+        + '原始信息：' + _orig);
+    }
+    if (r.status === 429) {
+      throw new Error('AI 模型繁忙或触发限流（HTTP 429）→ 通常等几十秒重试即可，不是额度问题。'
+        + '连续出现再查服务商状态页。原始信息：' + _orig);
+    }
+    if (r.status === 404) {
+      throw new Error(`Etsy 文案生成返回 404：模型名「${ETSY_AI_MODEL}」可能不存在 → `
+        + `请检查 ETSY_AI_MODEL 是否拼写正确（可用 ${ETSY_AI_BASE_URL}/models 列出可用模型）。`);
+    }
+    throw new Error('Etsy 文案生成返回异常：' + (() => {
+      try { return JSON.stringify(d).slice(0, 300); } catch { return '(响应体过大)'; }
+    })());
+  }
+  if (content.length > 8000) content = content.slice(0, 8000);
+  return content;
+}
+
+async function etsyAiGenerate(systemPrompt, userPrompt, opts = {}) {
+  if (!etsyAiConfigured()) {
+    throw new Error('Etsy 文案生成未配置：请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL'
+      + '（留空则复用公众号那套 AI_* 配置）。');
+  }
+  return withAiRetry(() => etsyAiChatOnce(systemPrompt, userPrompt, opts), '文案生成', opts);
+}
+
 /* ★ 生稿任务缓存（模块顶层，供handleApi 与文件末尾的清理定时器共同访问）
    把「长时间单连接」改成「短连接提交 + 短连接轮询」：
    AI 生稿需 25~55 秒，若浏览器一直挂在同一连接上读响应体，经过 Cloudflare Tunnel 时
@@ -1911,11 +2119,16 @@ async function handleApi(req, res) {
             const candidates = [];
             for (const kw of kws) {
               let all = [];
-              try {
-                aiLog(`类目批次 ${id} ${item.sku || ''}：搜 "${kw}"…`);
-                all = await etsy.searchTaxonomy(etsyClient, kw, 25);
-              } catch (se) {
-                aiLog(`类目批次 ${id} ${item.sku || ''}：搜 "${kw}" 失败 ${(se && se.message) || se}`);
+              // ★ taxonomy 搜索也带重试：Etsy API 偶发 5xx/网络抖动，单次失败就标失败太亏。
+              for (let attempt = 1; attempt <= 2; attempt++) {
+                try {
+                  aiLog(`类目批次 ${id} ${item.sku || ''}：搜 "${kw}"…${attempt > 1 ? '（重试 ' + (attempt - 1) + '/1）' : ''}`);
+                  all = await etsy.searchTaxonomy(etsyClient, kw, 25);
+                  break;
+                } catch (se) {
+                  aiLog(`类目批次 ${id} ${item.sku || ''}：搜 "${kw}" 失败 ${(se && se.message) || se}`);
+                  if (attempt < 2) await new Promise(r => setTimeout(r, 1500));
+                }
               }
               const leaf = all.length ? (all.find(r => r.is_leaf) || all[0]) : null;
               candidates.push({
@@ -2073,213 +2286,6 @@ async function handleApi(req, res) {
 
 
 
-/* ---------- Etsy 文案生成：prompt 与 facts 的共用逻辑 ---------- */
-
-/* 读取提示词。优先级：请求里传的 > data/etsy-prompt.txt > 内置默认。
- * 之所以做成「每次读盘」：运营可以在页面上改 prompt 并保存成那个文件，
- * 改完下一次生成立即生效，不用重启后端、不用改代码。 */
-function readEtsyPrompt(override) {
-  const o = String(override || '').trim();
-  if (o) return o;
-  try {
-    const custom = readFileSync(join(DATA_DIR, 'etsy-prompt.txt'), 'utf8');
-    if (custom && custom.trim()) return custom;
-  } catch { /* 文件不存在就用内置的，不报错 —— 这是正常路径 */ }
-  return ETSY_AI_DEFAULT_PROMPT;
-}
-
-/* 把一条「事实记录」转成给 AI 的文字块。
- * ★ 只拼已填的项：AI 拿不到没填的字段，就不会凭空编造规格。
- *   这是 Etsy 合规的关键 —— 编造材质/配件/物种属于虚假描述。 */
-function factsToText(b) {
-  return [
-    b.sku ? `产品编号：${b.sku}` : '',
-    b.materials && b.materials.length ? `制作材料：${(b.materials || []).join('、')}` : '',
-    b.audience_note ? `适合人群/规格：${b.audience_note}` : '',
-    b.item_weight ? `净重：${b.item_weight} ${b.item_weight_unit || 'g'}` : '',
-    (b.item_length && b.item_width && b.item_height)
-      ? `尺寸：${b.item_length}×${b.item_width}×${b.item_height} ${b.item_dimensions_unit || 'cm'}` : '',
-    b.price ? `售价：$${b.price}` : '',
-    b.taxonomy_name ? `Etsy 类目：${b.taxonomy_name}` : '',
-    // SOP 03：人工验证过的关键词要传给 AI —— 生成文案时优先用这些词，
-    // 而不是让 AI 再自己发明一遍（验证记录在 data/etsy-keywords.json）
-    Array.isArray(b.verified_keywords) && b.verified_keywords.length
-      ? `已验证关键词（优先使用）：${b.verified_keywords.join(', ')}` : '',
-  ].filter(Boolean);
-}
-
-/* 判断一条商品是否「够 AI 生成」。
- * ★ 判断依据必须是**具体的商品事实**（材质 / 适合人群 / 净重 / 完整三维尺寸），
- *   不能只看 factsToText 的输出长度 —— 因为它还会拼上「产品编号」和「售价」，
- *   只填了这两项时长度不为 0，AI 就会在没有材质尺寸的情况下凭空编描述。
- *   那个错误在页面上看不出来，但写进 Etsy 就是「虚假描述」，属于合规问题。
- *   必须与前端 aiRunnable()保持同一套判据，两边不一致会导致「前端能跑、后端全跳过」。 */
-function factsEnough(item) {
-  const b = item || {};
-  return Boolean(
-    (b.materials && b.materials.length) ||
-    b.audience_note ||
-    b.item_weight ||
-    (b.item_length && b.item_width && b.item_height)
-  );
-}
-
-/* 解析 AI 返回的 TITLE / DESCRIPTION / TAGS 三段。
- * ★ 容错要点：模型可能用 markdown 粗体、可能漏标签行、可能多输出说明文字 ——
- *   解析失败要**如实返回 raw** 并在 note 里说明，不能静默丢内容。 */
-/* 解析 AI 返回的 TITLE / DESCRIPTION / TAGS 三段。
- *
- * ★ 与页面侧 etsy-import.js 的 parseAiCopy 保持同一套实现与同一批边界处理。
- *   之前后端用的是更简单的正则，遇到模型加粗（**TITLE:**）或描述里含冒号就会解析错 ——
- *   而「解析失败」的表现是标题/描述/标签三个空框，用户会误以为是模型没生成。
- *
- * 容错要点（都是模型真实会犯的错）：
- *   - markdown 粗体：**TITLE:**
- *   - 中文冒号：TITLE：
- *   - 描述里含冒号（"尺寸: 27cm"）→ 用「下一个已知段标题」作终止条件
- *   - 标签用换行分隔而非逗号
- *   - 完全没按格式输出 → parsed=false，并把 raw 原样带回
- */
-function parseEtsyCopy(content) {
-  const raw = String(content == null ? '' : content);
-  const out = { raw, title: '', description: '', tags: [], cn_check: '' };
-  if (!raw.trim()) return { ...out, parsed: false, empty: true };
-
-  /* 返回**段标题之后的真实内容起点**，而不只是段标题位置 ——
-   * 否则切片会把 "TITLE:" 这几个字符带进内容里（标题变成 "TITLE:** Wolf Mask"）。 */
-  const findSeg = (name) => {
-    const re = new RegExp('^[ \\t]*(?:\\*\\*)?[ \\t]*' + name + '[ \\t]*(?:\\*\\*)?[ \\t]*[:：][ \\t]*', 'im');
-    const m = re.exec(raw);
-    return m ? { start: m.index, body: m.index + m[0].length } : null;
-  };
-  const clean = (s) => String(s == null ? '' : s)
-    .replace(/^\s*\*\*|\*\*\s*$/g, '')
-    .replace(/^[\s*_#`"'“”‘’]+|[\s*_#`"'“”‘’]+$/g, '')
-    .trim();
-
-  const tSeg = findSeg('TITLE');
-  const dSeg = findSeg('DESCRIPTION');
-  const gSeg = findSeg('TAGS');
-  const cSeg = findSeg('CN_CHECK');   // 中文核对稿（SOP 04：给运营核对用，不发布）
-
-  if (tSeg) {
-    const end = dSeg ? dSeg.start : (gSeg ? gSeg.start : raw.length);
-    out.title = clean(raw.slice(tSeg.body, end)).split('\n')[0].trim();
-  }
-  if (dSeg) {
-    const end = gSeg ? gSeg.start : raw.length;
-    out.description = clean(raw.slice(dSeg.body, end)).replace(/\n{3,}/g, '\n\n');
-  }
-  if (gSeg) {
-    const end = cSeg ? cSeg.start : raw.length;
-    out.tags = raw.slice(gSeg.body, end).split(/[,，\n]/).map(clean).filter(Boolean).slice(0, 13);
-  }
-  if (cSeg) {
-    out.cn_check = clean(raw.slice(cSeg.body)).replace(/\n{3,}/g, '\n\n');
-  }
-
-  out.parsed = Boolean(out.title || out.description || out.tags.length);
-  return out;
-}
-
-/* ---------- Etsy Listing 专用生成 ----------
- *
- * 与 aiGenerate 的差别只有三点：**配置源、出口、模型**。
- * 请求体格式两者完全一致（都是 OpenAI 兼容的 /chat/completions），
- * 所以不重复实现，直接复用同样的 body 结构。
- *
- * 配置留空时自动回落到上面那套（ETSY_AI_API_KEY = AI_API_KEY），
- * 这样「只有一套 key」的老配置依然能工作，向后兼容。
- */
-/* ★ 自动重试：哪些错「重试有用」、哪些「重试也白搭」。
- * 可重试 = 临时性（429 限流/过载、5xx、超时、网络抖动）—— 等几秒再来通常能过。
- * 不可重试 = 鉴权失败 / 额度用尽 / 模型名不存在 / 参数错误 —— 重试 N 次结果一样。 */
-function isRetryableAiError(e) {
-  const m = String((e && e.message) || e || '');
-  if (/鉴权失败|额度已用尽|账户额度|余额不足|insufficient_quota|credit_balance|no credits|HTTP 401|HTTP 403/i.test(m)) return false;
-  if (/404|模型名.*不存在|拼写|bad_request|HTTP 400/i.test(m)) return false;
-  return /429|繁忙|限流|overload|rate.?limit|502|503|504|500|超时|timeout|aborted|网络|ECONN|fetch failed|ENOTFOUND|ETIMEDOUT|socket/i.test(m);
-}
-
-/* 带指数退避的重试壳。maxTries 次里每次失败都写进 aiLog，前端能看得到真实过程。 */
-async function withAiRetry(fn, label, opts = {}) {
-  const maxTries = opts.retries ?? 3;
-  let lastErr;
-  for (let attempt = 1; attempt <= maxTries; attempt++) {
-    try {
-      return await fn();
-    } catch (e) {
-      lastErr = e;
-      if (attempt >= maxTries || !isRetryableAiError(e)) throw e;
-      const wait = Math.min(1500 * Math.pow(2, attempt - 1), 12000); // 1.5s → 3s → 6s
-      aiLog(`[重试 ${attempt}/${maxTries - 1}] ${label} 失败：${(e && e.message) || e} → ${Math.round(wait / 1000)}s 后重试`);
-      await new Promise(r => setTimeout(r, wait));
-    }
-  }
-  throw lastErr;
-}
-
-/* 单次 chat 调用（无重试）。与 aiGenerate 的差别只有三点：配置源、出口、模型。 */
-async function etsyAiChatOnce(systemPrompt, userPrompt, opts = {}) {
-  const r = await etsyAiFetch()(`${ETSY_AI_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ETSY_AI_API_KEY}` },
-    body: JSON.stringify({
-      model: ETSY_AI_MODEL,
-      temperature: opts.temperature ?? 0.7,
-      max_tokens: opts.max_tokens ?? 4000,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-    }),
-    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
-  });
-  const d = await r.json().catch(() => ({}));
-  let content = d.choices?.[0]?.message?.content;
-  if (!content) {
-    // ★ 把「代理不通」与「服务返回错误」区分开 ——
-    //   换 OpenAI 时最常见的是代理没配/端口变了，裸错误根本看不出来。
-    if (r.status === 401 || r.status === 403) {
-      const msg = d.error?.message || JSON.stringify(d).slice(0, 200);
-      throw new Error(`Etsy 文案生成鉴权失败（HTTP ${r.status}）：${msg} → `
-        + '请检查 .env 里的 ETSY_AI_API_KEY 是否正确、是否已过期。');
-    }
-    // ★ 额度用尽与限流/过载必须分开 —— 两类都常是 HTTP 429，但含义完全不同：
-    //   额度用尽看错误码（insufficient_quota / credit_balance_exhausted / 余额不足），
-    //   与状态码无关；429 但消息是 overloaded / rate limit 的是「临时繁忙，重试即可」。
-    //   （真实踩坑：中转站上游过载返回 429 "The model is overloaded"，
-    //   被误报成「额度已用尽」，用户以为自己刚充的钱没了。）
-    const _raw = (() => { try { return JSON.stringify(d).toLowerCase(); } catch { return ''; } })();
-    const _orig = (() => { try { return JSON.stringify(d).slice(0, 200); } catch { return ''; } })();
-    if (/insufficient_quota|credit_balance_exhausted|no credits|余额不足/.test(_raw)) {
-      throw new Error('AI 账户额度已用尽 → '
-        + '去服务商控制台充值，或把 .env 里的 ETSY_AI_* 换成有免费额度的服务（例如智谱 glm-4-flash）。'
-        + '原始信息：' + _orig);
-    }
-    if (r.status === 429) {
-      throw new Error('AI 模型繁忙或触发限流（HTTP 429）→ 通常等几十秒重试即可，不是额度问题。'
-        + '连续出现再查服务商状态页。原始信息：' + _orig);
-    }
-    if (r.status === 404) {
-      throw new Error(`Etsy 文案生成返回 404：模型名「${ETSY_AI_MODEL}」可能不存在 → `
-        + `请检查 ETSY_AI_MODEL 是否拼写正确（可用 ${ETSY_AI_BASE_URL}/models 列出可用模型）。`);
-    }
-    throw new Error('Etsy 文案生成返回异常：' + (() => {
-      try { return JSON.stringify(d).slice(0, 300); } catch { return '(响应体过大)'; }
-    })());
-  }
-  if (content.length > 8000) content = content.slice(0, 8000);
-  return content;
-}
-
-async function etsyAiGenerate(systemPrompt, userPrompt, opts = {}) {
-  if (!etsyAiConfigured()) {
-    throw new Error('Etsy 文案生成未配置：请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL'
-      + '（留空则复用公众号那套 AI_* 配置）。');
-  }
-  return withAiRetry(() => etsyAiChatOnce(systemPrompt, userPrompt, opts), '文案生成', opts);
-}
 
 /* ===================== Etsy Open API v3 =====================
      GET/POST  /api/etsy/status     配置与授权状态自检（不花API 额度）

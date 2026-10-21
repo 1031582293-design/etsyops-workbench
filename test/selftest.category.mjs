@@ -58,27 +58,23 @@ function mockFetch(url, opts = {}) {
       return jsonRes({ error: { message: 'The model is overloaded' } }, 429);
     }
     // AI 返回 3 个候选类目关键词
-    return jsonRes({ choices: [{ message: { content: '["ceramic horse figurine","horse figurine","pottery figurine"]' } }] });
+    return jsonRes({ choices: [{ message: { content: '["ceramic horse","figurine","unicorn horn"]' } }] });
   }
   if (u.includes('/seller-taxonomy/nodes')) {
-    // URLSearchParams 把空格编码成 +，decodeURIComponent 不把 + 还原成空格，这里手动还原
-    const kw = decodeURIComponent(u.replace(/\+/g, ' ')).toLowerCase();
-    if (kw.includes('ceramic horse figurine')) {
-      // 第 1 个关键词：只有非叶子（测「没有叶子退第一个并警告」）
-      return jsonRes({ results: [{
-        taxonomy_id: 100, name: 'Ceramic Horse',
-        ancestors: [{ name: 'Home & Living' }], is_leaf: false, is_taxonomy_root: false,
-      }] });
-    }
-    if (kw.includes('horse figurine')) {
-      // 第 2 个关键词：命中叶子（测「推荐第一个 is_leaf=true」）
-      return jsonRes({ results: [{
-        taxonomy_id: 200, name: 'Horse Figurines',
-        ancestors: [{ name: 'Home & Living' }, { name: 'Figurines' }], is_leaf: true, is_taxonomy_root: false,
-      }] });
-    }
-    // 第 3 个关键词：没搜到
-    return jsonRes({ results: [] });
+    // ★ 新实现：官方端点没有任何 query 参数，一次拉全树（嵌套 children + id 字段，
+    //   没有 is_leaf / taxonomy_id 字段），搜索在本地做。mock 返回一小棵树。
+    return jsonRes({ count: 8, results: [
+      { id: 1, level: 0, name: 'Home & Living', parent_id: null, children: [
+        { id: 10, level: 1, name: 'Figurines', parent_id: 1, children: [
+          { id: 100, level: 2, name: 'Ceramic Horse', parent_id: 10, children: [] },
+          { id: 200, level: 2, name: 'Horse Statues', parent_id: 10, children: [] },
+          { id: 300, level: 2, name: 'Pottery Horse', parent_id: 10, children: [] },
+        ]},
+      ]},
+      { id: 40, level: 0, name: 'Garden & Patio', parent_id: null, children: [
+        { id: 410, level: 1, name: 'Bird Baths', parent_id: 40, children: [] },
+      ]},
+    ]});
   }
   return jsonRes({});
 }
@@ -150,17 +146,20 @@ console.log('\n【1】AI 批量定类目（真实 handleApi + mock fetch）');
   ok(res && Array.isArray(res.candidates) && res.candidates.length === 3,
     'AI 给了 3 个候选关键词', res && res.candidates && String(res.candidates.length));
   if (res && res.candidates) {
-    ok(res.candidates[0].found === true && res.candidates[0].isLeaf === false,
-      '第 1 关键词命中但非叶子（取第一个 + 标记）',
+    ok(res.candidates[0].found === true && res.candidates[0].isLeaf === true,
+      '第 1 关键词命中叶子（Ceramic Horse）',
       res.candidates[0].leaf && res.candidates[0].leaf.full_path);
-    ok(res.candidates[1].found === true && res.candidates[1].isLeaf === true,
-      '第 2 关键词命中叶子', res.candidates[1].leaf && res.candidates[1].leaf.full_path);
+    ok(res.candidates[1].found === true && res.candidates[1].isLeaf === false,
+      '第 2 关键词只命中非叶子（回退第一个 + 标记）',
+      res.candidates[1].leaf && res.candidates[1].leaf.full_path);
     ok(res.candidates[2].found === false, '第 3 关键词没搜到');
-    ok(res.recommended === 1, '★ 推荐 = 第一个 is_leaf=true 的候选', 'recommended=' + res.recommended);
-    ok(res.candidates[1].leaf && res.candidates[1].leaf.taxonomy_id === 200,
-      '叶子 taxonomy_id 正确', String(res.candidates[1].leaf && res.candidates[1].leaf.taxonomy_id));
-    ok(res.candidates[1].leaf && /Horse Figurines/.test(res.candidates[1].leaf.full_path),
-      'full_path 带祖先路径', res.candidates[1].leaf.full_path);
+    ok(res.recommended === 0, '★ 推荐 = 第一个 is_leaf=true 的候选', 'recommended=' + res.recommended);
+    ok(res.candidates[0].leaf && res.candidates[0].leaf.taxonomy_id === 100,
+      '叶子 taxonomy_id 正确（来自树的 id 字段）', String(res.candidates[0].leaf && res.candidates[0].leaf.taxonomy_id));
+    ok(res.candidates[0].leaf && /Home & Living > Figurines > Ceramic Horse/.test(res.candidates[0].leaf.full_path),
+      'full_path 由嵌套树递归展开', res.candidates[0].leaf.full_path);
+    ok(res.candidates[1].leaf && res.candidates[1].leaf.taxonomy_id === 10,
+      '非叶子回退取的是 Figurines 父节点', res.candidates[1].leaf && res.candidates[1].leaf.full_path);
   }
 }
 

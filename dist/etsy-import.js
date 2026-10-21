@@ -334,7 +334,10 @@ function parseImportTable(text) {
  * ★ 这里对空值也写进去：切到另一条时，上一条的标题必须被清掉，
  *   否则会出现「A 的标题配 B 的价格」这种串条错误。 */
 function applyImportRow(item) {
-  const src = item._form || item;
+  // ★ mergedForm（etsy-publisher.html 定义）：给料字段打底、_form 编辑值覆盖。
+  //   之前是 `item._form || item`——_form 存在（哪怕只有 AI 回填的文案）就不会回落给料，
+  //   price/quantity 明明给料里有，切条目后表单却是空的。
+  const src = (typeof mergedForm === 'function') ? mergedForm(item) : (item._form || item);
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v == null ? '' : v); };
   set('fTitle', src.title);
   set('fDesc', src.description);
