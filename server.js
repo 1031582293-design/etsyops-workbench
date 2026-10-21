@@ -987,6 +987,7 @@ async function handleApi(req, res) {
             webhook: FEISHU_WEBHOOK, secret: FEISHU_SECRET, baseUrl: PUBLIC_BASE,
           }).then((x) => {
             if (!x.ok) console.warn('[mail] 飞书通知失败:', x.error || x.code);
+            else console.log('[mail] 飞书已推送');
           }).catch((e) => console.warn('[mail] 飞书通知异常:', e && e.message));
         }
       } catch (e) {
