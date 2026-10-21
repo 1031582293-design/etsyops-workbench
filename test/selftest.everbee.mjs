@@ -154,6 +154,46 @@ async function main() {
   check(stNow.authorized === true && stNow.daysLeft > 0, '已授权状态');
   check(!('access' in (stNow.token || {})) && !stNow.token, '★ 不暴露 token 字段', JSON.stringify(Object.keys(stNow)));
 
+  console.log('【9】★ 空壳/异常返回必须报错，不能静默返回空（「什么词都查不到」的真因）');
+  const mk = (bodyFn) => {
+    const f = mockFetch();
+    f.on({ test: (u, o) => o && o.body && o.body.includes('"initialize"'), body: '{"result":{"serverInfo":{"name":"x","version":"1"}}}' });
+    f.on({ test: (u, o) => o && o.body && o.body.includes('"tools/call"'), body: bodyFn });
+    return f;
+  };
+  // 9.1 isError
+  const fErr = mk('{"result":{"isError":true,"content":[{"type":"text","text":"Rate limit exceeded"}]}}');
+  let eToolErr = null;
+  try { await createEverbee({ storeFile, fetchImpl: fErr }).callTool('get_keyword', {}); } catch (e) { eToolErr = e; }
+  check(eToolErr && eToolErr.code === 'everbee_tool_error' && /Rate limit/.test(eToolErr.message), 'isError → everbee_tool_error', eToolErr && eToolErr.code);
+  // 9.2 纯文本报错（没有 JSON-RPC error 字段）
+  const fTxt = mk('{"result":{"content":[{"type":"text","text":"Error: quota exceeded for this month"}]}}');
+  let eTxt = null;
+  try { await createEverbee({ storeFile, fetchImpl: fTxt }).callTool('get_keyword', {}); } catch (e) { eTxt = e; }
+  check(eTxt && eTxt.code === 'everbee_tool_error', '纯文本报错 → 抛错（以前会静默返回 _text）', eTxt && eTxt.code);
+  // 9.3 content 空 + structuredContent 空
+  const fEmpty = mk('{"result":{"content":[],"structuredContent":{}}}');
+  let eEmpty = null;
+  try { await createEverbee({ storeFile, fetchImpl: fEmpty }).callTool('get_keyword', {}); } catch (e) { eEmpty = e; }
+  check(eEmpty && eEmpty.code === 'everbee_empty_payload', '空内容 → everbee_empty_payload', eEmpty && eEmpty.code);
+  // 9.4 多段内容：第一段是说明文字，第二段才是 JSON
+  const fMulti = mk('{"result":{"content":[{"type":"text","text":"Here are the rows:"},{"type":"text","text":"{\\"ok\\":1}"}]}}');
+  const rMulti = await createEverbee({ storeFile, fetchImpl: fMulti }).callTool('get_keyword', {});
+  check(rMulti && rMulti.ok === 1, '多段内容取到 JSON 那一段', JSON.stringify(rMulti));
+  // 9.5 widget 形状 {view, rows} 也能解析成 suggestions
+  const fWidget = mk('{"result":{"content":[{"type":"text","text":"{\\"view\\":\\"Keywords: ceramic cup\\",\\"rows\\":[{\\"keyword\\":\\"ceramic cup\\",\\"vol\\":1250},{\\"keyword\\":\\"cups ceramic\\",\\"vol\\":1573}]}"}]}}');
+  const rWidget = await createEverbee({ storeFile, fetchImpl: fWidget }).keyword('ceramic cup');
+  check(rWidget.exact && rWidget.exact.vol === 1250 && rWidget.suggestions.length === 2, 'widget 形状 → 仍能拿到数据', JSON.stringify({ vol: rWidget.exact && rWidget.exact.vol, n: rWidget.suggestions.length }));
+  // 9.6 结构不认识 → 抛 bad_payload（不能当成「这个词没数据」）
+  const fWeird = mk('{"result":{"content":[{"type":"text","text":"{\\"foo\\":1}"}]}}');
+  let eWeird = null;
+  try { await createEverbee({ storeFile, fetchImpl: fWeird }).keyword('ceramic cup'); } catch (e) { eWeird = e; }
+  check(eWeird && eWeird.code === 'everbee_bad_payload', '结构不认识 → everbee_bad_payload', eWeird && eWeird.code);
+  // 9.7 连续空壳 → empty:true + tries=3（上层据此报「取数失败」而不是「0 个蓝海词」）
+  const fAlwaysEmpty = mk('{"result":{"content":[{"type":"text","text":"{\\"searched_keyword\\":[],\\"results\\":[],\\"total_count\\":0}"}]}}');
+  const rAlways = await createEverbee({ storeFile, fetchImpl: fAlwaysEmpty }).keyword('nothing-here');
+  check(rAlways.empty === true && rAlways.tries === 3, '连续空壳 → empty + 重试 3 次', JSON.stringify({ empty: rAlways.empty, tries: rAlways.tries }));
+
   rmSync(storeFile, { force: true });
   rmSync(join(__dir, '..', '.tmp-everbee-empty.json'), { force: true });
 

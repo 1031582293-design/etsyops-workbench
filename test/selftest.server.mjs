@@ -8,6 +8,10 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 
+/* 让 Etsy AI 走 globalThis.fetch（下面会被 mock）。
+   若不置空，server.js 会接管 .env 里的 ETSY_AI_PROXY 直接连真实代理 —— 自测就变成真联网了。 */
+process.env.ETSY_AI_PROXY = '';
+
 // ---- 1. 造 mock 的 req/res ----
 function mkReq(method, url, headers = {}, bodyObj = null) {
   const bodyStr = bodyObj ? JSON.stringify(bodyObj) : '';
@@ -62,6 +66,13 @@ globalThis.fetch = async (url, opts = {}) => {
   const u = String(url);
   if (u.includes('/chat/completions')) {
     aiCalls++;
+    const sent = String((opts && opts.body) || '');
+    // 选品中文翻译：只回一个英文词，模拟 AI 的返回
+    if (sent.includes('翻译器')) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '  "Ceramic Mug"  ' } }]
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
     await new Promise(r => setTimeout(r, 2000));
     return new Response(JSON.stringify({
       choices: [{ message: { content: fakeArticle } }]
@@ -146,7 +157,23 @@ console.log('\n【6】查询不存在的任务 → 404 且有可读note');
   ok(r.json && typeof r.json.note === 'string' && r.json.note.length > 0, '404 带可读说明', r.json && r.json.note);
 }
 
-console.log('\n【7】用页面真实 parseAiOutput 解析产出');
+console.log('\n【7】选品：中文 → 英文翻译接口');
+{
+  const r = await callApi('POST', '/api/selection/translate', { text: '陶瓷马克杯' });
+  ok(r.code === 200 && r.json && r.json.en === 'ceramic mug' && r.json.translated === true,
+    '中文 → 英文（AI 返回的引号/大写已洗净）', JSON.stringify(r.json));
+  const r2 = await callApi('POST', '/api/selection/translate', { text: 'ceramic mug' });
+  ok(r2.code === 200 && r2.json && r2.json.translated === false && r2.json.en === 'ceramic mug',
+    '英文输入不调 AI，原样返回', JSON.stringify(r2.json));
+  const r3 = await callApi('POST', '/api/selection/translate', { text: '  ' });
+  ok(r3.code === 400, '空文本 → 400', `code=${r3.code}`);
+  const r4 = await callApi('POST', '/api/selection/translate', { text: '很长的词'.repeat(30) });
+  ok(r4.code === 400, '超长文本 → 400（不当搜索词乱搜）', `code=${r4.code}`);
+  const r5 = await callApi('POST', '/api/selection/run', { seed: '' });
+  ok(r5.code === 400, '空词根 → 400', `code=${r5.code}`);
+}
+
+console.log('\n【8】用页面真实 parseAiOutput 解析产出');
 {
   const html = fs.readFileSync('wechat-publisher.html', 'utf8');
   const m = html.match(/function parseAiOutput\(text\)\{[\s\S]*?\n\}/);
@@ -162,14 +189,14 @@ console.log('\n【7】用页面真实 parseAiOutput 解析产出');
   }
 }
 
-console.log('\n【8】同步模式仍可用（旧前端兼容）');
+console.log('\n【9】同步模式仍可用（旧前端兼容）');
 {
   const r = await callApi('POST', '/api/ai/generate', { manuscript: '素材', prompt: '写500字' });
   ok(r.code === 200, '同步请求 → 200', `code=${r.code}`);
   ok(r.json && typeof r.json.content === 'string' && r.json.content.length > 0, '直接返回 content');
 }
 
-console.log('\n【9】清理定时器 35 秒内不报错');
+console.log('\n【10】清理定时器 35 秒内不报错');
 {
   await sleep(35000);
   console.log('  （等待 35 秒，定时器应已触发 1~2 次）');

@@ -348,20 +348,51 @@ export function createEverbee(opts = {}) {
     return null;
   }
 
+  /* 工具返回的文本长这样才算「真数据」：解析出对象，且不是错误说明。
+     ⚠️ 2026-10-21 踩坑：EverBee 偶发返回 HTTP 200 + content 为空/结构不对，
+     旧代码把这种响应当成「这个词没有数据」→ 选品页显示「蓝海词只有 0 个」，
+     于是用户以为是词太冷门，实际是取数失败。这里一律抛错，让上层能说清原因。 */
+  const TOOL_ERROR_RE = /^\s*(error|err\b|failed|failure|rate limit|too many requests|unauthorized|forbidden|quota|invalid)/i;
+
   async function callTool(name, args = {}) {
     await ensureInitialized();
     const res = await rawRpc({ jsonrpc: '2.0', id: Date.now() % 1e6, method: 'tools/call', params: { name, arguments: args } });
-    // MCP 的内容是 [{type:'text', text:'<json 或 说明文字+json>'}]
-    const content = (res && res.content) || [];
-    for (const c of content) {
-      if (c && typeof c.text === 'string') {
-        const parsed = parseToolText(c.text);
-        if (parsed) return parsed;
-        return { _text: c.text };
-      }
+
+    // 1) JSON-RPC 层没报错，但 MCP 自己标了 isError（工具内部失败）
+    if (res && res.isError) {
+      const t = ((res.content || []).map((c) => c && c.text).filter(Boolean).join(' ') || '').slice(0, 300);
+      const e = new Error('EverBee 工具「' + name + '」返回错误：' + (t || '(无错误信息)'));
+      e.code = 'everbee_tool_error';
+      throw e;
     }
-    if (res && res.structuredContent) return res.structuredContent;
-    return res;
+
+    // 2) MCP 的内容是 [{type:'text', text:'<json 或 说明文字+json>'}]，可能有多段
+    const content = (res && res.content) || [];
+    let textFallback = null;
+    for (const c of content) {
+      if (!c || typeof c.text !== 'string') continue;
+      const parsed = parseToolText(c.text);
+      if (parsed) return parsed;                       // 有 JSON 就用，别管前面几段说明文字
+      if (TOOL_ERROR_RE.test(c.text)) {
+        const e = new Error('EverBee 工具「' + name + '」报错：' + c.text.slice(0, 300));
+        e.code = 'everbee_tool_error';
+        throw e;
+      }
+      if (textFallback == null) textFallback = c.text;
+    }
+
+    // 3) 结构化内容兜底（有的工具只给 structuredContent）
+    if (res && res.structuredContent && Object.keys(res.structuredContent).length) return res.structuredContent;
+
+    // 4) 到这里说明既没有 JSON 也没有结构化数据 —— 绝不静默返回空对象
+    if (textFallback != null) {
+      const e = new Error('EverBee 工具「' + name + '」返回了非 JSON 内容：' + String(textFallback).slice(0, 300));
+      e.code = 'everbee_bad_payload';
+      throw e;
+    }
+    const e = new Error('EverBee 工具「' + name + '」返回空内容（HTTP 正常但没有数据）');
+    e.code = 'everbee_empty_payload';
+    throw e;
   }
 
   /* ---------- 业务封装 ---------- */
@@ -376,21 +407,41 @@ export function createEverbee(opts = {}) {
     const once = async () => {
       const data = await callTool('get_keyword', { keyword: t, params });
       const sk = data && data.searched_keyword;
-      const exact = normalizeKeyword(Array.isArray(sk) ? sk[0] : sk);
-      const list = Array.isArray(data && data.results) ? data.results.map(normalizeKeyword).filter(Boolean) : [];
-      const total = data && typeof data.total_count === 'number' ? data.total_count : null;
-      return { exact, list, total };
+      let exact = normalizeKeyword(Array.isArray(sk) ? sk[0] : sk);
+      let list = Array.isArray(data && data.results) ? data.results.map(normalizeKeyword).filter(Boolean) : [];
+      // 兼容 widget 版形状 {view, rows:[...]}：至少别把有数据的响应当成没数据
+      if (!exact && !list.length && Array.isArray(data && data.rows)) {
+        list = data.rows.map(normalizeKeyword).filter(Boolean);
+        exact = list.find((k) => String(k.keyword).toLowerCase() === t.toLowerCase()) || null;
+      }
+      const shaped = Boolean(data && (Array.isArray(sk) || Array.isArray(data.results) || Array.isArray(data.rows)));
+      if (!shaped) {
+        // 结构不认识 → 明确报错。绝不能让「取数失败」伪装成「这个词没数据」
+        const e = new Error('EverBee get_keyword 返回结构异常（无可识别的字段）：'
+          + (() => { try { return JSON.stringify(data).slice(0, 200); } catch { return '(无法序列化)'; } })());
+        e.code = 'everbee_bad_payload';
+        throw e;
+      }
+      const total = data && typeof data.total_count === 'number' ? data.total_count
+        : (data && Array.isArray(data.rows) ? data.rows.length : null);
+      return { exact, list, total, shaped };
     };
 
     let r = await once();
-    if (!r.exact && r.list.length === 0) {
-      await sleep(500);
+    let tries = 1;
+    // 空壳重试：并发/抖动时 EverBee 会返回「什么都没搜到」的正常结构，多试两次再下结论
+    while (!r.exact && r.list.length === 0 && tries < 3) {
+      await sleep(600 * tries);
+      tries++;
       r = await once();
+    }
+    if (!r.exact && !r.list.length) {
+      log('get_keyword「' + t + '」连续 ' + tries + ' 次拿到空数据（可能是限流/并发空壳）');
     }
     // 未收录时 exact 为 null —— 给一条「最接近的相关词」做提示，
     // 但绝不拿它冒充该词的搜索量（EverBee 没收录 ≠ 搜索量为 0）
     const nearest = (!r.exact && r.list.length) ? r.list[0].keyword : '';
-    return { term: t, exact: r.exact, suggestions: r.list, total: r.total, nearest };
+    return { term: t, exact: r.exact, suggestions: r.list, total: r.total, nearest, empty: !r.exact && !r.list.length, tries };
   }
 
   /* 浏览词库（不带 seed），params 支持 keyword_include / competition_min / order_by / per_page 等 */

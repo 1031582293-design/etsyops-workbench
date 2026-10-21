@@ -5,10 +5,10 @@ export const EMPLOYEES = [
   {
     id: 'scout', name: '选品情报员', role: 'Product Scout', cat: '电商', icon: '🔭',
     color: 'linear-gradient(135deg,#7c5cff,#22d3ee)', status: 'run',
-    tagline: '词根进、报告出：蓝海词池 → 批量海选 → 店铺交叉核验 → S/A/B/C 评级 + 差异化建议。',
+    tagline: '词根进、报告出：蓝海词池 → 批量海选 → 店铺交叉核验 → S/A/B/C 评级 + 差异化建议。中文可自动翻成英文搜索词。',
     tool: 'selection-scout.html',
     nodes: [
-      { t: '词根扩词', skill: 'Keyword Pool', sop: 'EverBee 关键词数据筛蓝海词（搜索量/竞争/评分）', d: '蓝海词 ≥8 才继续，不足先换词根或放宽阈值。', out: '蓝海词池 TOP8+' },
+      { t: '词根扩词', skill: 'Keyword Pool', sop: 'EverBee 关键词数据筛蓝海词（搜索量/竞争/评分）', d: '蓝海词/候选不足时自动放宽阈值并由 AI 扩词，改了哪项到哪档都写在页面与报告里。', out: '蓝海词池 TOP8+' },
       { t: '批量商品海选', skill: 'Bestseller Scan', sop: '逐词拉 Bestsellers，按价格/销量/评价/上架时长过滤', d: '自动排除下滑款，去重后进入诊断。', out: '候选清单' },
       { t: '单品诊断', skill: 'Listing Probe', sop: '价格/转化/曝光/趋势曲线 + 标签深挖', d: '每个候选算清 Etsy 真实费率后的净利与毛利。', out: '诊断数据表' },
       { t: '店铺交叉核验', skill: 'Shop Cross Check', sop: '同词 ≥3 店稳定出单才可信；单款撑店标孤爆', d: 'EverBee 数据为预估值，孤爆与需求结论都标注人工复核。', out: '风险标记' },

@@ -2517,7 +2517,8 @@ async function handleApi(req, res) {
   }
 
   /* ---------- 选品数字员工：提交 job → 轮询 → 取报告 ----------
-     全流程 1~3 分钟，禁止长连接（同 AI 生稿：Cloudflare Tunnel 掐长连接的教训）。 */
+     全流程 1~3 分钟（自动放宽/扩词时更久），禁止长连接
+     （同 AI 生稿：Cloudflare Tunnel 掐长连接的教训）。 */
   if (p === '/api/selection/run' && req.method === 'POST') {
     let body;
     try { body = await readJson(req); }
@@ -2525,23 +2526,29 @@ async function handleApi(req, res) {
     const seed = String(body.seed || '').trim();
     if (!seed) return json(res, 400, { ok: false, error: 'no_seed', note: '词根（seed）不能为空，例如 ceramic mug。' });
     const overrides = (body.overrides && typeof body.overrides === 'object') ? body.overrides : {};
-    // 清理并发上限：同时只允许 2 个选品任务在跑（EverBee 额度 + 限速都扛不住更多）
+    /* 并发上限：只允许 1 个选品任务在跑。
+       ★ 从 2 改成 1（2026-10-21）：两个任务同时打 EverBee 会拿到「空壳」响应
+       （HTTP 200 但没有内容），实测就是这样出现「蓝海词只有 0 个」的假故障。
+       页面上多点一次「开始选品」不该把正在跑的那次搞坏。 */
     let running = 0;
     for (const j of _selectionJobs.values()) if (j.status === 'running') running++;
-    if (running >= 2) return json(res, 429, { ok: false, error: 'too_many_jobs', note: '已有 2 个选品任务在跑，等它们完成再提交。' });
+    if (running >= 1) return json(res, 429, { ok: false, error: 'too_many_jobs', note: '已有一个选品任务在跑。EverBee 并发会返回空数据，等它完成（看页面进度）再提交下一个。' });
     const jobId = 'seljob-' + (++_selectionJobSeq) + '-' + Date.now().toString(36);
-    const job = { id: jobId, status: 'running', stage: 'stage1', pct: 0, message: '排队中…', result: null, startedAt: Date.now(), finishedAt: null };
+    const job = { id: jobId, status: 'running', stage: 'stage1', pct: 0, message: '排队中…', adjust: [], result: null, startedAt: Date.now(), finishedAt: null };
     _selectionJobs.set(jobId, job);
     // 清理 2 小时前的旧 job，防 Map 无限涨
     const cutoff = Date.now() - 2 * 3600 * 1000;
     for (const [k, v] of _selectionJobs) if ((v.finishedAt || v.startedAt) < cutoff) _selectionJobs.delete(k);
 
-    const onProgress = (stage, pct, message) => {
+    const onProgress = (stage, pct, message, extra) => {
       job.stage = stage; job.pct = pct; job.message = message;
+      // 自动放宽阈值/扩词的记录要实时给页面 —— 用户得知道系统替他改了什么
+      if (extra && Array.isArray(extra.adjust)) job.adjust = extra.adjust;
     };
     selectionAgent.run(seed, overrides, onProgress).then((result) => {
-      job.status = result.status === 'done' ? 'done' : result.status; // done / need_keywords / need_relax
+      job.status = result.status === 'done' ? 'done' : result.status; // done / need_keywords / need_relax / error
       job.result = result;
+      if (Array.isArray(result.adjust)) job.adjust = result.adjust;
       job.finishedAt = Date.now();
       if (result.status === 'error') { job.status = 'error'; job.message = result.message; }
     }).catch((e) => {
@@ -2557,9 +2564,35 @@ async function handleApi(req, res) {
     return json(res, 200, {
       ok: true,
       id: job.id, status: job.status, stage: job.stage, pct: job.pct, message: job.message,
+      adjust: job.adjust || [],
       startedAt: job.startedAt, finishedAt: job.finishedAt,
       result: job.result,
     });
+  }
+
+  /* 中文关键词 → 英文搜索词（页面中文框的翻译入口）
+     AI 一句话的事，但必须短连接：20 秒兜底，失败就直说，绝不静默返回原文当"翻译成功"。 */
+  if (p === '/api/selection/translate' && req.method === 'POST') {
+    let body;
+    try { body = await readJson(req); }
+    catch (e) { return json(res, 400, { ok: false, error: 'bad_json', note: String((e && e.message) || e) }); }
+    const text = String(body.text || '').trim();
+    if (!text) return json(res, 400, { ok: false, error: 'no_text', note: '要翻译的中文不能为空。' });
+    if (text.length > 80) return json(res, 400, { ok: false, error: 'too_long', note: '词太长（' + text.length + ' 字）。中文框只放 1~10 个字的商品词，例如「陶瓷马克杯」。' });
+    try {
+      const r = await selection.translateSeed(
+        (sys, usr) => etsyAiGenerate(sys, usr, { temperature: 0.2, max_tokens: 60, model: ETSY_AI_MODEL, label: '选品翻译' }),
+        text,
+      );
+      return json(res, 200, Object.assign({ ok: true }, r));
+    } catch (e) {
+      const noAi = /未配置 AI/.test(String((e && e.message) || ''));
+      return json(res, noAi ? 400 : 502, {
+        ok: false,
+        error: noAi ? 'ai_not_configured' : 'translate_failed',
+        note: String((e && e.message) || e),
+      });
+    }
   }
 
   if (p === '/api/selection/reports' && req.method === 'GET') {
