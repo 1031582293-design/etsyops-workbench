@@ -250,9 +250,15 @@ export function buildReport(ctx) {
   // 1. 任务摘要
   L.push('## 1. 任务摘要');
   L.push('');
+  /* 词池展示：词根排第一（EverBee 扩展词里混着 "ceram mug" 这类截断变体，
+     直接按 score 排会以截断词打头，看着像搜错了）。 */
+  const kwShow = keywordPool.slice();
+  const seedIdx = kwShow.findIndex((k) => String(k.keyword).toLowerCase() === String(seed).toLowerCase());
+  if (seedIdx > 0) kwShow.unshift(kwShow.splice(seedIdx, 1)[0]);
   L.push('- 词根：`' + seed + '`；蓝海词池 ' + keywordPool.length + ' 个'
-    + '（' + keywordPool.slice(0, 8).map((k) => '`' + k.keyword + '`').join('、') + (keywordPool.length > 8 ? ' 等' : '') + '）');
-  L.push('- 海选关键词 ' + Math.min(th.keywords_to_search, keywordPool.length) + ' 个，原始候选 ' + ctx.rawCount + ' 条，'
+    + '（' + kwShow.slice(0, 8).map((k) => '`' + k.keyword + '`').join('、')
+    + (keywordPool.length > 8 ? ' 等' : '') + '；EverBee 自动扩展，含部分截断变体）');
+  L.push('- 海选关键词 ' + Math.min(th.keywords_to_search, kwShow.length) + ' 个，原始候选 ' + ctx.rawCount + ' 条，'
     + '通过阈值筛选 ' + ctx.filteredCount + ' 条，IP/风险淘汰 ' + eliminated.length + ' 条，最终评级 ' + candidates.length + ' 条。');
   const grades = { S: 0, A: 0, B: 0, C: 0 };
   candidates.forEach((c) => { grades[c.grade] = (grades[c.grade] || 0) + 1; });
