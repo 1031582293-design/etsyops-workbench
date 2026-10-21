@@ -854,6 +854,18 @@ function validateDraftInput(inp) {
   if (inp.is_supply === undefined || inp.is_supply === null || inp.is_supply === '') {
     errs.push('缺少 is_supply（是否为手工材料/工具包，成品通常 false）');
   }
+  // ★ Etsy 市场准入规则（2026-10-21 实锤：who_made=someone_else + 非材料 + 非古董
+  //   被 Etsy 400 拒绝 invalid_marketplace「Oh dear, you cannot sell this item on Etsy.」）：
+  //   someone_else（不是你做的）只允许两类 —— ①手工材料/工具（is_supply=true）
+  //   ②20 年以上的古董（when_made 早于 2006）。成品代卖会被拒。
+  if (who === 'someone_else' && !inp.is_supply) {
+    const vintage = /^(2000_2005|1990_1999|1980s|1970s|before_2006|before_2000|antique)/i.test(String(when || ''));
+    if (!vintage) {
+      errs.push('「制作方 = 别人做的（someone_else）」且不是材料包、也不是 20 年以上古董 —— '
+        + 'Etsy 会直接拒绝（invalid_marketplace「you cannot sell this item」）。'
+        + '请把给料的「制作方」改成 i_did（自制/自己设计），或勾选「是手工材料」，或把制作时间改成 2005 年及更早（古董）。');
+    }
+  }
 
   // ★ 实物与数字商品的必填项完全不同（官方规则，2026-10 核对）：
   //   - Digital listings don't have processing profiles
@@ -937,6 +949,17 @@ function buildDraftForm(inp) {
   return form;
 }
 
+/* FormData 的二进制部分必须是 Blob —— Node 24 的 undici 对裸 Buffer 直接抛
+ * TypeError（「Expected value to be an instance of Blob」），旧 Node 则宽容。
+ * 2026-10-21 实锤：操作者 Mac 升到 Node 24 后，带图建草稿 100% 崩在第一张图。
+ * 按扩展名给 mime，Etsy 不校验但规范的 content-type 更稳。 */
+function toBlob(b64, filename) {
+  const ext = String(filename || '').toLowerCase().replace(/.*\./, '');
+  const mime = ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+    gif: 'image/gif', pdf: 'application/pdf', zip: 'application/zip' })[ext] || 'application/octet-stream';
+  return new Blob([Buffer.from(b64, 'base64')], { type: mime });
+}
+
 async function draftListing(client, inp) {
   const form = buildDraftForm(inp);
   const sid = client.shopId();
@@ -948,7 +971,7 @@ async function draftListing(client, inp) {
   for (const img of inp.images || []) {
     if (!img.data) continue;
     const fd = new FormData();
-    fd.append('image', Buffer.from(img.data, 'base64'), img.filename || 'image.jpg');
+    fd.append('image', toBlob(img.data, img.filename), img.filename || 'image.jpg');
     if (img.rank) fd.append('rank', String(img.rank));
     if (img.alt_text) fd.append('alt_text', String(img.alt_text));
     try {
@@ -967,7 +990,7 @@ async function draftListing(client, inp) {
     for (const f of inp.digital_files || []) {
       if (!f || !f.data) continue;
       const fd = new FormData();
-      fd.append('file', Buffer.from(f.data, 'base64'), f.name || 'file.pdf');
+      fd.append('file', toBlob(f.data, f.name), f.name || 'file.pdf');
       try {
         const r = await client.post(`/shops/${sid}/listings/${listingId}/files`, { multipart: fd });
         digitalFiles.push({ name: f.name, ok: true, listing_file_id: r.listing_file_id || '' });

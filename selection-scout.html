@@ -354,7 +354,9 @@ async function startRun(extra){
   const btn = document.getElementById('btnRun');
   btn.disabled = true;
   try {
-    const seed = await resolveSeed();
+    let seed = '';
+    try { seed = await resolveSeed(); }
+    catch (e) { showMsg(msgEl, 'err', '翻译失败，没能开始：' + msgErrText(e.message) + '<br>可以直接在右边英文框填英文词再点。'); return; }
     if (!seed){
       showMsg(msgEl, 'warn', '先填词：中文框或英文框填一个就行（例如 <b>陶瓷马克杯</b> 或 <b>ceramic mug</b>）。');
       return;

@@ -147,6 +147,14 @@ console.log('\n【4】建草稿前校验（能在本地拦下的，绝不浪费 
   ok(!e5.ok && /who_made/.test(e5.errors.join()), '缺 who_made 被拦（三者互相依赖）');
   const e6 = etsy.validateDraftInput({ ...good, quantity: '' });
   ok(!e6.ok && /quantity/.test(e6.errors.join()), '缺数量被拦');
+  // ★ 2026-10-21 实锤规则：someone_else + 非材料 + 非古董 → Etsy 400 invalid_marketplace
+  //   「Oh dear, you cannot sell this item on Etsy.」必须在本地拦下并说清改法。
+  const e7 = etsy.validateDraftInput({ ...good, who_made: 'someone_else', is_supply: false, when_made: '2020_2026' });
+  ok(!e7.ok && /invalid_marketplace|someone_else/.test(e7.errors.join()), '★ someone_else + 非材料 + 非古董被拦（Etsy 会拒）');
+  ok(etsy.validateDraftInput({ ...good, who_made: 'someone_else', is_supply: true, when_made: '2020_2026' }).ok,
+    'someone_else + 材料包 → 放行');
+  ok(etsy.validateDraftInput({ ...good, who_made: 'someone_else', is_supply: false, when_made: '2000_2005' }).ok,
+    'someone_else + 古董（2000_2005）→ 放行');
 }
 
 // ========== 5. draft form 组装 ==========
@@ -167,6 +175,38 @@ console.log('\n【5】createDraftListing 请求体组装');
   //   依赖了隐式的 toString 行为。现已显式 join 成逗号分隔字符串。
   ok(form.tags === 'red gift,horse decor', '★ tags 是逗号分隔字符串（不是数组）', JSON.stringify(form.tags));
   ok(form.materials === 'Ceramic', '★ materials 是逗号分隔字符串', JSON.stringify(form.materials));
+
+  // ★ 2026-10-21 事故回归：Node 24 的 undici FormData.append 拒绝裸 Buffer
+  //   （「Expected value to be an instance of Blob」），带图建草稿 100% 崩、
+  //   且崩在草稿已建之后 —— 每次重试都在店铺留一个无图垃圾草稿。
+  //   修复：Buffer → Blob。这里用真实 FormData（不 mock）验证不再抛。
+  {
+    const calls = [];
+    const mockClient = {
+      shopId: () => '67875620',
+      post: async (p, opts) => {
+        calls.push({ path: p, opts });
+        if (p === '/shops/67875620/listings') return { listing_id: 999, state: 'draft' };
+        return {};
+      },
+      put: async () => ({}),
+    };
+    const r2 = await etsy.draftListing(mockClient, {
+      title: 'T', description: 'D', tags: [], price: '1.00', quantity: '1',
+      taxonomy_id: '1', who_made: 'i_did', when_made: 'made_to_order', is_supply: false,
+      shipping_profile_id: '111', readiness_state_id: '222',
+      images: [{ filename: 'a.png', data: Buffer.from('pngbytes').toString('base64'), rank: 1 }],
+      digital_files: [{ name: 'b.pdf', data: Buffer.from('pdfbytes').toString('base64') }],
+    });
+    const imgCall = calls.find(c => c.path === '/listings/999/images');
+    const fileCall = calls.find(c => c.path === '/shops/67875620/listings/999/files');
+    ok(Boolean(imgCall && imgCall.opts.multipart), '带图建草稿：图片 multipart 已组装（Node 24 不再抛 Blob TypeError）');
+    ok(imgCall && imgCall.opts.multipart.get('image') instanceof Blob,
+      '图片部分是 Blob 实例（image/png）', imgCall && imgCall.opts.multipart.get('image') && imgCall.opts.multipart.get('image').type);
+    ok(fileCall && fileCall.opts.multipart.get('file') instanceof Blob,
+      '数字交付文件部分是 Blob 实例（application/pdf）', fileCall && fileCall.opts.multipart.get('file') && fileCall.opts.multipart.get('file').type);
+    ok(r2.listing_id === 999, 'draftListing 正常返回 listing_id');
+  }
   ok(typeof form.tags === 'string' && typeof form.materials === 'string', 'tags/materials 类型确为 string');
   ok(form.shipping_profile_id === '111' && form.readiness_state_id === '222', '实物必填两项都在');
   ok(form.is_supply === 'false', 'is_supply 转字符串');
