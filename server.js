@@ -1810,6 +1810,8 @@ async function handleApi(req, res) {
         lines.push('图片（' + imgs.length + ' 张）：'
           + imgs.map(im => (im.filename || '图') + '[' + (im.purposeLabel || '未标用途') + ']').join('、'));
       }
+      // ★ 校验改为「辅助参考、不阻塞建草稿」：temperature 固定 0，同一输入输出稳定，
+      //   不再每次进页结果都不一样；结论从「不可发布（阻断）」弱化为「需人工复核（建议）」。
       const report = await etsyAiGenerate(
         '请作为事实审核员，对照「已确认事实字段」审查下面的 Listing 草稿。只使用事实字段与已确认信息，不自行增加事实。\n'
         + '输出格式：每个问题一行，用「问题位置 | 草稿说法 | 对应事实 | 风险或冲突 | 修正建议」五列（用 | 分隔），'
@@ -1817,10 +1819,11 @@ async function handleApi(req, res) {
         + '检查：标题、详情、13 个标签、属性、图片文字、变体是否相互一致；核算 cm 与 inches 换算；'
         + '检查数量、配件、材质、交期、发货地和售后承诺。\n'
         + '逐一实测标题与标签字符数；标签只能输出合规短语并去重；关键词不相关时说明依据。\n'
-        + '若仍有关键资料未确认，第一行输出「不可发布」，并列出具体原因。\n'
+        + '你只给「建议」，无权判定是否可发布。若仍有关键资料未确认，第一行输出「需人工复核」，并列出具体原因。\n'
         + '不要因为格式合规就判断事实正确。若完全没有问题，只输出一行「OK」。',
         '已确认事实字段：\n' + (facts.length ? facts.join('\n') : '（无，请按缺失处理）')
-        + '\n\nListing 草稿：\n' + lines.join('\n'));
+        + '\n\nListing 草稿：\n' + lines.join('\n'),
+        { temperature: 0, max_tokens: 3000 });
       return json(res, 200, { ok: true, report, model: ETSY_AI_MODEL });
     } catch (e) {
       return json(res, 400, { error: 'precheck_failed', note: e.message });

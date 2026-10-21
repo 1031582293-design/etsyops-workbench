@@ -171,7 +171,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">b040014</span>
+  <span class="vtag" id="verTag">aba9016</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -551,8 +551,13 @@
         <h3>库存与变体</h3>
         <div class="ph-sub">图片在第 1 步「给料」里已选定，第一张为主图、最多 20 张。Etsy 要求实物商品展示真实成品照片。</div>
 
-        <label class="fld">商品图片（来自第 1 步）<span class="hint">要换图请回到第 1 步</span></label>
-        <div class="msg info" id="imgSummary">图片在第 1 步选定。</div>
+        <label class="fld">商品图片<span class="hint">给料图片（第 1 步按文件名匹配）+ AI 场景图都在这里，可直接增删；第 1 张是主图</span></label>
+        <input type="file" id="step5ImgInput" accept="image/*" multiple class="hidden" />
+        <div class="drop" id="step5ImgDrop">点击添加图片，或拖到这里
+          <span style="display:block;font-size:11.5px;color:var(--text-faint);margin-top:6px">加到「当前条目」，最多 20 张</span>
+        </div>
+        <div class="thumbs" id="step5Thumbs"></div>
+        <div id="msgImg5" class="msg"></div>
 
 
         <label class="fld" style="margin-top:20px">变体 Variations<span class="hint">维度在第 4 步勾选属性值；这里填每个组合的价格 / 库存 / SKU</span></label>
@@ -573,10 +578,11 @@
       </section>
 
       <section class="panel step hidden" data-step="6">
-        <h3>AI 上架前校验 → 写入 Etsy</h3>
-        <div class="ph-sub">进入本步自动批量校验所有已生成文案的条目；核对完直接在下方写入 Etsy 草稿（不花钱，发布才收 $0.20）。</div>
+        <h3>AI 上架前校验（辅助）→ 写入 Etsy</h3>
+        <div class="ph-sub">校验结果是<b>辅助参考、不阻塞建草稿</b>。进入本步<b>不会自动重跑</b>，上次结果会保留；要再查一次就点「开始 / 重新校验」。</div>
         <div class="btnrow" style="margin-top:4px">
-          <button class="btn primary" id="btnPrecheck">开始 / 重跑校验（全部条目）</button>
+          <button class="btn" id="btnPrecheck">开始 / 重新校验（全部条目）</button>
+          <button class="btn ghost" id="btnPrecheckClear">清空结果</button>
         </div>
         <div id="msgPrecheck" class="msg"></div>
         <div id="precheckBox"></div>
@@ -888,8 +894,8 @@ function goto(n){
   if (n === 2) startKwBatch();
   if (n === 3) startAiBatch(true);
   if (n === 4) startCatBatch(true);
-  if (n === 5) renderChecklist();   // 商品资料页：右侧核对清单重算
-  if (n === 6) startPrecheck();     // 校验+写入页：自动批量校验已生成文案的条目
+  if (n === 5) { renderChecklist(); renderStep5Images(); }   // 商品资料页：右侧核对清单重算 + 刷新当前条目图片
+  if (n === 6) renderPrecheckSaved();   // 校验+写入页：只展示上次结果（辅助参考），不再自动重跑
   document.querySelectorAll('.step').forEach(s => s.classList.toggle('hidden', Number(s.dataset.step) !== n));
   document.querySelectorAll('.step-chip').forEach(c => c.classList.toggle('active', Number(c.dataset.step) === n));
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1717,6 +1723,9 @@ function matchPickedImages(names) {
  *   会永远显示「图 0/N 缺」—— 文件名一模一样也缺，就是这里没刷新。 */
 function refreshImportImageMatch(){
   if (!IMPORT_BATCH.length) return;
+  // ★ 重新上传后，之前固化的每条目图片（_form._images）作废，下次按新文件重新匹配——
+  //   否则「先解析 → 后上传」时，_form._images 里存的还是空/旧值，第 5 步与校验会显示 0 张。
+  IMPORT_BATCH.forEach(it => { if (it._form) delete it._form._images; });
   matchAllRowsImages();
   renderImportList();
 }
@@ -1729,8 +1738,14 @@ function setPickedFiles(fileList) {
     .then(list => {
       list.filter(Boolean).forEach(o => IMAGES.push(o));
       renderThumbs();
-      return IMAGES.length;
+      return IMAGES.slice();
     });
+}
+
+/* 清空当前图片（切到没图的条目时调用，别让上一条的图残留在 IMAGES 里）。 */
+function clearPickedFiles() {
+  IMAGES.length = 0;
+  renderThumbs();
 }
 
 function readAsImage(file) {
@@ -1739,11 +1754,34 @@ function readAsImage(file) {
     fr.onload = () => {
       const s = String(fr.result || '');
       const i = s.indexOf(',');
-      resolve(i > 0 ? { data: s.slice(i + 1), name: file.name } : null);
+      if (i <= 0){ resolve(null); return; }
+      const purpose = autoGuessPurpose(file.name);
+      resolve({ filename: file.name, data: s.slice(i + 1), purpose, autoPurpose: !!purpose });
     };
     fr.onerror = () => resolve(null);
     fr.readAsDataURL(file);
   });
+}
+
+/* 取某条目的图片数组（{filename, data, purpose, autoPurpose}）。
+ * ★ 优先用持久化的 it._form._images；否则按文件名匹配给料图 → 转 base64 并固化回 _form。
+ *   这是「传了图但校验显示 0 张」的根因修复：批量校验/建草稿不再依赖全局 IMAGES。 */
+async function ensureItemImages(it){
+  if (!it) return [];
+  // ★ 用「键是否存在」判断，而不是「数组非空」：用户在第五步把图全删了（_images=[]）
+  //   也得尊重，不能又从 _matched 把给料图捞回来。
+  const hasKey = it._form && Object.prototype.hasOwnProperty.call(it._form, '_images');
+  if (hasKey) return (Array.isArray(it._form._images) ? it._form._images : []).slice();
+  const matched = (it._matched && it._matched.length) ? it._matched : matchPickedImages(it.images);
+  if (!matched.length){
+    it._form = it._form || {};
+    it._form._images = [];
+    return [];
+  }
+  const list = (await Promise.all(matched.map(readAsImage))).filter(Boolean);
+  it._form = it._form || {};
+  it._form._images = list.slice();
+  return list;
 }
 /* SOP 09：8 类图的用途。标记存内存（IMAGES[].purpose），上传时按文件名自动标记，可人工改。 */
 const IMG_PURPOSES = [
@@ -1772,6 +1810,88 @@ function autoGuessPurpose(name){
   for (const [k, re] of PURPOSE_HINTS){ if (re.test(s)) return k; }
   return '';
 }
+
+/* 第 5 步「商品图片」：渲染当前条目的图片（给料 + 场景图 + 手工增删），可增删。
+ * ★ 按「条目」取图（ensureItemImages），并把全局 IMAGES 同步成当前条目的图，
+ *   保证第 5 步展示、右侧核对清单、建草稿三处看到的是同一份。 */
+async function renderStep5Images(){
+  const box = document.getElementById('step5Thumbs');
+  if (!box) return;
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  if (!it){ box.innerHTML = ''; return; }
+  const src = await ensureItemImages(it);
+  IMAGES.length = 0;
+  src.forEach(o => IMAGES.push(o));
+  box.innerHTML = src.map((im, i) =>
+    '<div class="thumb' + (i === 0 ? ' first' : '') + '" data-s5i="' + i + '">' +
+    '<img src="data:image/jpeg;base64,' + im.data + '" alt="" />' +
+    '<span class="x" data-s5x="' + i + '">×</span>' +
+    '<span class="rk">#' + (i + 1) + '</span></div>').join('');
+  box.querySelectorAll('[data-s5x]').forEach(x => x.addEventListener('click', ev => {
+    ev.stopPropagation();
+    const i = Number(x.dataset.s5x);
+    IMAGES.splice(i, 1);
+    it._form = it._form || {};
+    it._form._images = IMAGES.slice();
+    renderStep5Images();
+    renderThumbs();
+    renderChecklist();
+    log('已从当前条目移除第 ' + (i + 1) + ' 张图片（共 ' + IMAGES.length + ' 张）');
+  }));
+  box.querySelectorAll('.thumb').forEach(t => t.addEventListener('click', () => {
+    const i = Number(t.dataset.s5i);
+    if (i === 0) return;
+    const tmp = IMAGES[0]; IMAGES[0] = IMAGES[i]; IMAGES[i] = tmp;
+    it._form = it._form || {};
+    it._form._images = IMAGES.slice();
+    renderStep5Images();
+    renderThumbs();
+    log('主图已换为原第 ' + (i + 1) + ' 张');
+  }));
+  const m = document.getElementById('msgImg5');
+  if (m) showMsg(m, src.length ? 'info' : 'warn',
+    (src.length ? '当前条目 ' + src.length + ' 张图片，第 1 张为主图' : '当前条目还没有图片')
+    + '。可点上方直接添加（加到当前条目）。');
+}
+
+function addStep5Files(files){
+  const arr = Array.from(files || []);
+  if (!arr.length) return;
+  const it = IMPORT_BATCH[CURRENT_IDX];
+  if (!it) return;
+  if (IMAGES.length + arr.length > 20){
+    showMsg(document.getElementById('msgImg5'), 'err', '图片最多 20 张，当前已有 ' + IMAGES.length + ' 张。');
+    return;
+  }
+  Promise.all(arr.map(f => new Promise(async res => {
+    const purpose = autoGuessPurpose(f.name);
+    const stripped = await stripExif(f);
+    if (stripped){ res({ filename: f.name, data: stripped, purpose, autoPurpose: !!purpose }); return; }
+    const r = new FileReader();
+    r.onload = () => res({ filename: f.name, data: String(r.result).split(',')[1], purpose, autoPurpose: !!purpose });
+    r.onerror = () => res(null);
+    r.readAsDataURL(f);
+  }))).then(list => {
+    list.filter(Boolean).forEach(o => IMAGES.push(o));
+    it._form = it._form || {};
+    it._form._images = IMAGES.slice();
+    renderStep5Images();
+    renderThumbs();
+    renderChecklist();
+    log('已向当前条目添加 ' + list.filter(Boolean).length + ' 张图片（共 ' + IMAGES.length + ' 张）');
+  });
+}
+
+/* 第 5 步图片上传：点击 / 拖拽 → 加到当前条目 */
+(function(){
+  const input = document.getElementById('step5ImgInput');
+  const drop = document.getElementById('step5ImgDrop');
+  if (!input || !drop) return;
+  drop.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => { addStep5Files(input.files); input.value = ''; });
+  drop.addEventListener('dragover', e => { e.preventDefault(); });
+  drop.addEventListener('drop', e => { e.preventDefault(); addStep5Files(e.dataTransfer.files); });
+})();
 
 function renderThumbs(){
   const box = document.getElementById('thumbs');
@@ -1828,9 +1948,59 @@ function renderThumbs(){
   }
 }
 
-/* ---------- AI 上架前校验（SOP 05）：对照事实字段审核完整草稿 ----------
- * 2026-10-21 改为批量：对所有已生成文案的条目串行校验，进入本步自动开跑。 */
+/* ---------- AI 上架前校验（SOP 05，辅助参考）----------
+ * 2026-10-21 起改为「辅助、非强制」：进入第 6 步不再自动重跑；结果按条目持久化到
+ * it._form._precheck，重进只展示上次结果。要再查才点「开始/重新校验」。
+ * 后端已固定 temperature=0，「不可发布」弱化为「需人工复核」，且不阻塞建草稿。 */
 let PRECHECK_BUSY = false;
+
+/* 把单条 AI 校验报告渲染成 HTML。结论是「建议」，不再是「阻断」。 */
+function renderPrecheckBlock(report){
+  const lines = String(report || '').split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length === 1 && /^OK\b/i.test(lines[0])) {
+    return '<div class="msg ok show" style="margin:8px 0 0"><b>AI 校验通过。</b>没有发现事实冲突或格式问题。仍建议人工过一遍右侧核对清单。</div>';
+  }
+  const needsReview = /需人工复核|需复核/.test(report || '');
+  let html = '<div class="msg warn show" style="margin:8px 0 0">'
+    + (needsReview ? '<b>AI 建议：需人工复核。</b>以下问题建议先确认（仅供参考，不阻塞建草稿）：' : '<b>AI 发现以下问题：</b>') + '</div>'
+    + '<table class="kv" style="margin-top:8px;width:100%">'
+    + '<tr><td><b>问题位置</b></td><td><b>草稿说法</b></td><td><b>对应事实</b></td><td><b>风险 / 冲突</b></td><td><b>修正建议</b></td></tr>'
+    + lines.filter(l => l.includes('|')).map(l => {
+        const cols = l.split('|').map(c => c.trim());
+        while (cols.length < 5) cols.push('');
+        return '<tr>' + cols.slice(0, 5).map(c => '<td>' + esc(c) + '</td>').join('') + '</tr>';
+      }).join('')
+    + '</table>';
+  const other = lines.filter(l => !l.includes('|') && !/^需人工复核$|^需复核$/.test(l));
+  if (other.length) html += '<div style="font-size:12.5px;color:var(--text-faint);margin-top:6px">' + other.map(esc).join('<br>') + '</div>';
+  return html;
+}
+
+/* 渲染所有已持久化的校验结果（进第 6 步时调用，不触发新的 AI 请求）。 */
+function renderPrecheckSaved(){
+  const box = document.getElementById('precheckBox');
+  const m = document.getElementById('msgPrecheck');
+  if (!box) return;
+  if (!IMPORT_BATCH.length){ box.innerHTML = ''; return; }
+  const done = IMPORT_BATCH.filter(it => it._form && it._form._precheck && it._form._precheck.report);
+  if (!done.length){
+    box.innerHTML = '<div class="msg info" style="margin:8px 0 0">还没有校验结果。点「开始 / 重新校验」跑一次，'
+      + '或直接跳过校验去「写入 Etsy 草稿」—— 校验只是辅助参考。</div>';
+    return;
+  }
+  box.innerHTML = done.map(it => {
+    const sku = it.sku || ('第 ' + it._row + ' 行');
+    const r = it._form._precheck;
+    return '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:8px">'
+      + '<b style="font-size:13px">' + esc(sku) + '</b>'
+      + '<span style="font-size:11px;color:var(--text-faint);margin-left:8px">' + esc(r.at || '') + '</span>'
+      + renderPrecheckBlock(r.report) + '</div>';
+  }).join('');
+  const okN = done.filter(it => /^OK\b/i.test(String(it._form._precheck.report).trim())).length;
+  showMsg(m, 'info', '已显示 <b>' + done.length + '</b> 条上次校验结果（通过 ' + okN + ' 条）。'
+    + '结果为辅助参考，不阻塞建草稿；要再查点「开始 / 重新校验」。');
+}
+
 async function startPrecheck(){
   if (PRECHECK_BUSY) return;
   const m = document.getElementById('msgPrecheck');
@@ -1842,34 +2012,16 @@ async function startPrecheck(){
   if (!todo.length) { showMsg(m, 'warn', '还没有任何条目生成过文案（标题为空）。先去第 3 步生成文案。'); return; }
   PRECHECK_BUSY = true;
   btn.disabled = true;
-  const parseBlock = (report) => {
-    const lines = report.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length === 1 && /^OK\b/i.test(lines[0])) {
-      return '<div class="msg ok show" style="margin:8px 0 0"><b>AI 校验通过。</b>没有发现事实冲突或格式问题。仍建议人工过一遍核对清单。</div>';
-    }
-    const isBlocked = /不可发布/.test(report);
-    let html = '<div class="msg ' + (isBlocked ? 'err' : 'warn') + ' show" style="margin:8px 0 0">'
-      + (isBlocked ? '<b>AI 判定：不可发布。</b>以下问题需先解决：' : '<b>AI 发现以下问题：</b>') + '</div>'
-      + '<table class="kv" style="margin-top:8px;width:100%">'
-      + '<tr><td><b>问题位置</b></td><td><b>草稿说法</b></td><td><b>对应事实</b></td><td><b>风险 / 冲突</b></td><td><b>修正建议</b></td></tr>'
-      + lines.filter(l => l.includes('|')).map(l => {
-          const cols = l.split('|').map(c => c.trim());
-          while (cols.length < 5) cols.push('');
-          return '<tr>' + cols.slice(0, 5).map(c => '<td>' + esc(c) + '</td>').join('') + '</tr>';
-        }).join('')
-      + '</table>';
-    const other = lines.filter(l => !l.includes('|') && !/^不可发布$/.test(l));
-    if (other.length) html += '<div style="font-size:12.5px;color:var(--text-faint);margin-top:6px">' + other.map(esc).join('<br>') + '</div>';
-    return html;
-  };
-  let done = 0, okN = 0, warnN = 0, failN = 0, html = '';
+  let done = 0, okN = 0, warnN = 0, html = '';
   for (const it of todo){
     const sku = it.sku || ('第 ' + it._row + ' 行');
-    btn.textContent = '批量校验中 ' + (done + 1) + '/' + todo.length + '…';
+    btn.textContent = '校验中 ' + (done + 1) + '/' + todo.length + '…';
     showMsg(m, 'info', 'AI 上架前校验中：<b>' + (done + 1) + ' / ' + todo.length + '</b> 条（' + esc(sku) + '）…');
     const f = mergedForm(it);   // 给料打底 + _form 覆盖：price/quantity 不会因为 AI 只回填了文案就丢
     const vd = Array.isArray(f._vardims) ? f._vardims : [];
     const vr = Array.isArray(f._varrows) ? f._varrows : [];
+    // ★ 图片按「条目」取，而不是全局 IMAGES —— 之前拿全局当前条目的图，批量循环时每条都报「0 张图」。
+    const imgs = await ensureItemImages(it);
     const draft = {
       title: f.title, description: f.description, tags: f.tags || [],
       price: f.price, quantity: f.quantity,
@@ -1878,7 +2030,7 @@ async function startPrecheck(){
         name: (cartesian(vd.map(d => d.values))[i] || []).map(v => v.value).join(' + '),
         price: r.price, quantity: r.quantity, sku: r.sku,
       })),
-      images: IMAGES.map(im => ({ filename: im.filename, purposeLabel: purposeLabel(im.purpose) })),
+      images: imgs.map(im => ({ filename: im.filename || im.name, purposeLabel: purposeLabel(im.purpose) })),
     };
     try {
       const d = await apiCall('/api/etsy/ai/precheck', {
@@ -1886,16 +2038,16 @@ async function startPrecheck(){
         timeout: 180000,
       });
       const report = d.report || '';
-      const isBlocked = /不可发布/.test(report);
-      if (/^OK\b/i.test(report.trim())) okN++;
-      else if (isBlocked) failN++;
-      else warnN++;
+      const isOk = /^OK\b/i.test(report.trim());
+      if (isOk) okN++; else warnN++;
+      // 结果持久化到条目，重进第 6 步不再重跑
+      it._form = it._form || {};
+      it._form._precheck = { report, at: new Date().toLocaleString() };
       html += '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:8px">'
-        + '<b style="font-size:13px">' + esc(sku) + '</b>' + parseBlock(report) + '</div>';
-      log('AI 校验（' + sku + '）：' + (isBlocked ? '不可发布' : (okN && /^OK/i.test(report.trim()) ? '通过' : '有警告')),
-        isBlocked ? 'e' : 's');
+        + '<b style="font-size:13px">' + esc(sku) + '</b>' + renderPrecheckBlock(report) + '</div>';
+      log('AI 校验（' + sku + '）：' + (isOk ? '通过' : '有建议（辅助参考）'), 's');
     } catch (e) {
-      failN++;
+      warnN++;
       html += '<div style="border:1px solid var(--border);border-radius:10px;padding:10px;margin-top:8px"><b style="font-size:13px">' + esc(sku) + '</b>'
         + '<div class="msg err show" style="margin:8px 0 0">校验失败：' + esc(e.message) + '</div></div>';
       logErr(e);
@@ -1903,14 +2055,20 @@ async function startPrecheck(){
     done++;
     box.innerHTML = html;   // 每条完成即刷新，不用等整批
   }
-  btn.disabled = false; btn.textContent = '开始 / 重跑校验';
+  btn.disabled = false; btn.textContent = '开始 / 重新校验（全部条目）';
   PRECHECK_BUSY = false;
-  showMsg(m, failN ? 'warn' : 'ok',
-    '批量校验完成：通过 <b>' + okN + '</b> 条，有警告 <b>' + warnN + '</b> 条，不可发布 <b>' + failN + '</b> 条。'
-    + '<br><b>下一步「写入 Etsy」只建草稿、不会发布</b> —— 草稿不花钱，到 Shop Manager 人工核对后再发布（那一步才收 $0.20 上架费）。');
-  log('AI 上架前批量校验完成：通过 ' + okN + '，警告 ' + warnN + '，不可发布 ' + failN, failN ? 'e' : 's');
+  showMsg(m, 'ok',
+    '校验完成：通过 <b>' + okN + '</b> 条，有建议 <b>' + warnN + '</b> 条。'
+    + '<br><b>以上都是辅助参考，不阻塞建草稿。</b>'
+    + '「写入 Etsy」只建草稿、不会发布 —— 草稿不花钱，到 Shop Manager 人工核对后再发布（那一步才收 $0.20 上架费）。');
+  log('AI 上架前校验完成：通过 ' + okN + '，有建议 ' + warnN, 's');
 }
 document.getElementById('btnPrecheck').addEventListener('click', startPrecheck);
+document.getElementById('btnPrecheckClear').addEventListener('click', () => {
+  IMPORT_BATCH.forEach(it => { if (it._form) delete it._form._precheck; });
+  document.getElementById('precheckBox').innerHTML = '';
+  showMsg(document.getElementById('msgPrecheck'), 'info', '已清空校验结果。要再查点「开始 / 重新校验」。');
+});
 
 /* ---------- 步骤 4：变体 ---------- */
 /* ---------- 变体组合矩阵（SOP 06）：维度在第 4 步勾选属性值生成，这里只填每行的价格/库存/SKU ---------- */
@@ -1975,18 +2133,19 @@ function mergedForm(it){
 document.getElementById('btnDraft').addEventListener('click', async () => {
   const m = document.getElementById('msg5');
   const btn = document.getElementById('btnDraft');
-  if (IMAGES.length === 0){
-    showMsg(m, 'err', '至少要上传 1 张图片。Etsy 要求所有上架商品至少有 1 张图。');
+  // 建草稿前把表单存回当前条目 —— 保证"当前条目"和真实提交的数据一致
+  saveCurrentForm();
+  const imgs = await ensureItemImages(IMPORT_BATCH[CURRENT_IDX]);
+  if (!imgs.length){
+    showMsg(m, 'err', '当前条目还没有图片。Etsy 要求所有上架商品至少有 1 张图（可回第 1 步按文件名传，或第 5 步直接添加）。');
     return;
   }
   btn.disabled = true; btn.textContent = '写入中，请勿关闭…';
   log('开始建草稿：' + (fTitle.value || '').slice(0, 40));
   const t0 = Date.now();
   try {
-    // 建草稿前把表单存回当前条目 —— 保证"当前条目"和真实提交的数据一致
-    saveCurrentForm();
     const body = collectForm();
-    body.images = IMAGES.map((im, i) => ({ filename: im.filename, data: im.data, rank: i + 1 }));
+    body.images = imgs.map((im, i) => ({ filename: im.filename || im.name, data: im.data, rank: i + 1 }));
     const d = await apiCall('/api/etsy/draft', { body, timeout: 180000 });
     LAST_LISTING = d.listing_id;
     document.getElementById('draftBox').classList.remove('hidden');
@@ -2061,11 +2220,12 @@ document.getElementById('btnDraftAll').addEventListener('click', async () => {
   render();
   for (const it of todo){
     const idx = IMPORT_BATCH.indexOf(it);
-    switchToItem(idx);   // 填 DOM（含 _form 编辑值）
-    await new Promise(r => setTimeout(r, 180));   // 等 setPickedFiles 异步读图完成
-    saveCurrentForm();   // 确保 _form 最新
+    await switchToItem(idx);   // 填 DOM + 图片（switchToItem 已 await 读图）
+    saveCurrentForm();   // 确保 _form 最新（含 _images）
+    // ★ 图片按条目取，不再用全局 IMAGES（那是「当前条目」的图，批量循环会串/漏）
+    const imgs = await ensureItemImages(it);
     const body = collectForm();
-    body.images = IMAGES.map((im, i) => ({ filename: im.filename || im.name, data: im.data, rank: i + 1 }));
+    body.images = imgs.map((im, i) => ({ filename: im.filename || im.name, data: im.data, rank: i + 1 }));
     const name = it.sku || ('第 ' + it._row + ' 行');
     try {
       const d = await apiCall('/api/etsy/draft', { body, timeout: 180000, label: '批量建草稿 ' + name });
@@ -2295,12 +2455,14 @@ function saveCurrentForm(){
     f._varrows = JSON.parse(JSON.stringify(VARROWS || []));
     f._attrs = JSON.parse(JSON.stringify(ATTRS || []));
     f._tax = PICKED_TAX ? { id: PICKED_TAX.id, name: PICKED_TAX.name } : null;
+    f._images = IMAGES.slice();   // ★ 当前条目图片（给料 + 场景图 + 手工增删）固化，切走不丢
+    if (prev && prev._precheck) f._precheck = prev._precheck;   // 校验结果别被整体替换抹掉
     it._form = f;
   } catch(e){ /* 表单未就绪时忽略 */ }
 }
 
 /** 切到第 idx 条：先存旧的，再装新的 */
-function switchToItem(idx){
+async function switchToItem(idx){
   if (idx < 0 || idx >= IMPORT_BATCH.length) return;
   if (idx === CURRENT_IDX){ renderItemNav(); return; }
   saveCurrentForm();
@@ -2328,13 +2490,17 @@ function switchToItem(idx){
       ? it._form.is_customizable : !!it.is_customizable;
     document.getElementById('fCustom').checked = cust;
   }
-  // 图片按文件名匹配
-  const matched = it._matched || matchPickedImages(it.images);
-  if (matched.length) setPickedFiles(matched);
-  else if (typeof clearPickedFiles === 'function') clearPickedFiles();
   renderItemNav();
   renderImportList();
   renderChecklist();
+  // 图片：优先持久化的 _form._images，否则按文件名匹配给料图（异步读图）
+  const imgs = await ensureItemImages(it);
+  if (IMPORT_BATCH[CURRENT_IDX] !== it) return;   // 期间又切走了，放弃本次渲染
+  IMAGES.length = 0;
+  imgs.forEach(o => IMAGES.push(o));
+  renderThumbs();
+  renderStep5Images();
+  renderChecklist();   // 图片数影响右侧核对清单，图就位后重算一次
   // ★ 切换条目后，若正在类目页（第 4 步）且新条目有类目关键词、还没选类目，
   //   重新自动搜 —— 否则切换后类目区还是上一条的结果/「请先填关键词」提示，
   //   用户会以为自动搜没做。搜索框同步为当前条目的关键词。
@@ -3253,14 +3419,26 @@ function renderAiList() {
     });
   });
   box.querySelectorAll('[data-scene-use]').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const k = Number(btn.dataset.sceneUse);
       const x = AI_RESULTS[k];
       if (!x.scene || !x.scene.b64) return;
-      if (IMAGES.length >= 20) { showAiMsg('warn', '图片已满 20 张，不能再加。'); return; }
-      IMAGES.push({ filename: (x.sku || 'item') + '-scene.jpg', data: x.scene.b64, purpose: 'scene', purposeLabel: '07 使用/场景' });
-      renderThumbs();
-      showAiMsg('ok', '场景图已加入图片列表（' + (x.sku || '') + '-scene.jpg，排最后，首图仍是实拍）。');
+      // ★ 场景图挂到「这条 AI 结果对应的条目」上，而不是全局 IMAGES ——
+      //   之前挂到当前条目的全局图里，切走就丢，还会串到别的条目。
+      const it = IMPORT_BATCH[x.i] || IMPORT_BATCH[CURRENT_IDX];
+      if (!it) return;
+      const imgs = await ensureItemImages(it);
+      if (imgs.length >= 20) { showAiMsg('warn', '图片已满 20 张，不能再加。'); return; }
+      imgs.push({ filename: (x.sku || 'item') + '-scene.jpg', data: x.scene.b64, purpose: 'scene', purposeLabel: '07 使用/场景' });
+      it._form = it._form || {};
+      it._form._images = imgs;
+      if (IMPORT_BATCH[CURRENT_IDX] === it){
+        IMAGES.length = 0;
+        imgs.forEach(o => IMAGES.push(o));
+        renderThumbs();
+        renderStep5Images();
+      }
+      showAiMsg('ok', '场景图已加入「' + (x.sku || '') + '」的图片列表（' + (x.sku || '') + '-scene.jpg，排最后，首图仍是实拍）。');
     });
   });
   box.querySelectorAll('[data-scene-regen]').forEach(btn => {
