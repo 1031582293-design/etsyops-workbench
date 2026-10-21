@@ -144,6 +144,8 @@
   .log .t{color:var(--text-faint)}
   .log .e{color:var(--bad)}
   .log .s{color:var(--good)}
+  .log .w{color:var(--warn)}
+  .log .ai{color:var(--accent)}
   .hidden{display:none!important}
   .tax-list{max-height:260px;overflow:auto;margin-top:10px}
   .tax-item{padding:9px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:7px;cursor:pointer;
@@ -169,7 +171,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">48270f7</span>
+  <span class="vtag" id="verTag">48bee39</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -343,8 +345,18 @@
 
       <section class="panel step hidden" data-step="4">
         <h3>类目与属性</h3>
-        <div class="ph-sub">AI 给的类目名只是候选。必须在这里搜出真实 taxonomy_id，否则建草稿会被拒。</div>
-        <label class="fld">类目关键词<span class="hint">用英文物品名搜，例如 ceramic horse / pottery figurine</span></label>
+        <div class="ph-sub">AI 给 3 个候选类目关键词，Agent 逐个搜 Etsy taxonomy 选最末级叶子、标出最推荐，你确认后自动查属性并映射变体。匹配不上的标红留你处理。</div>
+
+        <!-- ★ 批量 AI 定类目（不依赖给料的类目关键词） -->
+        <div class="row2" style="margin-bottom:6px">
+          <button class="btn" id="btnCatBatch">AI 批量定类目（全部条目）</button>
+          <button class="btn ghost" id="btnCatStop" disabled>中断</button>
+        </div>
+        <div id="msgCatBatch" class="msg"></div>
+        <div class="progress hidden" id="catProg"><div class="bar"><i id="catBar"></i></div><span id="catProgTxt"></span></div>
+        <div id="catPlan"></div>
+
+        <label class="fld" style="margin-top:16px">手动搜索类目<span class="hint">AI 定不准时手动兜底，用英文物品名搜，例如 ceramic horse / pottery figurine</span></label>
         <div class="row2">
           <input type="text" id="taxQ" placeholder="ceramic horse" />
           <button class="btn" id="btnTax">搜索类目</button>
@@ -712,6 +724,29 @@ function log(msg, cls){
 }
 function logErr(e){ log((e && e.message) || String(e), 'e'); }
 
+/* ★ 后端真实 AI 日志：增量拉到前端日志区展示。
+ * 之前前端日志只有自己写的「进度 x/y」，后端逐条的真实结果（完成/失败/具体原因）
+ * 只写在后端 console，两边对不上。现在后端所有 AI 动作写进环形缓冲，这里按 seq 增量拉。 */
+let _aiLogSeq = 0;
+let _aiLogBusy = false;
+async function syncAiLogs(){
+  if (_aiLogBusy) return;
+  _aiLogBusy = true;
+  try {
+    const d = await apiCall('/api/etsy/ai/logs?since=' + _aiLogSeq, { timeout: 15000, label: '同步 AI 日志' });
+    if (!d || !Array.isArray(d.logs)) return;
+    for (const e of d.logs) {
+      if (e.seq > _aiLogSeq) _aiLogSeq = e.seq;
+      // 后端行已经带时间戳，这里直接追一行（用 .ai 标色，前缀「后端」以区别于前端自己的行）
+      const div = document.createElement('div');
+      div.innerHTML = '<span class="t">[' + (e.ts || '') + ']</span> <span class="ai">' + esc(e.msg || '') + '</span>';
+      $log.appendChild(div);
+    }
+    $log.scrollTop = $log.scrollHeight;
+  } catch (e) { /* 同步失败静默，不打断主流程 */ }
+  finally { _aiLogBusy = false; }
+}
+
 function showMsg(el, kind, html){
   if (!el) return;
   el.className = 'msg show ' + kind;
@@ -768,6 +803,7 @@ async function boot(){
   }
   document.getElementById('main').classList.remove('hidden');
   log('已连接' + (STATUS.shopName ? '：' + STATUS.shopName : '') + (STATUS.shopId ? '（shop_id=' + STATUS.shopId + '）' : ''));
+  syncAiLogs();   // 拉最近的后端 AI 日志到日志区（刷新页面后能接着看之前的真实日志）
   // 多店铺账号：自动发现会拒绝擅自挑选（可能把商品写进错误的店），这里明确告知
   if (STATUS.needShopChoice){
     showMsg(document.getElementById('msg1'), 'warn',
@@ -848,10 +884,10 @@ function goto(n){
   // ★ 下一步的第一个环节是 AI/Agent 动作的，进页即自动开跑，不再让人多点一次。
   //    第 2 步：批量候选词（已有词池的条目自动跳过，重进不烧 token）
   //    第 3 步：批量文案（仅首次进入自动跑；重跑手动点「批量生成」）
-  //    第 4 步：autoPickTaxonomy（类目关键词自动搜 + 选最末级叶子）
+  //    第 4 步：批量 AI 定类目（AI 给 3 个候选关键词 → 搜 taxonomy 选叶子，首次自动跑）
   if (n === 2) startKwBatch();
   if (n === 3) startAiBatch(true);
-  if (n === 4) autoPickTaxonomy();   // 进类目页：条目有「类目关键词」就自动搜 + 选最末级叶子
+  if (n === 4) startCatBatch(true);
   if (n === 5) renderChecklist();   // 商品资料页：右侧核对清单重算
   if (n === 6) startPrecheck();     // 校验+写入页：自动批量校验已生成文案的条目
   document.querySelectorAll('.step').forEach(s => s.classList.toggle('hidden', Number(s.dataset.step) !== n));
@@ -1027,6 +1063,186 @@ async function autoPickTaxonomy(){
   } catch(e){
     box.innerHTML = '<div class="msg show err">自动搜类目失败：' + esc(e.message) + '</div>';
     logErr(e);
+  }
+}
+
+/* ---------- 批量 AI 定类目（不依赖给料的类目关键词） ----------
+ * 流程：AI 给 3 个候选类目关键词 → 逐个搜 taxonomy 选叶子 → 标最推荐 → 人确认。
+ * 确认后自动查属性 + 变体/属性按名称映射（autoMapVariations/autoMapAttributes），
+ * 匹配不上的标红（在属性列表里人工兜底）。 */
+let CAT_PLAN = [];        // [{ index, sku, candidates, recommended, error, confirmed }]
+let CAT_BATCH_BUSY = false;
+let CAT_POLL_TIMER = null;
+let _confirmingCat = false;   // 确认类目时抑制 switchToItem 的旧自动搜，避免重复搜索
+
+function catMsg(kind, html){ showMsg(document.getElementById('msgCatBatch'), kind, html); }
+function setCatProgress(done, total, note){
+  const box = document.getElementById('catProg');
+  if (total <= 0){ box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  document.getElementById('catBar').style.width = Math.round(done / total * 100) + '%';
+  document.getElementById('catProgTxt').textContent = done + ' / ' + total + (note ? '　' + note : '');
+}
+
+async function startCatBatch(auto){
+  if (CAT_BATCH_BUSY) return;
+  if (!IMPORT_BATCH.length){ catMsg('warn', '还没有条目。先回第 1 步粘贴表格并点「解析表格」。'); return; }
+  if (auto && CAT_PLAN.length) return;   // 首次进第 4 步才自动跑；重跑手动点按钮
+
+  const btn = document.getElementById('btnCatBatch');
+  const stop = document.getElementById('btnCatStop');
+  CAT_BATCH_BUSY = true;
+  btn.disabled = true; stop.disabled = false;
+  catMsg('info', '先检查 AI 连通…');
+  try {
+    const chk = await apiCall('/api/etsy/ai/check', { timeout: 30000, label: 'AI 连通检查' });
+    if (!chk.ok){
+      CAT_BATCH_BUSY = false; btn.disabled = false; stop.disabled = true;
+      catMsg('err', '<b>AI 连不上，没有开始定类目。</b>' + esc(chk.note));
+      return;
+    }
+  } catch(e){
+    CAT_BATCH_BUSY = false; btn.disabled = false; stop.disabled = true;
+    catMsg('err', 'AI 连通检查失败：' + esc(e.message || e));
+    return;
+  }
+
+  CAT_PLAN.length = 0;
+  renderCatPlan();
+  catMsg('info', '开始批量定类目 <b>' + IMPORT_BATCH.length + '</b> 条（AI 给 3 个候选关键词 + 逐个搜 taxonomy，串行，较慢）。');
+  setCatProgress(0, IMPORT_BATCH.length, '排队中');
+  try {
+    const r = await apiCall('/api/etsy/category/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        items: IMPORT_BATCH.map((it, i) => Object.assign({ index: i }, factsOf(it),
+          { taxonomy_keyword: it.taxonomy_keyword || '' })),
+      }),
+      timeout: 30000, label: 'AI 批量定类目',
+    });
+    pollCatBatch(r.jobId, IMPORT_BATCH.length);
+  } catch(e){
+    CAT_BATCH_BUSY = false; btn.disabled = false; stop.disabled = true;
+    setCatProgress(0, 0);
+    catMsg('err', '提交失败：' + esc(e.message || e));
+  }
+}
+document.getElementById('btnCatBatch').addEventListener('click', () => startCatBatch(false));
+
+function pollCatBatch(jobId, total){
+  const btn = document.getElementById('btnCatBatch');
+  const stop = document.getElementById('btnCatStop');
+  let stopped = false;
+  let lastDone = 0;
+  let retries = 0;
+  stop.onclick = () => { stopped = true; };
+  const tick = async () => {
+    if (stopped){
+      try { await apiCall('/api/etsy/category/batch/stop', { method: 'POST', body: { jobId }, timeout: 15000, label: '中断定类目' }); } catch(e){}
+      CAT_BATCH_BUSY = false; btn.disabled = false; stop.disabled = true;
+      catMsg('warn', '已请求中断。已定好的保留，未定的保持未定。');
+      return;
+    }
+    try {
+      syncAiLogs();   // ★ 后端真实 AI 日志同步到前端日志区
+      const r = await apiCall('/api/etsy/category/batch?jobId=' + encodeURIComponent(jobId),
+        { timeout: 30000, label: '查询定类目进度' });
+      const done = Number(r.done || 0);
+      if (done !== lastDone) log('定类目进度 ' + done + '/' + total, 's');
+      lastDone = done;
+      const curNote = (r.curSku && done < total) ? '　当前：' + r.curSku : '';
+      setCatProgress(done, total, (r.note || '') + curNote);
+      if (Array.isArray(r.results)){
+        r.results.forEach(x => {
+          const prev = CAT_PLAN[x.index];
+          CAT_PLAN[x.index] = { index: x.index, sku: x.sku, candidates: x.candidates || [],
+            recommended: x.recommended, error: x.error || '',
+            confirmed: !!(prev && prev.confirmed) };   // 保留已确认状态，别被轮询覆盖
+        });
+      }
+      renderCatPlan();
+      if (r.status === 'done' || r.status === 'stopped' || done >= total){
+        CAT_BATCH_BUSY = false; btn.disabled = false; stop.disabled = true;
+        const okN = CAT_PLAN.filter(x => x && !x.error).length;
+        const errN = CAT_PLAN.filter(x => x && x.error).length;
+        catMsg(errN ? 'warn' : 'ok',
+          '定类目结束：成功 <b>' + okN + '</b> 条' + (errN ? '，失败 <b>' + errN + '</b> 条' : '') + '。'
+          + '<br>每条点「用这个」确认推荐类目（或换一个候选），确认后自动查属性 + 映射变体。');
+        return;
+      }
+      CAT_POLL_TIMER = setTimeout(tick, 3000);
+    } catch(e){
+      retries++;
+      if (retries > 5){
+        CAT_BATCH_BUSY = false; btn.disabled = false; stop.disabled = true;
+        catMsg('err', '查询进度连续失败 5 次，已停止轮询。刷新后重试。最后错误：' + esc(e.message || e));
+        return;
+      }
+      setCatProgress(lastDone, total, '重试中…');
+      CAT_POLL_TIMER = setTimeout(tick, 5000);
+    }
+  };
+  tick();
+}
+
+function renderCatPlan(){
+  const box = document.getElementById('catPlan');
+  if (!box) return;
+  if (!CAT_PLAN.length){ box.innerHTML = ''; return; }
+  box.innerHTML = CAT_PLAN.map(p => {
+    if (!p) return '';
+    const sku = esc(p.sku || ('第 ' + (p.index + 1) + ' 条'));
+    if (p.error){
+      return '<div style="padding:9px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;font-size:12.5px">'
+        + '<div style="color:var(--bad)"><b>' + sku + '</b> 定类目失败：' + esc(p.error) + '</div>'
+        + '<div style="margin-top:4px;font-size:11.5px;color:var(--text-faint)">可点下方「手动搜索类目」兜底。</div></div>';
+    }
+    const cds = (p.candidates || []).map((c, ci) => {
+      const isRec = ci === p.recommended;
+      const ok = c.found && c.leaf;
+      const body = ok
+        ? esc(c.leaf.full_path) + ' <span style="color:var(--text-faint);font-size:11px">taxonomy_id=' + c.leaf.taxonomy_id + '</span>'
+          + (c.leaf.is_leaf ? '' : ' <span style="color:var(--warn)">⚠ 非叶子</span>')
+        : '<span style="color:var(--text-faint)">没搜到</span>';
+      const btn = ok ? ' <button class="btn sm" data-cat-use="' + p.index + '" data-cat-ci="' + ci + '">用这个</button>' : '';
+      return '<div style="margin-top:5px;padding:6px 9px;border:1px solid ' + (isRec ? 'var(--accent)' : 'var(--border)') + ';border-radius:8px;'
+        + (isRec ? 'background:rgba(255,184,107,.07)' : '') + ';font-size:12px">'
+        + (isRec ? '<span style="color:var(--accent)">⭐推荐</span> ' : '')
+        + '<b>' + esc(c.kw) + '</b> → ' + body + btn + '</div>';
+    }).join('');
+    const doneTag = p.confirmed ? ' <span style="color:var(--good)">✓已确认</span>' : '';
+    return '<div style="padding:9px 12px;border:1px solid var(--border);border-radius:10px;margin-bottom:8px;font-size:12.5px">'
+      + '<div><b>' + sku + '</b>' + doneTag + '</div>' + cds + '</div>';
+  }).join('');
+  box.querySelectorAll('[data-cat-use]').forEach(b => b.addEventListener('click', () => {
+    confirmCategory(Number(b.dataset.catUse), Number(b.dataset.catCi));
+  }));
+}
+
+/* 人确认某个候选类目：锁定该类目 → 自动查属性 → 变体/属性按名称映射（标红没对上的）。 */
+async function confirmCategory(itemIdx, ci){
+  const p = CAT_PLAN[itemIdx];
+  const it = IMPORT_BATCH[itemIdx];
+  const cand = p && p.candidates && p.candidates[ci];
+  if (!it || !cand || !cand.leaf) return;
+  _confirmingCat = true;
+  try {
+    if (CURRENT_IDX !== itemIdx) switchToItem(itemIdx);
+    PICKED_TAX = { id: Number(cand.leaf.taxonomy_id), name: cand.leaf.full_path };
+    const el = document.getElementById('taxPicked');
+    if (el){
+      el.style.display = 'block';
+      el.innerHTML = '<b>已选类目：</b>' + esc(cand.leaf.full_path) + '（taxonomy_id = ' + cand.leaf.taxonomy_id + '）'
+        + (cand.leaf.is_leaf ? '' : ' <span style="color:var(--warn)">⚠ 非叶子，建议换一个叶子候选</span>');
+    }
+    document.getElementById('btnProp').disabled = false;
+    log('已确认类目（' + (it.sku || '') + '）' + cand.leaf.full_path + ' → ' + cand.leaf.taxonomy_id, 's');
+    await loadProperties();   // 查属性 + 自动映射变体/属性（匹配不上的标红）
+    saveCurrentForm();        // 把类目 + 变体 + 属性持久化到该条目，批量建草稿时直接用
+    p.confirmed = true;
+    renderCatPlan();
+  } finally {
+    _confirmingCat = false;
   }
 }
 
@@ -2029,7 +2245,8 @@ function switchToItem(idx){
   // ★ 切换条目后，若正在类目页（第 4 步）且新条目有类目关键词、还没选类目，
   //   重新自动搜 —— 否则切换后类目区还是上一条的结果/「请先填关键词」提示，
   //   用户会以为自动搜没做。搜索框同步为当前条目的关键词。
-  if (CURRENT_STEP === 4 && it.taxonomy_keyword && !PICKED_TAX){
+  //   批量 AI 定类目确认时（_confirmingCat）不触发，避免重复搜索。
+  if (CURRENT_STEP === 4 && it.taxonomy_keyword && !PICKED_TAX && !_confirmingCat){
     const qbox = document.getElementById('taxQ');
     if (qbox) qbox.value = it.taxonomy_keyword;
     autoPickTaxonomy();
@@ -2663,6 +2880,7 @@ async function startKwBatch(){
       kwMsg('err', esc(sku) + ' 生成失败：' + esc(e.message || e) + '（自动继续下一条）');
     }
     renderKwTable();
+    syncAiLogs();   // ★ 后端真实 AI 日志同步到前端日志区
   }
   KW_BATCH_BUSY = false;
   btn.disabled = false;
@@ -2787,6 +3005,7 @@ function pollAiBatch(jobId, total) {
       return;
     }
     try {
+      syncAiLogs();   // ★ 后端真实 AI 日志同步到前端日志区
       const r = await apiCall('/api/etsy/ai/batch?jobId=' + encodeURIComponent(jobId),
         { timeout: 30000, label: '查询 AI 进度' });
       const done = Number(r.done || 0);

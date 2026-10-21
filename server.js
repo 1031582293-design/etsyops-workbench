@@ -163,6 +163,32 @@ const ETSY_OAUTH_STATE_FILE = join(DATA_DIR, 'etsy-oauth-state.json');
 const etsyStore = etsy.createTokenStore(ETSY_TOKEN_FILE, { readFileSync, writeFileSync, mkdirSync, renameSync });
 const etsyLog = (...a) => console.log('[etsy]', ...a);
 
+/* ★ 后端真实 AI 日志环形缓冲：前端可增量拉取展示。
+ * 解决「前端日志与后端事实不符」——之前 AI 批量在后台跑时，逐条的真实结果
+ * （完成/失败/具体原因）只写在 console（backend.log），前端日志只有粗糙的「进度 x/y」。
+ * 现在所有 AI 动作都写进这个缓冲，前端 GET /api/etsy/ai/logs?since=seq 增量读。 */
+const _etsyAiLog = [];
+let _etsyAiLogSeq = 0;
+const _etsyAiLogMax = 1200;
+function aiLog(...a) {
+  const line = a.map(x => {
+    if (typeof x === 'string') return x;
+    if (x instanceof Error) return String(x.message || x);
+    try { return JSON.stringify(x); } catch { return String(x); }
+  }).join(' ');
+  const d = new Date();
+  const entry = {
+    seq: ++_etsyAiLogSeq,
+    t: d.getTime(),
+    ts: [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':'),
+    msg: line,
+  };
+  _etsyAiLog.push(entry);
+  if (_etsyAiLog.length > _etsyAiLogMax) _etsyAiLog.splice(0, _etsyAiLog.length - _etsyAiLogMax);
+  console.log('[etsy-ai]', line);
+  return entry;
+}
+
 /* ---------- EverBee Research MCP（直连，不走官方 REST 审核） ----------
    REST 那条路要求应用过人工审核，未审核一律 401 "App is not approved for Open API access"；
    MCP 是官方给 AI 工具用的通道，标准 OAuth、支持动态注册、不需要审核也不需要 client_secret。
@@ -812,6 +838,10 @@ async function etsyAiImage(prompt, size = '1024x1024', refB64 = '') {
     throw new Error('Etsy 场景图未配置：请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL'
       + '（留空则复用公众号那套 AI_* 配置），生图模型用 ETSY_AI_IMAGE_MODEL。');
   }
+  return withAiRetry(() => etsyAiImageOnce(prompt, size, refB64), '场景图生图');
+}
+
+async function etsyAiImageOnce(prompt, size, refB64) {
   const auth = { Authorization: `Bearer ${ETSY_AI_API_KEY}` };
   let url = `${ETSY_AI_BASE_URL}/images/generations`;
   let init;
@@ -890,6 +920,8 @@ async function readJson(req) {
    ReferenceError: _genJobs is not defined。 */
 const _etsyBatch = new Map(); // Etsy 文案批量生成：id -> { status, total, done, okCount, results, failures, stopRequested }
 let _etsyBatchSeq = 0;
+const _etsyCatBatch = new Map(); // Etsy 类目批量：id -> { status, total, done, results:[{index,sku,candidates,recommended,error}], stopRequested }
+let _etsyCatBatchSeq = 0;
 const _genJobs = new Map(); // id -> { status:'running'|'done'|'error', content, note, at }
 let _genJobSeq = 0;
 
@@ -917,10 +949,13 @@ async function handleApi(req, res) {
     //  - status 只返回布尔/到期时间，前端首屏要靠它决定显示「未连接 / 已连接」
     //  - auth 是浏览器整页跳转，地址栏里带不了 x-api-key
     //  - callback 是 EverBee 跳回来的，更不可能带 key；安全性由 state 校验承担
-    '/api/everbee/status', '/api/everbee/auth', '/api/everbee/callback'];
+    '/api/everbee/status', '/api/everbee/auth', '/api/everbee/callback',
+    // ★ AI 日志同 /api/diag/logs 一样免 key：AI 没配好/批量跑挂时，正是最需要看它报什么的时候
+    '/api/etsy/ai/logs'];
   // ★ AI 队列的三个路径也免key：AI 没配好时队列根本跑不起来，
   //   那正是最需要看它报什么的时候（2026-10-07 加，之前只写了注释没真加，队列在排查时完全不可见）。
-  const ETSY_AI_BATCH_OPEN = p === '/api/etsy/ai/batch' || p === '/api/etsy/ai/batch/stop' || p === '/api/etsy/ai/check';
+  const ETSY_AI_BATCH_OPEN = p === '/api/etsy/ai/batch' || p === '/api/etsy/ai/batch/stop' || p === '/api/etsy/ai/check'
+    || p === '/api/etsy/category/batch' || p === '/api/etsy/category/batch/stop';
   // ★ 邮件两个路径不走 API_KEY：
   //  - /api/mail/ingest 由 Cloudflare Worker 调用，它只持有 MAIL_INGEST_SECRET，
   //    不该知道前端用的 API_KEY；安全性由 HMAC 签名 + 时间戳防重放承担（见 mail-ingest.js）。
@@ -1634,7 +1669,7 @@ async function handleApi(req, res) {
         status: 'candidate',   // candidate=候选未验证 | verified=已搜索验证 | adopted=采纳
       })).filter(w => w.en);
       if (!clean.length) throw new Error('AI 返回的候选词全部为空，可重试一次。');
-      etsyLog(`关键词候选池生成成功：${clean.length} 个（全部标记为候选未验证）`);
+      aiLog(`关键词候选池生成成功：${clean.length} 个（全部标记为候选未验证）`);
       return json(res, 200, { ok: true, words: clean, model: ETSY_AI_MODEL,
         note: `生成 ${clean.length} 个候选词，全部是「候选，未验证」。点「用 EverBee 核实」批量拿真实搜索量，命中的自动标为已验证。` });
     } catch (e) {
@@ -1737,6 +1772,7 @@ async function handleApi(req, res) {
         stopRequested: false,
       };
       _etsyBatch.set(id, job);
+      aiLog(`Etsy 文案批次 ${id} 受理：${job.total} 条，后台串行生成${withScene ? '（含场景图）' : ''}`);
 
       // 后台串行跑，不 await —— 立即返回 jobId 让前端轮询
       (async () => {
@@ -1744,7 +1780,7 @@ async function handleApi(req, res) {
           job.curSku = item.sku; job.curStartedAt = Date.now();
           if (job.stopRequested) {
             job.status = 'stopped';
-            etsyLog(`Etsy 文案批次 ${id} 被手动中断（已完成 ${job.done}/${job.total}）`);
+            aiLog(`Etsy 文案批次 ${id} 被手动中断（已完成 ${job.done}/${job.total}）`);
             return;
           }
           try {
@@ -1763,16 +1799,16 @@ async function handleApi(req, res) {
                   + ' in a natural, realistic lifestyle scene, clean warm white background, e-commerce product photography';
                 const simg = await etsyAiImage(sp, '1024x1024');
                 result.scene = { prompt: sp, url: simg.url || '', b64: simg.b64 || '' };
-                etsyLog(`Etsy 文案批次 ${id} [${job.done + 1}/${job.total}] ${item.sku} 场景图完成`);
+                aiLog(`Etsy 文案批次 ${id} [${job.done + 1}/${job.total}] ${item.sku} 场景图完成`);
               } catch (se) {
                 result.scene = { prompt: '', url: '', b64: '', error: se.message };
-                etsyLog(`Etsy 文案批次 ${id} ${item.sku} 场景图失败：${se.message}`);
+                aiLog(`Etsy 文案批次 ${id} ${item.sku} 场景图失败：${se.message}`);
               }
             }
             job.results.push(result);
             if (parsed.parsed) {
               job.okCount++;
-              etsyLog(`Etsy 文案批次 ${id} [${job.done + 1}/${job.total}] ${item.sku} 完成（耗时 ${Math.round((Date.now() - job.curStartedAt) / 1000)}s）`);
+              aiLog(`Etsy 文案批次 ${id} [${job.done + 1}/${job.total}] ${item.sku} 完成（耗时 ${Math.round((Date.now() - job.curStartedAt) / 1000)}s）`);
             } else {
               job.failures.push({ index: item.index, sku: item.sku,
                 reason: 'AI 返回的内容无法解析出 TITLE/DESCRIPTION/TAGS（可能格式跑偏了，可点该条「换一版」重试）' });
@@ -1780,13 +1816,13 @@ async function handleApi(req, res) {
           } catch (e) {
             // ★ 单条失败不中断整批 —— 用户明确选了「跳过 + 列清单」
             job.failures.push({ index: item.index, sku: item.sku, reason: e.message });
-            etsyLog(`Etsy 文案生成失败（${item.sku}）：${e.message}`);
+            aiLog(`Etsy 文案生成失败（${item.sku}）：${e.message}`);
           }
           job.done++;
         }
         job.status = job.stopRequested ? 'stopped' : 'done';
         job.finishedAt = Date.now();
-        etsyLog(`Etsy 文案批次 ${id} ${job.status}：成功 ${job.okCount}/${job.total}，失败 ${job.failures.length}`);
+        aiLog(`Etsy 文案批次 ${id} ${job.status}：成功 ${job.okCount}/${job.total}，失败 ${job.failures.length}`);
       })();
 
       return json(res, 202, { ok: true, jobId: id, total: job.total, preSkipped: skipped.length,
@@ -1821,6 +1857,123 @@ async function handleApi(req, res) {
     return json(res, 200, { ok: true, note: '已请求中断，当前这条生成完就停。' });
   }
 
+  /* ★ 后端真实 AI 日志：前端增量拉取展示。 */
+  if (p === '/api/etsy/ai/logs' && req.method === 'GET') {
+    const u = new URL(req.url, 'http://x');
+    const since = Number(u.searchParams.get('since') || 0);
+    const list = (since > 0 ? _etsyAiLog.filter(x => x.seq > since) : _etsyAiLog.slice(-60));
+    return json(res, 200, { ok: true, seq: _etsyAiLogSeq, logs: list.slice(-200) });
+  }
+
+  /* ★ 类目批量：AI 生成 3 个候选类目关键词 → 逐个搜 Etsy taxonomy → 选叶子 → 标推荐。
+   * 不依赖给料的「类目关键词」列 —— 那句「以免真实去查查不到」就是让 AI 多给几个候选。 */
+  if (p === '/api/etsy/category/batch' && req.method === 'POST') {
+    if (!etsyAiConfigured()) {
+      return json(res, 400, { error: 'etsy_ai_not_configured',
+        note: 'Etsy 类目生成未配置。请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL。' });
+    }
+    try {
+      const b = await readJson(req);
+      const items = Array.isArray(b.items) ? b.items : [];
+      if (!items.length) return json(res, 400, { error: 'bad_request', note: 'items 为空，没有要定类目的条目' });
+      if (items.length > 100) return json(res, 400, { error: 'too_many', note: `一次最多 100 条，当前 ${items.length} 条。` });
+
+      const id = 'cat' + Date.now().toString(36) + (_etsyCatBatchSeq++);
+      const job = { id, status: 'running', at: Date.now(), total: items.length, done: 0, results: [], stopRequested: false };
+      _etsyCatBatch.set(id, job);
+      aiLog(`类目批次 ${id} 受理：${items.length} 条`);
+
+      const CAT_PROMPT = '你是 Etsy 商品类目研究员。根据产品事实，给出 3 个最可能命中 Etsy Seller Taxonomy 的英文类目关键词。\n'
+        + '硬性规则：\n'
+        + '1. 用名词短语（2~4 个英文单词），是 Etsy 类目树里会出现的层级名词，例如 "ceramic horse figurine" / "fursuit head base" / "pottery figurine"。\n'
+        + '2. 不要品牌词、不要形容词堆砌、不要促销词。\n'
+        + '3. 按「最可能搜到叶子类目」的置信度从高到低排序，第一个最推荐。\n'
+        + '4. 只输出 JSON 数组，不要任何解释。格式：["关键词1","关键词2","关键词3"]';
+
+      (async () => {
+        for (const item of items) {
+          job.curSku = item.sku || '';
+          if (job.stopRequested) { job.status = 'stopped'; aiLog(`类目批次 ${id} 被手动中断`); return; }
+          try {
+            const facts = factsToText(item);
+            const hint = (item.taxonomy_keyword || item.taxonomy_name || '').toString().trim();
+            const user = (hint ? `给料里带了一个类目关键词「${hint}」，可作参考，但你要自己给出 3 个。\n` : '')
+              + '产品事实（只能依据这些）：\n' + facts.join('\n');
+            aiLog(`类目批次 ${id} [${job.done + 1}/${job.total}] ${item.sku || ('第' + (item.index + 1) + '条')}：AI 生成 3 个候选类目关键词…`);
+            const content = await etsyAiGenerate(CAT_PROMPT, user, { temperature: 0.3, max_tokens: 200 });
+            const m = content.match(/\[[\s\S]*\]/);
+            if (!m) throw new Error('AI 返回内容里找不到 JSON 数组');
+            let kws;
+            try { kws = JSON.parse(m[0]); } catch (pe) { throw new Error('AI 返回的类目关键词 JSON 解析失败：' + pe.message); }
+            kws = (Array.isArray(kws) ? kws : []).map(x => String(x || '').trim()).filter(Boolean).slice(0, 3);
+            if (!kws.length) throw new Error('AI 返回的类目关键词为空');
+
+            const candidates = [];
+            for (const kw of kws) {
+              let all = [];
+              try {
+                aiLog(`类目批次 ${id} ${item.sku || ''}：搜 "${kw}"…`);
+                all = await etsy.searchTaxonomy(etsyClient, kw, 25);
+              } catch (se) {
+                aiLog(`类目批次 ${id} ${item.sku || ''}：搜 "${kw}" 失败 ${(se && se.message) || se}`);
+              }
+              const leaf = all.length ? (all.find(r => r.is_leaf) || all[0]) : null;
+              candidates.push({
+                kw,
+                found: !!leaf,
+                isLeaf: !!(leaf && leaf.is_leaf),
+                count: all.length,
+                leaf: leaf ? { taxonomy_id: leaf.taxonomy_id, name: leaf.name, full_path: leaf.full_path, is_leaf: leaf.is_leaf } : null,
+              });
+              if (leaf && !leaf.is_leaf) {
+                aiLog(`类目批次 ${id} ${item.sku || ''}：「${kw}」没搜到叶子，取第一个「${leaf.full_path}」（非叶子，已标警告）`);
+              }
+            }
+            let rec = candidates.findIndex(c => c.found && c.isLeaf);
+            if (rec < 0) rec = candidates.findIndex(c => c.found);
+            if (rec < 0) rec = 0;
+            job.results.push({ index: item.index, sku: item.sku || '', candidates, recommended: rec, error: '' });
+            const rc = candidates[rec];
+            aiLog(`类目批次 ${id} [${job.done + 1}/${job.total}] ${item.sku || ''} 完成：推荐「${rc && rc.kw}」→ ${rc && rc.leaf ? rc.leaf.full_path : '（没搜到）'}`);
+          } catch (e) {
+            job.results.push({ index: item.index, sku: item.sku || '', candidates: [], recommended: -1, error: (e && e.message) || String(e) });
+            aiLog(`类目批次 ${id} ${item.sku || ''} 失败：${(e && e.message) || e}`);
+          }
+          job.done++;
+        }
+        job.status = job.stopRequested ? 'stopped' : 'done';
+        job.finishedAt = Date.now();
+        const errN = job.results.filter(r => r.error).length;
+        aiLog(`类目批次 ${id} ${job.status}：${job.total - errN} 条成功，${errN} 条失败`);
+      })();
+
+      return json(res, 202, { ok: true, jobId: id, total: job.total,
+        note: `已受理 ${job.total} 条，后台逐条生成候选类目 + 搜 taxonomy。` });
+    } catch (e) {
+      return json(res, 400, { error: 'bad_request', note: e.message });
+    }
+  }
+
+  if (p === '/api/etsy/category/batch' && req.method === 'GET') {
+    const u = new URL(req.url, 'http://x');
+    const job = _etsyCatBatch.get(u.searchParams.get('jobId') || '');
+    if (!job) return json(res, 404, { error: 'job_not_found', note: '类目批次不存在或已过期（服务重启后会清空）' });
+    return json(res, 200, {
+      ok: true, jobId: job.id, status: job.status, total: job.total, done: job.done,
+      results: job.results, curSku: job.curSku || '',
+      note: job.status === 'running' ? '定类目中…' : (job.status === 'stopped' ? '已中断' : '已完成'),
+    });
+  }
+
+  if (p === '/api/etsy/category/batch/stop' && req.method === 'POST') {
+    const b = await readJson(req).catch(() => ({}));
+    const job = _etsyCatBatch.get(b.jobId || '');
+    if (!job) return json(res, 404, { error: 'job_not_found' });
+    if (job.status !== 'running') return json(res, 400, { error: 'not_running', note: '该批次已结束' });
+    job.stopRequested = true;
+    return json(res, 200, { ok: true, note: '已请求中断。' });
+  }
+
   if (p === '/api/etsy/ai/copy' && req.method === 'POST') {
     if (!etsyAiConfigured()) {
       return json(res, 400, { error: 'etsy_ai_not_configured',
@@ -1853,7 +2006,7 @@ async function handleApi(req, res) {
         //   而不是成功。返回 200 会让 apiCall 把它当正常结果，页面于是填入三个空框，
         //   看起来像「AI 什么都没生成」—— 用户会去怀疑模型，而真因是格式没对上。
         //   502 是「上游返回了但内容不可用」，与网络错误区分开。
-        etsyLog('Etsy 文案解析失败（AI 有输出但格式不符），原文前200 字：' + String(content).slice(0, 200));
+        aiLog('Etsy 文案解析失败（AI 有输出但格式不符），原文前200 字：' + String(content).slice(0, 200));
         return json(res, 502, {
           error: 'parse_failed', raw: content, parsed: false,
           note: 'AI 返回了内容，但没能按 TITLE / DESCRIPTION / TAGS 三段解析出来。'
@@ -1865,7 +2018,7 @@ async function handleApi(req, res) {
       return json(res, 200, { ok: true, ...out,
         note: 'AI 只依据你给的事实生成。它不会也不能替你判断材质真伪、授权情况与合规性——那些仍需人工确认。' });
     } catch (e) {
-      etsyLog('Etsy 文案生成失败：' + e.message);
+      aiLog('Etsy 文案生成失败：' + e.message);
       return json(res, 500, { error: 'etsy_ai_failed', note: e.message });
     }
   }
@@ -2038,18 +2191,43 @@ function parseEtsyCopy(content) {
  * 配置留空时自动回落到上面那套（ETSY_AI_API_KEY = AI_API_KEY），
  * 这样「只有一套 key」的老配置依然能工作，向后兼容。
  */
-async function etsyAiGenerate(systemPrompt, userPrompt) {
-  if (!etsyAiConfigured()) {
-    throw new Error('Etsy 文案生成未配置：请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL'
-      + '（留空则复用公众号那套 AI_* 配置）。');
+/* ★ 自动重试：哪些错「重试有用」、哪些「重试也白搭」。
+ * 可重试 = 临时性（429 限流/过载、5xx、超时、网络抖动）—— 等几秒再来通常能过。
+ * 不可重试 = 鉴权失败 / 额度用尽 / 模型名不存在 / 参数错误 —— 重试 N 次结果一样。 */
+function isRetryableAiError(e) {
+  const m = String((e && e.message) || e || '');
+  if (/鉴权失败|额度已用尽|账户额度|余额不足|insufficient_quota|credit_balance|no credits|HTTP 401|HTTP 403/i.test(m)) return false;
+  if (/404|模型名.*不存在|拼写|bad_request|HTTP 400/i.test(m)) return false;
+  return /429|繁忙|限流|overload|rate.?limit|502|503|504|500|超时|timeout|aborted|网络|ECONN|fetch failed|ENOTFOUND|ETIMEDOUT|socket/i.test(m);
+}
+
+/* 带指数退避的重试壳。maxTries 次里每次失败都写进 aiLog，前端能看得到真实过程。 */
+async function withAiRetry(fn, label, opts = {}) {
+  const maxTries = opts.retries ?? 3;
+  let lastErr;
+  for (let attempt = 1; attempt <= maxTries; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (attempt >= maxTries || !isRetryableAiError(e)) throw e;
+      const wait = Math.min(1500 * Math.pow(2, attempt - 1), 12000); // 1.5s → 3s → 6s
+      aiLog(`[重试 ${attempt}/${maxTries - 1}] ${label} 失败：${(e && e.message) || e} → ${Math.round(wait / 1000)}s 后重试`);
+      await new Promise(r => setTimeout(r, wait));
+    }
   }
+  throw lastErr;
+}
+
+/* 单次 chat 调用（无重试）。与 aiGenerate 的差别只有三点：配置源、出口、模型。 */
+async function etsyAiChatOnce(systemPrompt, userPrompt, opts = {}) {
   const r = await etsyAiFetch()(`${ETSY_AI_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ETSY_AI_API_KEY}` },
     body: JSON.stringify({
       model: ETSY_AI_MODEL,
-      temperature: 0.7,
-      max_tokens: 4000,
+      temperature: opts.temperature ?? 0.7,
+      max_tokens: opts.max_tokens ?? 4000,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -2093,6 +2271,14 @@ async function etsyAiGenerate(systemPrompt, userPrompt) {
   }
   if (content.length > 8000) content = content.slice(0, 8000);
   return content;
+}
+
+async function etsyAiGenerate(systemPrompt, userPrompt, opts = {}) {
+  if (!etsyAiConfigured()) {
+    throw new Error('Etsy 文案生成未配置：请在 .env 填 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL'
+      + '（留空则复用公众号那套 AI_* 配置）。');
+  }
+  return withAiRetry(() => etsyAiChatOnce(systemPrompt, userPrompt, opts), '文案生成', opts);
 }
 
 /* ===================== Etsy Open API v3 =====================
