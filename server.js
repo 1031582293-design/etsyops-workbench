@@ -442,6 +442,10 @@ const FEISHU_WEBHOOK = process.env.FEISHU_WEBHOOK || '';
 const FEISHU_SECRET = process.env.FEISHU_SECRET || '';
 const PUBLIC_BASE = process.env.PUBLIC_BASE || 'https://etsyops-workbench.pages.dev/';
 
+// 待发货订单的 60 秒缓存：这接口每次刷新都会打一次 Etsy，
+// 一天 10000 次额度经不起前端反复刷新。60 秒内的重复请求直接复用。
+let _pendingOrders = { at: 0, data: null };
+
 function corsHeaders(res, req) {
   // 回显来源（没有 origin 时放行 *），确保 pages.dev / localhost / 127.0.0.1 / file:// 等任意页面 fetch 都不被浏览器 CORS 拦截
   const origin = req.headers.origin;
@@ -1003,6 +1007,82 @@ async function handleApi(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const r = await mail.recent(MAIL_DATA_DIR, url.searchParams.get('limit'));
     return json(res, 200, r);
+  }
+
+  // 消息中心用：邮件 + 分类 + 处理状态，合成一张待办列表。
+  // 状态是人工点的（邮件里没有「店主回复了没有」这个信息），默认 pending。
+  if (p === '/api/mail/events' && req.method === 'GET') {
+    const url = new URL(req.url, 'http://localhost');
+    const wantStatus = url.searchParams.get('status') || '';
+    const wantType = url.searchParams.get('type') || '';
+    const limit = Number(url.searchParams.get('limit')) || 100;
+    const r = await mail.recent(MAIL_DATA_DIR, limit);
+    const st = await mail.readState(MAIL_DATA_DIR);
+    const items = r.items.map((x) => {
+      const c = mailNotify.classify(x.subject);
+      const rec = mailNotify.parseSubject(x.subject);
+      const s = (st[x.id] && st[x.id].status) || 'pending';
+      const ageMs = x.at ? Date.now() - new Date(x.at).getTime() : 0;
+      return {
+        id: x.id,
+        at: x.at,
+        subject: c.subject || x.subject || '',
+        type: c.type,
+        label: c.label,
+        buyer: rec.buyer || '',
+        shop: rec.shop || '',
+        status: s,
+        ageHours: Math.max(0, Math.floor(ageMs / 3600000)),
+        size: x.size || 0,
+      };
+    }).filter((x) => (!wantStatus || x.status === wantStatus) && (!wantType || x.type === wantType));
+    return json(res, 200, { ok: true, count: items.length, items });
+  }
+
+  if (p === '/api/mail/mark' && req.method === 'POST') {
+    const b = await readJson(req).catch(() => ({}));
+    const r = await mail.markState(MAIL_DATA_DIR, b.id, b.status);
+    return json(res, r.ok ? 200 : 400, r);
+  }
+
+  // ── 真实待发货订单（不靠邮件猜）────────────────────────────────────────
+  // 邮件只能告诉你「有订单」，永远不知道「发没发」。如果拿邮件数当待发货，
+  // 那几个数会一直挂在待办里，变成假指标。这里直接问 Etsy：
+  //   GET /shops/{shop_id}/receipts?was_paid=true&was_shipped=false
+  // 返回的 was_shipped 才是唯一可信来源。
+  if (p === '/api/orders/pending' && req.method === 'GET') {
+    const sid = etsyCurrentShopId();
+    if (!sid) {
+      return json(res, 503, { ok: false, error: 'no_shop', note: '还没选店铺或 Etsy 未授权。' });
+    }
+    if (_pendingOrders.at && Date.now() - _pendingOrders.at < 60 * 1000) {
+      return json(res, 200, { ..._pendingOrders.data, cached: true });
+    }
+    try {
+      const d = await etsyClient.get(`/shops/${sid}/receipts`, {
+        was_paid: 'true', was_shipped: 'false', limit: '100',
+      });
+      const items = (d.results || []).map((r) => ({
+        id: String(r.receipt_id),
+        buyer: r.name || '',
+        total: (Number(r.total_price) || 0) / 100,
+        shipping: (Number(r.total_shipping_cost) || 0) / 100,
+        currency: r.currency_code || 'USD',
+        createdAt: r.created_timestamp ? r.created_timestamp * 1000 : 0,
+        lines: (r.transactions || []).map((t) => ({
+          title: t.title || '',
+          qty: Number(t.quantity) || 1,
+        })),
+      }));
+      const out = { ok: true, shopId: sid, count: items.length, items };
+      _pendingOrders = { at: Date.now(), data: out };
+      return json(res, 200, out);
+    } catch (e) {
+      return json(res, 200, {
+        ok: false, error: 'etsy_api',
+        note: String((e && e.message) || e),
+      });
+    }
   }
 
   // 飞书通知自检：手动发一条卡片，确认 webhook 与签名都对。

@@ -166,3 +166,33 @@ export async function status(dataDir) {
   }
   return { ok: true, count: lines.length, lastAt };
 }
+
+/* ── 事件状态（待处理 / 已打开 / 已处理）────────────────────────────────
+   为什么需要它：邮件里没有「店主回复了没有」这个信息，Etsy 也不会发一封
+   「你已回复」的通知。所以「处理状态」只能由人来点，不能靠邮件推断。
+   存成一个 id -> {status, at} 的小字典，单独放 state.json。 */
+
+function stateFile(dataDir) {
+  return join(dataDir, 'state.json');
+}
+
+export async function readState(dataDir) {
+  const f = stateFile(dataDir);
+  if (!existsSync(f)) return {};
+  try {
+    const d = JSON.parse(await readFile(f, 'utf8'));
+    return (d && typeof d === 'object') ? d : {};
+  } catch { return {}; }
+}
+
+const VALID_STATUS = new Set(['pending', 'opened', 'done', 'ignored']);
+
+export async function markState(dataDir, id, status) {
+  if (!id) return { ok: false, error: 'missing_id' };
+  if (!VALID_STATUS.has(status)) return { ok: false, error: 'bad_status' };
+  const all = await readState(dataDir);
+  all[String(id)] = { status, at: new Date().toISOString() };
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(stateFile(dataDir), JSON.stringify(all, null, 0));
+  return { ok: true, id: String(id), status };
+}

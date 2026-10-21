@@ -133,6 +133,29 @@ await ok('status 计数与最后时间', async () => {
   assert.ok(s.lastAt);
 });
 
+console.log('\n[4] 处理状态（人工标记）');
+await ok('标记已处理后能读回来', async () => {
+  const r = await mail.markState(dir, 'abc123', 'done');
+  assert.equal(r.ok, true);
+  const st = await mail.readState(dir);
+  assert.equal(st.abc123.status, 'done');
+  assert.ok(st.abc123.at);
+});
+await ok('不认识的 id 默认没有状态（前端按 pending 处理）', async () => {
+  const st = await mail.readState(dir);
+  assert.equal(st.never_seen, undefined);
+});
+await ok('非法状态被拒', async () => {
+  const r = await mail.markState(dir, 'abc123', 'whatever');
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'bad_status');
+});
+await ok('缺 id 被拒', async () => {
+  const r = await mail.markState(dir, '', 'done');
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'missing_id');
+});
+
 await rm(dir, { recursive: true, force: true });
 
 console.log(`\n结果：${pass} 项通过，${failed} 项失败`);
