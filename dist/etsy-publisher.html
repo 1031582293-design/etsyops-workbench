@@ -169,7 +169,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">a13117d</span>
+  <span class="vtag" id="verTag">44ff46c</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -188,8 +188,7 @@
     <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">AI 生成</div><div class="d">文案 + 场景图</div></div></div>
     <div class="step-chip" data-step="4"><div class="num">4</div><div><div class="t">类目与属性</div><div class="d">换真实 taxonomy_id</div></div></div>
     <div class="step-chip" data-step="5"><div class="num">5</div><div><div class="t">商品资料</div><div class="d">详情 / 价格 / 库存 / 变体</div></div></div>
-    <div class="step-chip" data-step="6"><div class="num">6</div><div><div class="t">AI 上架前校验</div><div class="d">事实对照审核</div></div></div>
-    <div class="step-chip" data-step="7"><div class="num">7</div><div><div class="t">写入与发布</div><div class="d">草稿 → 人工确认</div></div></div>
+    <div class="step-chip" data-step="6"><div class="num">6</div><div><div class="t">写入与发布</div><div class="d">批量草稿 → 人工确认</div></div></div>
   </div>
 
   <div class="itemnav" id="itemNav" style="display:none;align-items:center;gap:10px;padding:10px 14px;margin:0 0 12px;border:1px solid var(--border);border-radius:10px;background:rgba(127,127,127,.06)">
@@ -365,16 +364,7 @@
 
       <section class="panel step hidden" data-step="5">
         <h3>商品资料</h3>
-        <div class="ph-sub">这一屏的内容全部来自你的事实资料卡。AI 不能猜材质、认证、价格与交期。</div>
-
-        <div class="subhead" style="margin-top:4px">上架前核对
-          <span class="hint">自动项由程序检测；人工项必须你自己确认。逐项打勾再建草稿</span>
-        </div>
-        <div id="checkList"></div>
-        <div class="btnrow" style="margin-top:8px">
-          <button class="btn sm" id="btnCheckAll">重新检测自动项</button>
-          <span class="hint" style="align-self:center" id="checkSummary"></span>
-        </div>
+        <div class="ph-sub">这一屏的内容全部来自你的事实资料卡。AI 不能猜材质、认证、价格与交期。右侧「上架前核对 + AI 校验」同步显示。</div>
 
         <div class="row2" style="margin-bottom:6px">
           <div>
@@ -541,7 +531,7 @@
 
         <div class="btnrow">
           <button class="btn" id="btnValidate">本地校验（不消耗 Etsy 额度）</button>
-          <button class="btn" data-goto="6">下一步：AI 上架前校验 →</button>
+          <button class="btn" data-goto="6">下一步：写入 Etsy 草稿 →</button>
         </div>
         <div id="msg3" class="msg"></div>
       
@@ -571,28 +561,16 @@
       </section>
 
       <section class="panel step hidden" data-step="6">
-        <h3>AI 上架前校验</h3>
-        <div class="ph-sub">对照「事实字段」让 AI 逐项交叉审核标题、描述、标签、变体与图片是否一致。发现冲突会列「问题位置 / 草稿说法 / 对应事实 / 风险 / 修正建议」。</div>
-        <div class="btnrow" style="margin-top:12px">
-          <button class="btn primary" id="btnPrecheck">开始 AI 上架前校验（全部条目）</button>
-          <span class="hint" style="align-self:center">批量校验所有已生成文案的条目；进入本步自动开跑</span>
-        </div>
-        <div id="msgPrecheck" class="msg"></div>
-        <div id="precheckBox"></div>
-        <div class="btnrow" style="margin-top:16px">
-          <button class="btn" data-goto="7">下一步：写入 Etsy →</button>
-        </div>
-      </section>
-
-      <section class="panel step hidden" data-step="7">
         <h3>写入 Etsy 草稿</h3>
-        <div class="ph-sub">这一步只建草稿。Etsy 上架费 $0.20 只在真正发布时产生。</div>
+        <div class="ph-sub">批量把所有已生成文案的条目写成草稿。这一步不花钱；Etsy 上架费 $0.20 只在真正发布时产生。</div>
         <div id="msg5" class="msg"></div>
         <div class="btnrow">
-          <button class="btn primary" id="btnDraft">写入 Etsy 草稿</button>
+          <button class="btn primary" id="btnDraftAll">批量写入草稿（全部条目）</button>
+          <button class="btn" id="btnDraft">写入当前条目草稿</button>
           <button class="btn" id="btnPublish" disabled>确认发布（产生上架费）</button>
           <button class="btn ghost" id="btnDeact" disabled>下架这个链接</button>
         </div>
+        <div id="draftAllBox" style="margin-top:14px"></div>
         <div id="draftBox" class="hidden" style="margin-top:18px">
           <table class="kv">
             <tr><td>listing_id</td><td id="dId">—</td></tr>
@@ -624,15 +602,23 @@
       </div>
 
       <div class="panel">
-        <h3>程序无法替你判断的事</h3>
-        <div class="ph-sub">SOP 第 19 节：校验通过不等于合规</div>
-        <div style="font-size:12.5px;line-height:2;color:var(--text-dim)">
-          <div>□ 材质与认证有事实依据</div>
-          <div>□ 商品符合 Etsy 创意标准</div>
-          <div>□ 图片权利与生产合作方角色已核实</div>
-          <div>□ 每款总价与利润已按成本核算</div>
-          <div>□ 配送承诺与处理时间真的能做到</div>
+        <h3>上架前核对</h3>
+        <div class="ph-sub">自动项由程序检测；人工项必须你自己确认。逐项打勾再建草稿</div>
+        <div id="checkList"></div>
+        <div class="btnrow" style="margin-top:8px">
+          <button class="btn sm" id="btnCheckAll">重新检测自动项</button>
+          <span class="hint" style="align-self:center" id="checkSummary"></span>
         </div>
+      </div>
+
+      <div class="panel">
+        <h3>AI 上架前校验</h3>
+        <div class="ph-sub">对照事实字段审核完整草稿（进入商品资料页自动批量跑）</div>
+        <div class="btnrow" style="margin-top:8px">
+          <button class="btn sm" id="btnPrecheck">开始 / 重跑校验</button>
+        </div>
+        <div id="msgPrecheck" class="msg"></div>
+        <div id="precheckBox"></div>
       </div>
 
       <div class="panel">
@@ -869,8 +855,8 @@ function goto(n){
   if (n === 2) startKwBatch();
   if (n === 3) startAiBatch(true);
   if (n === 4) autoPickTaxonomy();   // 进类目页：条目有「类目关键词」就自动搜 + 选最末级叶子
-  if (n === 5) renderChecklist();   // 进入商品资料页时重算核对清单
-  if (n === 6) startPrecheck();     // 进校验页：自动批量校验已生成文案的条目
+  if (n === 5){ renderChecklist(); startPrecheck(); }   // 商品资料页：右侧核对清单 + 自动批量 AI 校验
+  // n === 6 写入与发布：无需自动动作
   document.querySelectorAll('.step').forEach(s => s.classList.toggle('hidden', Number(s.dataset.step) !== n));
   document.querySelectorAll('.step-chip').forEach(c => c.classList.toggle('active', Number(c.dataset.step) === n));
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1654,7 +1640,7 @@ async function startPrecheck(){
     done++;
     box.innerHTML = html;   // 每条完成即刷新，不用等整批
   }
-  btn.disabled = false; btn.textContent = '开始 AI 上架前校验（全部条目）';
+  btn.disabled = false; btn.textContent = '开始 / 重跑校验';
   PRECHECK_BUSY = false;
   showMsg(m, failN ? 'warn' : 'ok',
     '批量校验完成：通过 <b>' + okN + '</b> 条，有警告 <b>' + warnN + '</b> 条，不可发布 <b>' + failN + '</b> 条。'
@@ -1761,8 +1747,64 @@ document.getElementById('btnDraft').addEventListener('click', async () => {
     showMsg(m, 'err', esc(e.message));
     logErr(e);
   } finally {
-    btn.disabled = false; btn.textContent = '写入 Etsy 草稿';
+    btn.disabled = false; btn.textContent = '写入当前条目草稿';
   }
+});
+
+/* ---------- 批量建草稿（SOP 06）：遍历所有已生成文案的条目，逐个写草稿 ----------
+ * 复用单条 collectForm：先 switchToItem 切到该条目（填 DOM + 图片），
+ * collectForm 读 DOM 得到该条目的完整 draft body，再调 /api/etsy/draft。
+ * 只建草稿、不发布（发布才收 $0.20）。 */
+document.getElementById('btnDraftAll').addEventListener('click', async () => {
+  const m = document.getElementById('msg5');
+  const btn = document.getElementById('btnDraftAll');
+  const box = document.getElementById('draftAllBox');
+  const todo = IMPORT_BATCH.filter(it => {
+    const f = it._form || {};
+    return String((f.title || it.title || '')).trim();
+  });
+  if (!todo.length){
+    showMsg(m, 'warn', '没有任何条目已生成文案（标题为空）。先去第 3 步生成文案。');
+    return;
+  }
+  btn.disabled = true;
+  let ok = 0, fail = 0;
+  const rows = [];
+  const render = () => {
+    box.innerHTML = '<div style="font-size:12.5px;color:var(--text-faint);margin-bottom:6px">批量建草稿 '
+      + (ok + fail) + ' / ' + todo.length + '</div>'
+      + rows.map(r => '<div style="font-size:12.5px;margin:3px 0">'
+        + (r.ok
+            ? '<span style="color:var(--good)">✓</span> ' + esc(r.name) + ' → listing ' + r.id
+            : '<span style="color:var(--bad)">✗</span> ' + esc(r.name) + '：' + esc(r.err))
+        + '</div>').join('');
+  };
+  render();
+  for (const it of todo){
+    const idx = IMPORT_BATCH.indexOf(it);
+    switchToItem(idx);   // 填 DOM（含 _form 编辑值）
+    await new Promise(r => setTimeout(r, 180));   // 等 setPickedFiles 异步读图完成
+    saveCurrentForm();   // 确保 _form 最新
+    const body = collectForm();
+    body.images = IMAGES.map((im, i) => ({ filename: im.filename || im.name, data: im.data, rank: i + 1 }));
+    const name = it.sku || ('第 ' + it._row + ' 行');
+    try {
+      const d = await apiCall('/api/etsy/draft', { body, timeout: 180000, label: '批量建草稿 ' + name });
+      rows.push({ name: name, ok: true, id: d.listing_id });
+      ok++;
+      log('★草稿已建 ' + name + ' → listing ' + d.listing_id, 's');
+    } catch(e){
+      rows.push({ name: name, ok: false, err: e.message || String(e) });
+      fail++;
+      log('建草稿失败 ' + name + '：' + (e.message || e), 'e');
+    }
+    render();
+  }
+  btn.disabled = false;
+  showMsg(m, fail ? 'warn' : 'ok',
+    '批量建草稿完成：成功 <b>' + ok + '</b> 条' + (fail ? '，失败 <b>' + fail + '</b> 条' : '') + '。'
+    + '<br><b>全部是草稿，未发布</b> —— 到 Shop Manager 核对后手动发布（发布才收 $0.20）。');
+  loadQuota();
 });
 
 document.getElementById('btnPublish').addEventListener('click', async () => {
