@@ -169,7 +169,7 @@
   </div>
   <span class="badge">Open API v3</span>
   <div class="spacer"></div>
-  <span class="vtag" id="verTag">44ff46c</span>
+  <span class="vtag" id="verTag">48270f7</span>
   <a href="./index.html" class="btn sm ghost">← 回总览</a>
 </div>
 
@@ -188,7 +188,7 @@
     <div class="step-chip" data-step="3"><div class="num">3</div><div><div class="t">AI 生成</div><div class="d">文案 + 场景图</div></div></div>
     <div class="step-chip" data-step="4"><div class="num">4</div><div><div class="t">类目与属性</div><div class="d">换真实 taxonomy_id</div></div></div>
     <div class="step-chip" data-step="5"><div class="num">5</div><div><div class="t">商品资料</div><div class="d">详情 / 价格 / 库存 / 变体</div></div></div>
-    <div class="step-chip" data-step="6"><div class="num">6</div><div><div class="t">写入与发布</div><div class="d">批量草稿 → 人工确认</div></div></div>
+    <div class="step-chip" data-step="6"><div class="num">6</div><div><div class="t">AI 校验 + 写入</div><div class="d">事实审核 → 批量草稿</div></div></div>
   </div>
 
   <div class="itemnav" id="itemNav" style="display:none;align-items:center;gap:10px;padding:10px 14px;margin:0 0 12px;border:1px solid var(--border);border-radius:10px;background:rgba(127,127,127,.06)">
@@ -531,7 +531,7 @@
 
         <div class="btnrow">
           <button class="btn" id="btnValidate">本地校验（不消耗 Etsy 额度）</button>
-          <button class="btn" data-goto="6">下一步：写入 Etsy 草稿 →</button>
+          <button class="btn" data-goto="6">下一步：AI 上架前校验 →</button>
         </div>
         <div id="msg3" class="msg"></div>
       
@@ -561,8 +561,15 @@
       </section>
 
       <section class="panel step hidden" data-step="6">
-        <h3>写入 Etsy 草稿</h3>
-        <div class="ph-sub">批量把所有已生成文案的条目写成草稿。这一步不花钱；Etsy 上架费 $0.20 只在真正发布时产生。</div>
+        <h3>AI 上架前校验 → 写入 Etsy</h3>
+        <div class="ph-sub">进入本步自动批量校验所有已生成文案的条目；核对完直接在下方写入 Etsy 草稿（不花钱，发布才收 $0.20）。</div>
+        <div class="btnrow" style="margin-top:4px">
+          <button class="btn primary" id="btnPrecheck">开始 / 重跑校验（全部条目）</button>
+        </div>
+        <div id="msgPrecheck" class="msg"></div>
+        <div id="precheckBox"></div>
+
+        <div class="subhead" style="margin-top:22px">写入 Etsy 草稿</div>
         <div id="msg5" class="msg"></div>
         <div class="btnrow">
           <button class="btn primary" id="btnDraftAll">批量写入草稿（全部条目）</button>
@@ -609,16 +616,6 @@
           <button class="btn sm" id="btnCheckAll">重新检测自动项</button>
           <span class="hint" style="align-self:center" id="checkSummary"></span>
         </div>
-      </div>
-
-      <div class="panel">
-        <h3>AI 上架前校验</h3>
-        <div class="ph-sub">对照事实字段审核完整草稿（进入商品资料页自动批量跑）</div>
-        <div class="btnrow" style="margin-top:8px">
-          <button class="btn sm" id="btnPrecheck">开始 / 重跑校验</button>
-        </div>
-        <div id="msgPrecheck" class="msg"></div>
-        <div id="precheckBox"></div>
       </div>
 
       <div class="panel">
@@ -855,8 +852,8 @@ function goto(n){
   if (n === 2) startKwBatch();
   if (n === 3) startAiBatch(true);
   if (n === 4) autoPickTaxonomy();   // 进类目页：条目有「类目关键词」就自动搜 + 选最末级叶子
-  if (n === 5){ renderChecklist(); startPrecheck(); }   // 商品资料页：右侧核对清单 + 自动批量 AI 校验
-  // n === 6 写入与发布：无需自动动作
+  if (n === 5) renderChecklist();   // 商品资料页：右侧核对清单重算
+  if (n === 6) startPrecheck();     // 校验+写入页：自动批量校验已生成文案的条目
   document.querySelectorAll('.step').forEach(s => s.classList.toggle('hidden', Number(s.dataset.step) !== n));
   document.querySelectorAll('.step-chip').forEach(c => c.classList.toggle('active', Number(c.dataset.step) === n));
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2029,6 +2026,14 @@ function switchToItem(idx){
   renderItemNav();
   renderImportList();
   renderChecklist();
+  // ★ 切换条目后，若正在类目页（第 4 步）且新条目有类目关键词、还没选类目，
+  //   重新自动搜 —— 否则切换后类目区还是上一条的结果/「请先填关键词」提示，
+  //   用户会以为自动搜没做。搜索框同步为当前条目的关键词。
+  if (CURRENT_STEP === 4 && it.taxonomy_keyword && !PICKED_TAX){
+    const qbox = document.getElementById('taxQ');
+    if (qbox) qbox.value = it.taxonomy_keyword;
+    autoPickTaxonomy();
+  }
   log('切换到条目 ' + (idx + 1) + '/' + IMPORT_BATCH.length + '：' + (it.sku || ''));
 }
 
@@ -2815,6 +2820,25 @@ function pollAiBatch(jobId, total) {
           slot.cn = x.cn_check || '';
           slot.scene = x.scene || null;
           slot.error = x.error || '';
+          // ★ 成功结果自动写进条目 _form（原来要点「设为当前条目」才写入），
+          //   第 5 步表单由此自动带出 AI 文案，不用逐条手点。
+          const it = IMPORT_BATCH[slot.i];
+          if (it && x.title){
+            it._form = Object.assign({}, it._form || {}, {
+              title: x.title, description: x.description || '', tags: x.tags || [],
+            });
+          }
+        });
+      }
+      // ★ 失败条目在后端进 failures 而非 results（429 过载等）—— 之前不处理它，
+      //   失败条目永远显示「待生成」，用户以为卡住了。现在如实显示「失败」，
+      //   点该条「换一版」即可单条重跑（429 是临时性的，重试通常能过）。
+      if (Array.isArray(r.failures)) {
+        r.failures.forEach((f) => {
+          const slot = AI_RESULTS[f.index];
+          if (!slot || slot.status === 'done' || slot.status === 'skip') return;
+          slot.status = 'error';
+          slot.error = f.reason || '生成失败';
         });
       }
       renderAiList();
