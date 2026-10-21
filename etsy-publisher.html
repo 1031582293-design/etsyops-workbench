@@ -2257,6 +2257,25 @@ function renderItemNav(){
   document.getElementById('btnNextItem').disabled = CURRENT_IDX >= IMPORT_BATCH.length - 1;
 }
 
+/** 把 AI 生成的文案合进条目 _form；若是当前条目且输入框为空，同步刷新 DOM。
+ *  三处统一走这里：批量轮询回填 / 单条「换一版」/「设为当前条目」。
+ *  DOM 只在为空时填 —— 用户正在手改的值绝不能被 AI 静默盖掉。 */
+function applyAiCopyToItem(it, x){
+  if (!it || !x || !x.title) return false;
+  it._form = Object.assign({}, it._form || {}, {
+    title: x.title, description: x.description || '', tags: (x.tags || []).slice(),
+  });
+  if (IMPORT_BATCH[CURRENT_IDX] === it){
+    const ft = document.getElementById('fTitle');
+    const fd = document.getElementById('fDesc');
+    const fg = document.getElementById('fTags');
+    if (ft && !ft.value.trim()) ft.value = x.title;
+    if (fd && !fd.value.trim()) fd.value = x.description || '';
+    if (fg && !fg.value.trim()) fg.value = (x.tags || []).join('\n');
+  }
+  return true;
+}
+
 /** 把当前表单存回当前条目（类目与变体也一起存，否则切回来会丢） */
 function saveCurrentForm(){
   const it = IMPORT_BATCH[CURRENT_IDX];
@@ -2264,6 +2283,14 @@ function saveCurrentForm(){
   try {
     if (typeof collectImportRowForm !== 'function') return;
     const f = collectImportRowForm();
+    // ★ DOM 为空的文案字段不覆盖 _form 已有值：
+    //   批量生成把 AI 文案写进了 _form，但当前条目的 DOM 可能还是旧值/空值，
+    //   切条目时这里若整体替换，就会把刚生成的文案抹掉 ——
+    //   「有的条目写入了、有的没写入」的元凶，丢的恰好是生成时停留的那条。
+    const prev = it._form || {};
+    if (!String(f.title || '').trim() && String(prev.title || '').trim()) f.title = prev.title;
+    if (!String(f.description || '').trim() && String(prev.description || '').trim()) f.description = prev.description;
+    if ((!Array.isArray(f.tags) || !f.tags.length) && Array.isArray(prev.tags) && prev.tags.length) f.tags = prev.tags.slice();
     f._vardims = JSON.parse(JSON.stringify(VARDIMS || []));
     f._varrows = JSON.parse(JSON.stringify(VARROWS || []));
     f._attrs = JSON.parse(JSON.stringify(ATTRS || []));
@@ -3109,12 +3136,10 @@ function pollAiBatch(jobId, total) {
           if (x.scene && x.scene.error) log('场景图失败（' + (x.sku || '') + '）：' + x.scene.error, 'e');
           // ★ 成功结果自动写进条目 _form（原来要点「设为当前条目」才写入），
           //   第 5 步表单由此自动带出 AI 文案，不用逐条手点。
+          //   走 applyAiCopyToItem：当前条目会同步刷 DOM，避免停留条目的表单
+          //   还是旧值、切走时又被 saveCurrentForm 覆盖回去。
           const it = IMPORT_BATCH[slot.i];
-          if (it && x.title){
-            it._form = Object.assign({}, it._form || {}, {
-              title: x.title, description: x.description || '', tags: x.tags || [],
-            });
-          }
+          if (it) applyAiCopyToItem(it, x);
         });
       }
       // ★ 失败条目在后端进 failures 而非 results（429 过载等）—— 之前不处理它，
@@ -3268,9 +3293,7 @@ function renderAiList() {
       if (!it) return;
       // ★ 先把 AI 结果写进该条目的 _form，再切过去 ——
       //   这样它不会覆盖掉你在同一条上已经手改的其它字段。
-      it._form = Object.assign({}, it._form || {}, {
-        title: x.title || '', description: x.description || '', tags: x.tags || [],
-      });
+      applyAiCopyToItem(it, x);
       switchToItem(idx);
       saveCurrentForm();
       renderItemNav();
@@ -3302,6 +3325,9 @@ function renderAiList() {
         });
         x.title = r.title || ''; x.description = r.description || '';
         x.tags = r.tags || []; x.cn = r.cn_check || ''; x.status = 'done'; x.error = '';
+        // ★ 换一版的结果也要写进条目 _form（+当前条目刷 DOM）——
+        //   之前只更新了结果卡片，第 5 步表单还挂着旧文案，用户以为「没写入」。
+        applyAiCopyToItem(it, x);
         const warn = [];
         if (x.title.length > 140) warn.push('标题超 140 字符');
         if (x.tags.length > 13) warn.push('标签超 13 个');
