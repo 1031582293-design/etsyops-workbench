@@ -49,7 +49,10 @@ process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e 
    当前用 JSON 文件（零依赖、够用、可直接 human-readable 排查）；
    接口设计成 CRUD 形状，将来要换 SQLite 只需替换本层实现，上层调用不用改。
    数据落在 server.js 同级的 data/ 目录下。*/
-const DATA_DIR = join(ROOT, 'data');
+// 数据目录可用 ETSY_DATA_DIR 覆盖 —— 仅给自测脚本用，避免测试把伪造凭证
+// 写进真实 data/（2026-10-21 事故：selftest.category 把 testuser 假账号写进了
+// 真实 etsy-accounts.json，覆盖掉真授权，全店 403「not a Bearer token」）。
+const DATA_DIR = process.env.ETSY_DATA_DIR ? resolve(process.env.ETSY_DATA_DIR) : join(ROOT, 'data');
 const RUNS_FILE = join(DATA_DIR, 'runs.json');
 const RUNS_MAX = 500;                 // 最多保留 500 条，超出丢最旧的
 

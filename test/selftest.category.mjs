@@ -18,8 +18,12 @@ import path from 'node:path';
 const ROOT = process.cwd();
 
 // ---------- 伪造 Etsy 授权（数据文件，避免 refresh token 网络调用） ----------
-const DATA_DIR = path.join(ROOT, 'data');
-fs.mkdirSync(DATA_DIR, { recursive: true });
+// ⚠️ 2026-10-21 事故：这里曾经直接写进仓库真实 data/etsy-accounts.json，
+// 把 testuser 假账号覆盖到真实授权上，线上全店 403「not a Bearer token」。
+// 现在 server.js 支持 ETSY_DATA_DIR 覆盖数据目录 —— 测试一律写进临时目录。
+import os from 'node:os';
+const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'etsy-selftest-data-'));
+process.env.ETSY_DATA_DIR = DATA_DIR;   // 必须 import server 前设置
 fs.writeFileSync(path.join(DATA_DIR, 'etsy-accounts.json'), JSON.stringify({
   version: 1,
   activeUserId: 'testuser',
@@ -41,8 +45,11 @@ process.env.ETSY_AI_MODEL = 'mock-model';
 process.env.ETSY_KEYSTRING = 'test-keystring';
 process.env.ETSY_SHARED_SECRET = 'test-secret';
 process.env.ETSY_REDIRECT_URI = 'http://127.0.0.1:3000/api/etsy/callback';
-delete process.env.ETSY_AI_PROXY;
-delete process.env.ETSY_PROXY;
+// ★ 用空字符串而不是 delete：loadDotEnv 只跳过「已存在的 key」，
+//   delete 掉会让真实 .env 里的代理配置在 import 时回填，AI 请求就会走真实网络
+//   （2026-10-21 排查实锤：mock fetch 一次都没被调到，就是这个原因）。
+process.env.ETSY_AI_PROXY = '';
+process.env.ETSY_PROXY = '';
 
 // ---------- mock fetch ----------
 let chatCalls = 0;
