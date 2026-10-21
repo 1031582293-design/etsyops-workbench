@@ -661,7 +661,13 @@ async function apiCallOnce(path, opts){
     { 'Accept-Encoding': 'identity' }, opts.headers || {});
   const r = await fetchT(API_BASE + path, ms, {
     method: opts.method || (opts.body ? 'POST' : 'GET'),
-    headers, body: opts.body ? JSON.stringify(opts.body) : undefined,
+    // ★ body 允许传「对象」（这里 stringify 一次）或「已是字符串」（原样发，不再编码）。
+    // 之前无条件 JSON.stringify(opts.body)，而 startAiBatch / copy 等几处传的是
+    // JSON.stringify(...) 的字符串 → 被二次编码成 `"\"{...}\""`，后端 readJson 解析成
+    // string 而非 object，batch 返回 400「items 为空」→ 批量文案永远「待生成」。
+    headers, body: (opts.body == null)
+      ? undefined
+      : (typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body)),
   });
   const ct = r.headers.get('content-type') || '';
   let txt = '';
