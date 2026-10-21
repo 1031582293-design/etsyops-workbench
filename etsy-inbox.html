@@ -55,6 +55,7 @@
   .banner { background: #FCEBEB; border: 1px solid #F7C1C1; color: #791F1F; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 14px; }
   .low { margin-top: 24px; }
   .low summary { cursor: pointer; color: #6b6a65; font-size: 13px; }
+  .hint { font-size: 12px; color: #8a8880; margin: 0 0 12px; }
   @media (max-width: 640px) {
     .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
   }
@@ -80,6 +81,8 @@
     <div class="stat"><div class="k">待发货订单</div><div class="v" id="s-ship">–</div></div>
     <div class="stat"><div class="k">今日新订单</div><div class="v" id="s-today">–</div></div>
   </section>
+
+  <p class="hint">这里只做提醒。回复买家、发货等操作请到 Etsy 后台完成，工作台不代办。</p>
 
   <nav class="filters" id="filters">
     <button data-f="todo" class="on">待处理</button>
@@ -142,12 +145,6 @@
     var title = e.buyer || e.subject || '(无主题)';
     var sub = e.buyer && e.shop ? ('· ' + e.shop) : '';
     var summary = e.buyer ? e.subject : '';
-    var openLabel = e.type === 'message' ? '打开对话' : '打开邮件';
-    var btns = '';
-    if (e.link) {
-      btns += '<button data-open="' + esc(e.id) + '">' + openLabel + '</button>';
-    }
-    btns += '<button data-done="' + esc(e.id) + '">标记已处理</button>';
     return '<article class="card">'
       + '<div class="row">'
       + '<span class="tag ' + typeClass(e.type) + '">' + esc(e.label) + '</span>'
@@ -156,7 +153,9 @@
       + '<span class="age ' + ageClass(e.ageHours) + '">' + ageText(e.ageHours) + '</span>'
       + '</div>'
       + (summary ? '<p class="summary">' + esc(summary) + '</p>' : '')
-      + '<div class="actions">' + btns + '</div>'
+      + '<div class="actions">'
+      + '<button data-done="' + esc(e.id) + '">标记已处理</button>'
+      + '</div>'
       + '</article>';
   }
 
@@ -274,14 +273,6 @@
   });
 
   document.addEventListener('click', function (ev) {
-    var openBtn = ev.target.closest('button[data-open]');
-    if (openBtn) {
-      var id = openBtn.getAttribute('data-open');
-      var it = S.events.filter(function (e) { return e.id === id; })[0];
-      if (it && it.link) window.open(it.link, '_blank', 'noopener');
-      if (it && it.status === 'pending') mark(id, 'opened');
-      return;
-    }
     var doneBtn = ev.target.closest('button[data-done]');
     if (doneBtn) {
       mark(doneBtn.getAttribute('data-done'), 'done');
