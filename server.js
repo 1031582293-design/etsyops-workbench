@@ -11,6 +11,7 @@ import { hostname as osHostname } from 'node:os';
 import { execSync } from 'node:child_process';
 import * as etsy from './etsy-api.js';
 import * as everbee from './etsy-everbee.js';
+import * as selection from './etsy-selection.js';
 import * as mail from './mail-ingest.js';
 import * as mailNotify from './mail-notify.js';
 
@@ -196,6 +197,21 @@ function aiLog(...a) {
 const EVERBEE_MCP_FILE = join(DATA_DIR, 'everbee-mcp.json');
 const everbeeLog = (...a) => console.log('[everbee]', ...a);
 const everbeeClient = everbee.createEverbee({ storeFile: EVERBEE_MCP_FILE, log: everbeeLog });
+
+/* ---------- 选品数字员工（复用 everbeeClient + Etsy AI 文案那套配置） ----------
+   报告落 data/selection-reports.json（data/ 已 gitignore，两台各记各的）。
+   一次完整跑约 1~3 分钟（EverBee ~10 次调用 + AI 1 次）→ 必须走 job 提交+轮询，
+   不能挂在一条连接上（Cloudflare Tunnel 会掐长连接，同 AI 生稿的教训）。 */
+const SELECTION_REPORTS_FILE = join(DATA_DIR, 'selection-reports.json');
+const selectionLog = (...a) => console.log('[selection]', ...a);
+const selectionAgent = selection.createSelectionAgent({
+  everbee: everbeeClient,
+  ai: (sys, usr) => etsyAiGenerate(sys, usr, { temperature: 0.6, max_tokens: 2000 }),
+  log: selectionLog,
+  storeFile: SELECTION_REPORTS_FILE,
+});
+const _selectionJobs = new Map(); // jobId -> { id, status, stage, pct, message, result, startedAt, finishedAt }
+let _selectionJobSeq = 0;
 
 /* 回调地址从请求头推导：本机 http://127.0.0.1:3000，线上 https://api.xxx.com。
    为什么不写死 .env：同一份代码要在操作者 Windows（隧道域名）和学员本机（localhost）都能用。 */
@@ -2488,6 +2504,75 @@ async function handleApi(req, res) {
   if (p === '/api/everbee/revoke' && req.method === 'POST') {
     try { return json(res, 200, Object.assign({ ok: true }, everbeeClient.revokeLocal())); }
     catch (e) { return json(res, 500, { ok: false, note: String((e && e.message) || e) }); }
+  }
+
+  /* ---------- 选品数字员工：提交 job → 轮询 → 取报告 ----------
+     全流程 1~3 分钟，禁止长连接（同 AI 生稿：Cloudflare Tunnel 掐长连接的教训）。 */
+  if (p === '/api/selection/run' && req.method === 'POST') {
+    let body;
+    try { body = await readJson(req); }
+    catch (e) { return json(res, 400, { ok: false, error: 'bad_json', note: String((e && e.message) || e) }); }
+    const seed = String(body.seed || '').trim();
+    if (!seed) return json(res, 400, { ok: false, error: 'no_seed', note: '词根（seed）不能为空，例如 ceramic mug。' });
+    const overrides = (body.overrides && typeof body.overrides === 'object') ? body.overrides : {};
+    // 清理并发上限：同时只允许 2 个选品任务在跑（EverBee 额度 + 限速都扛不住更多）
+    let running = 0;
+    for (const j of _selectionJobs.values()) if (j.status === 'running') running++;
+    if (running >= 2) return json(res, 429, { ok: false, error: 'too_many_jobs', note: '已有 2 个选品任务在跑，等它们完成再提交。' });
+    const jobId = 'seljob-' + (++_selectionJobSeq) + '-' + Date.now().toString(36);
+    const job = { id: jobId, status: 'running', stage: 'stage1', pct: 0, message: '排队中…', result: null, startedAt: Date.now(), finishedAt: null };
+    _selectionJobs.set(jobId, job);
+    // 清理 2 小时前的旧 job，防 Map 无限涨
+    const cutoff = Date.now() - 2 * 3600 * 1000;
+    for (const [k, v] of _selectionJobs) if ((v.finishedAt || v.startedAt) < cutoff) _selectionJobs.delete(k);
+
+    const onProgress = (stage, pct, message) => {
+      job.stage = stage; job.pct = pct; job.message = message;
+    };
+    selectionAgent.run(seed, overrides, onProgress).then((result) => {
+      job.status = result.status === 'done' ? 'done' : result.status; // done / need_keywords / need_relax
+      job.result = result;
+      job.finishedAt = Date.now();
+      if (result.status === 'error') { job.status = 'error'; job.message = result.message; }
+    }).catch((e) => {
+      job.status = 'error'; job.message = String((e && e.message) || e); job.finishedAt = Date.now();
+    });
+    return json(res, 200, { ok: true, jobId, note: '任务已提交，用 GET /api/selection/job?id=' + jobId + ' 每 3 秒轮询。' });
+  }
+
+  if (p === '/api/selection/job' && req.method === 'GET') {
+    const id = new URL(req.url, 'http://localhost').searchParams.get('id') || '';
+    const job = _selectionJobs.get(id);
+    if (!job) return json(res, 404, { ok: false, error: 'job_not_found', note: '任务不存在或后端已重启（任务在内存里，重启即丢，报告不受影响）。' });
+    return json(res, 200, {
+      ok: true,
+      id: job.id, status: job.status, stage: job.stage, pct: job.pct, message: job.message,
+      startedAt: job.startedAt, finishedAt: job.finishedAt,
+      result: job.result,
+    });
+  }
+
+  if (p === '/api/selection/reports' && req.method === 'GET') {
+    try { return json(res, 200, { ok: true, reports: selectionAgent.reportsList() }); }
+    catch (e) { return json(res, 500, { ok: false, error: 'selection_reports_failed', note: String((e && e.message) || e) }); }
+  }
+
+  if (p === '/api/selection/report' && req.method === 'GET') {
+    const id = new URL(req.url, 'http://localhost').searchParams.get('id') || '';
+    const r = selectionAgent.reportGet(id);
+    if (!r) return json(res, 404, { ok: false, error: 'report_not_found', note: '报告不存在（id=' + id + '）。' });
+    return json(res, 200, { ok: true, report: r });
+  }
+
+  if (p === '/api/selection/report/delete' && req.method === 'POST') {
+    let body;
+    try { body = await readJson(req); }
+    catch (e) { return json(res, 400, { ok: false, error: 'bad_json', note: String((e && e.message) || e) }); }
+    const id = String(body.id || '');
+    if (!id) return json(res, 400, { ok: false, error: 'no_id', note: '缺少报告 id。' });
+    const okDel = selectionAgent.reportDelete(id);
+    if (!okDel) return json(res, 404, { ok: false, error: 'report_not_found', note: '报告不存在（id=' + id + '）。' });
+    return json(res, 200, { ok: true, deleted: id });
   }
 
   // 授权状态自检：不消耗任何 Etsy 额度，前端首屏就调它决定显示哪一屏

@@ -5,16 +5,18 @@ export const EMPLOYEES = [
   {
     id: 'scout', name: '选品情报员', role: 'Product Scout', cat: '电商', icon: '🔭',
     color: 'linear-gradient(135deg,#7c5cff,#22d3ee)', status: 'run',
-    tagline: '实时追踪 Etsy 热搜、竞品与社媒趋势，输出高潜力选品清单与利润测算。',
+    tagline: '词根进、报告出：蓝海词池 → 批量海选 → 店铺交叉核验 → S/A/B/C 评级 + 差异化建议。',
+    tool: 'selection-scout.html',
     nodes: [
-      { t: '趋势信号抓取', skill: 'Trend Radar', sop: '采集 Etsy 搜索上升词 + Pinterest/Google 趋势', d: '聚合多平台上升关键词，识别季节性 & 长尾机会。', out: '上升词榜单 TOP50' },
-      { t: '竞品店铺透视', skill: 'Competitor Lens', sop: '分析头部竞品定价、评价、上新节奏', d: '拆解 3 个标杆店铺的爆款结构与流量来源。', out: '竞品结构报告' },
-      { t: '利润测算建模', skill: 'Margin Calc', sop: '综合采购/运费/平台佣金/广告估算净利', d: '按重量与类目自动估算净利与安全定价区间。', out: '选品利润模型' },
-      { t: '选品建议交付', skill: 'Decision Engine', sop: '按潜力/竞争/利润三维打分排序', d: '生成可一键转交「Listing 优化师」的选品包。', out: '选品决策清单' }
+      { t: '词根扩词', skill: 'Keyword Pool', sop: 'EverBee 关键词数据筛蓝海词（搜索量/竞争/评分）', d: '蓝海词 ≥8 才继续，不足先换词根或放宽阈值。', out: '蓝海词池 TOP8+' },
+      { t: '批量商品海选', skill: 'Bestseller Scan', sop: '逐词拉 Bestsellers，按价格/销量/评价/上架时长过滤', d: '自动排除下滑款，去重后进入诊断。', out: '候选清单' },
+      { t: '单品诊断', skill: 'Listing Probe', sop: '价格/转化/曝光/趋势曲线 + 标签深挖', d: '每个候选算清 Etsy 真实费率后的净利与毛利。', out: '诊断数据表' },
+      { t: '店铺交叉核验', skill: 'Shop Cross Check', sop: '同词 ≥3 店稳定出单才可信；单款撑店标孤爆', d: 'EverBee 数据为预估值，孤爆与需求结论都标注人工复核。', out: '风险标记' },
+      { t: '评级与报告', skill: 'SABC Report', sop: 'S/A/B/C 打分排序 + AI 差异化建议 + 人工复核清单', d: 'IP 命中品牌/角色词的候选直接淘汰，不推荐。', out: '选品报告（六段结构）' }
     ],
     deliverables: [
-      { t: '万圣节家居选品包', d: '12 个 SKU，平均预估净利 ¥38' },
-      { t: '竞品对标表', d: '3 家标杆店铺结构拆解' }
+      { t: '选品数字员工（已打通 EverBee MCP）', d: 'selection-scout.html · 词根进 → 七阶段报告出，全程 1~3 分钟' },
+      { t: '选品报告沉淀', d: '报告存在后端本机 data/selection-reports.json，可回看与删除' }
     ]
   },
   {

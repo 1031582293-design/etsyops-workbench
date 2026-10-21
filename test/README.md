@@ -10,7 +10,7 @@ EverBee 并发时服务端偶发返回「空壳」，只有连续多轮才会露
 别拿「第二遍过了」糊弄，要把触发条件找出来。
 
 ```bash
-for i in 1 2; do node test/selftest.everbee.mjs; node test/selftest.frontend.mjs; node test/selftest.import.mjs; done
+for i in 1 2; do node test/selftest.everbee.mjs; node test/selftest.frontend.mjs; node test/selftest.import.mjs; node test/selftest.selection.mjs; done
 ```
 
 ## 为什么不用真实 HTTP
@@ -144,6 +144,19 @@ for f in frontend preview canvas cover filestyle runs everbee; do node test/self
 - `status`：不吐 token 字段
 
 > 该自测用 mock `fetchImpl`，不碰真实 EverBee，所以沙盒里、CI 里都能跑。
+
+**选品 selftest.selection.mjs（49 项，零网络依赖）**
+- 解析：`parseMoney` / `parseInt_`（空串与占位符 → null，不冒充 0）/ `parseGrowth`（含 ↓/↑）/ `parseMonths`
+- 利润：$24 实算净利 14.07 / 毛利 58.6%（Etsy 费率 0.20+6.5%+3%+0.25）；站外广告开关
+- IP 规则：品牌/角色词命中 → high；蓝海词池过滤 + 去重 + score 降序
+- 海选归一 + 阈值过滤（价格/销量/评价/上架时长/下滑款）
+- 店铺交叉核验：同词 ≥3 店可信；占全店 70%+ → 孤爆
+- 完整 7 阶段（mock everbee + mock AI）：done / 报告六段结构 / 强制标注预估数据 / 落盘-列表-删除
+- 分支：蓝海词不足 → need_keywords；候选不足 → need_relax → 宽松档重跑 done
+- AI 失败不阻塞报告（报告标注原因）；find_bestsellers 空壳响应自动重试；未授权错误透传
+
+**选品后端路由**（挂在 `/api/selection/*`，job 提交+轮询模式，同 AI 生稿防长连接被掐）：
+`POST /api/selection/run` → `GET /api/selection/job?id=`（每 3 秒）→ `GET /api/selection/reports` / `report?id=` / `report/delete`。
 > 真实网络路径用 `EVERBEE_LIVE` 时另行验证（需有效 token，见模块内注释）。
 
 ## 历史：自测抓出过的真实缺陷（别再犯）
