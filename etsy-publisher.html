@@ -653,7 +653,7 @@ function fetchT(url, ms, opts){
   const t = setTimeout(()=>c.abort(), ms);
   return fetch(url, Object.assign({}, opts || {}, { signal: c.signal })).finally(()=>clearTimeout(t));
 }
-async function apiCall(path, opts){
+async function apiCallOnce(path, opts){
   opts = opts || {};
   const ms = opts.timeout || 90000;
   const label = opts.label || path;
@@ -668,7 +668,7 @@ async function apiCall(path, opts){
   try { txt = await r.text(); }
   catch(te){ throw new Error(label + '：响应体传输中断（HTTP ' + r.status + '）。' + (te && te.message)); }
   if (ct.indexOf('application/json') < 0){
-    throw new Error(label + '：后端返回的不是 JSON（content-type=' + (ct||'空') + '）。\n开头内容：' + txt.slice(0,140).replace(/\s+/g,' '));
+    throw new Error(label + '：后端返回的不是 JSON（HTTP ' + r.status + '，content-type=' + (ct||'空') + '）。\n开头内容：' + txt.slice(0,140).replace(/\s+/g,' '));
   }
   let d;
   try { d = JSON.parse(txt || '{}'); }
@@ -685,6 +685,27 @@ async function apiCall(path, opts){
     throw new Error((d && (d.note || d.error)) || (label + ' 返回了 ok:false'));
   }
   return d;
+}
+
+/* ★ 隧道层瞬时抖动的自动重试（2026-10-21 加）。
+ * 只重试「请求大概率没到后端」的错误 —— Cloudflare 隧道 1033、网关 502/503/520-525、
+ * 连接层网络错误。这些错误发生在隧道/网关，请求根本没落到后端，重发不会有副作用。
+ * 业务错误（4xx）、后端 5xx、超时（可能已部分执行）一律不重试，避免重复副作用
+ * （比如批量任务提交重试会开出两个任务）。
+ * 这样隧道闪断几十秒时，请求自己会补发，用户不用手动点重试。 */
+async function apiCall(path, opts){
+  opts = opts || {};
+  const tries = (opts.retries == null) ? 2 : opts.retries;
+  for (let attempt = 0; ; attempt++){
+    try {
+      return await apiCallOnce(path, opts);
+    } catch(e){
+      const msg = String((e && e.message) || e || '');
+      const retriable = /1033|Failed to fetch|ECONN|ENET|502|503|520|521|522|523|524|525/i.test(msg);
+      if (!retriable || attempt >= tries || opts.noRetry) throw e;
+      await new Promise(res => setTimeout(res, 400 * (attempt + 1)));
+    }
+  }
 }
 
 /* ---------- 日志 ---------- */
