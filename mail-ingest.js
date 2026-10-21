@@ -196,3 +196,28 @@ export async function markState(dataDir, id, status) {
   await writeFile(stateFile(dataDir), JSON.stringify(all, null, 0));
   return { ok: true, id: String(id), status };
 }
+
+/* ── 邮件里的跳转链接（点「打开对话」用）──────────────────────────────
+   从 .eml 里现读太慢（前端刷新一次要开上百个文件），所以收信时算一次存起来。 */
+
+function linksFile(dataDir) {
+  return join(dataDir, 'links.json');
+}
+
+export async function readLinks(dataDir) {
+  const f = linksFile(dataDir);
+  if (!existsSync(f)) return {};
+  try {
+    const d = JSON.parse(await readFile(f, 'utf8'));
+    return (d && typeof d === 'object') ? d : {};
+  } catch { return {}; }
+}
+
+export async function saveLink(dataDir, id, link) {
+  if (!id || !link) return { ok: false };
+  const all = await readLinks(dataDir);
+  all[String(id)] = String(link);
+  await mkdir(dataDir, { recursive: true });
+  await writeFile(linksFile(dataDir), JSON.stringify(all, null, 0));
+  return { ok: true };
+}

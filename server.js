@@ -976,16 +976,21 @@ async function handleApi(req, res) {
 
     // 飞书通知：故意不 await——邮件已经落盘，通知失败不能反过来影响收信。
     // 重复投递不再提醒，否则 Worker 重试会把群刷屏。
-    if (r.ok && !r.duplicate && FEISHU_WEBHOOK) {
+    if (r.ok && !r.duplicate) {
       try {
         const rawBuf = Buffer.from(body.rawB64, 'base64');
-        mailNotify.notifyMail(r, rawBuf, {
-          webhook: FEISHU_WEBHOOK, secret: FEISHU_SECRET, baseUrl: PUBLIC_BASE,
-        }).then((x) => {
-          if (!x.ok) console.warn('[mail] 飞书通知失败:', x.error || x.code);
-        }).catch((e) => console.warn('[mail] 飞书通知异常:', e && e.message));
+        // 顺手把「打开对话」的链接存下来，前端就不用每次去读 .eml
+        const link = mailNotify.extractLink(rawBuf);
+        if (link) mail.saveLink(MAIL_DATA_DIR, r.id, link).catch(() => {});
+        if (FEISHU_WEBHOOK) {
+          mailNotify.notifyMail(r, rawBuf, {
+            webhook: FEISHU_WEBHOOK, secret: FEISHU_SECRET, baseUrl: PUBLIC_BASE,
+          }).then((x) => {
+            if (!x.ok) console.warn('[mail] 飞书通知失败:', x.error || x.code);
+          }).catch((e) => console.warn('[mail] 飞书通知异常:', e && e.message));
+        }
       } catch (e) {
-        console.warn('[mail] 飞书通知准备失败:', e && e.message);
+        console.warn('[mail] 通知准备失败:', e && e.message);
       }
     }
 
@@ -1018,6 +1023,7 @@ async function handleApi(req, res) {
     const limit = Number(url.searchParams.get('limit')) || 100;
     const r = await mail.recent(MAIL_DATA_DIR, limit);
     const st = await mail.readState(MAIL_DATA_DIR);
+    const links = await mail.readLinks(MAIL_DATA_DIR);
     const items = r.items.map((x) => {
       const c = mailNotify.classify(x.subject);
       const rec = mailNotify.parseSubject(x.subject);
@@ -1034,6 +1040,7 @@ async function handleApi(req, res) {
         status: s,
         ageHours: Math.max(0, Math.floor(ageMs / 3600000)),
         size: x.size || 0,
+        link: links[x.id] || '',
       };
     }).filter((x) => (!wantStatus || x.status === wantStatus) && (!wantType || x.type === wantType));
     return json(res, 200, { ok: true, count: items.length, items });
