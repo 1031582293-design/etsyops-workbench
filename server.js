@@ -14,6 +14,7 @@ import * as everbee from './etsy-everbee.js';
 import * as selection from './etsy-selection.js';
 import * as mail from './mail-ingest.js';
 import * as mailNotify from './mail-notify.js';
+import * as schemaCheck from './etsy-schema-check.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)));
 
@@ -166,6 +167,20 @@ const ETSY_TOKEN_FILE = join(DATA_DIR, 'etsy-token.json');
 const ETSY_OAUTH_STATE_FILE = join(DATA_DIR, 'etsy-oauth-state.json');
 const etsyStore = etsy.createTokenStore(ETSY_TOKEN_FILE, { readFileSync, writeFileSync, mkdirSync, renameSync });
 const etsyLog = (...a) => console.log('[etsy]', ...a);
+
+/* Etsy 字段变更监控：启动时异步探查官方 spec，和本地缓存比对。
+ * 结果进 /api/etsy/preflight 的 schemaCheck，前端第 1 步配置摘要显示。
+ * 铁律：拉不到 spec 只降级，绝不影响上架主流程。 */
+const SCHEMA_CHECK_FILE = join(DATA_DIR, 'etsy-schema-check.json');
+
+function readSchemaCheckResult() {
+  try { return JSON.parse(readFileSync(SCHEMA_CHECK_FILE, 'utf8')); } catch { return null; }
+}
+
+function kickSchemaCheck() {
+  schemaCheck.runSchemaCheck({ cacheFile: SCHEMA_CHECK_FILE, log: etsyLog })
+    .catch((e) => etsyLog('Etsy 字段校验异常（已忽略）：' + (e && e.message)));
+}
 
 /* ★ 后端真实 AI 日志环形缓冲：前端可增量拉取展示。
  * 解决「前端日志与后端事实不符」——之前 AI 批量在后台跑时，逐条的真实结果
@@ -2781,6 +2796,7 @@ async function handleApi(req, res) {
           d.readiness.__err && '处理档案读取失败：' + d.readiness.__err,
           d.returnPolicies.__err && '退货政策读取失败：' + d.returnPolicies.__err,
         ].filter(Boolean),
+        schemaCheck: readSchemaCheckResult(),
         note: '实物商品建草稿必须有 shipping_profile_id 与 readiness_state_id；类目 taxonomy_id 请用 /api/etsy/taxonomy 按关键词查。',
       });
     } catch (e) {
@@ -3155,8 +3171,12 @@ async function handleApi(req, res) {
         note: '草稿已建立，尚未发布（Etsy 上架费 $0.20 只在发布时产生）。请到 Shop Manager → Listings 里核对一遍，确认无误再点「确认发布」。',
       });
     } catch (e) {
-      etsyLog('建草稿失败：' + e.message);
-      return json(res, 502, { error: 'etsy_error', note: e.message, status: e.status || 0, etsy: e.etsy || null, rateLimit: e.rateLimit || null });
+      // 字段变更兜底：从 Etsy 400 原文抓「unknown field / invalid enum」等关键词，
+      // 命中即提醒「疑似平台字段变更」，否则只记普通失败。
+      const cls = schemaCheck.classifySchemaError(e.message);
+      if (cls.suspected) etsyLog('⚠️ 建草稿失败，' + cls.reason + '：' + e.message);
+      else etsyLog('建草稿失败：' + e.message);
+      return json(res, 502, { error: 'etsy_error', note: e.message, status: e.status || 0, etsy: e.etsy || null, rateLimit: e.rateLimit || null, schemaSuspect: cls.suspected || false });
     }
   }
 
@@ -3608,6 +3628,9 @@ server.listen(PORT, HOST, () => {
     console.log('  etsy: OFF（缺 ' + miss.join('、') + '；不影响公众号与 AI 功能）');
     console.log('ℹ️ etsy: ETSY_SHOP_ID 无需填写，授权成功时会从 token 自动识别并存盘。');
   }
+
+  // 字段变更监控：异步探查官方 spec（fire-and-forget，不阻塞启动；拉不到就降级）
+  kickSchemaCheck();
 });
 
 // 定期清理 10 分钟前受理但从未被查询的生稿任务，防止 Map 无限增长

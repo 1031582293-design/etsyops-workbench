@@ -221,6 +221,7 @@
             <tr><td>配送模板 Shipping profile</td><td id="pfShip">—</td></tr>
             <tr><td>处理档案 Processing profile</td><td id="pfReady">—</td></tr>
             <tr><td>退货政策 Return policy</td><td id="pfReturn">—</td></tr>
+            <tr><td>Etsy 字段校验 Schema check</td><td id="pfSchema">—</td></tr>
           </table>
         </div>
 
@@ -968,6 +969,21 @@ async function loadPreflight(force){
       ? PREF.readinessStates.map(x => x.title + '（' + x.id + '）').join('、') : '⚠️ 还没有处理档案';
     document.getElementById('pfReturn').textContent = (PREF.returnPolicies || []).length
       ? PREF.returnPolicies.map(x => x.title + '（' + x.id + '）').join('、') : '（未拉取，留空用店铺默认）';
+
+    const sc = PREF.schemaCheck || {};
+    const pfSchema = document.getElementById('pfSchema');
+    if (sc.status === 'changed') {
+      pfSchema.innerHTML = '<b style="color:var(--warn)">⚠️ spec 已更新（' + esc(sc.lastValidated) + '），请核对以下字段</b><br>'
+        + (sc.changes || []).map(c => esc(c.detail)).join('<br>');
+    } else if (sc.status === 'changed_unknown') {
+      pfSchema.innerHTML = '<b style="color:var(--warn)">⚠️ spec 已更新到 ' + esc(sc.lastValidated) + '</b>，暂无法解析具体差异，建议人工核对字段';
+    } else if (sc.status === 'unchecked') {
+      pfSchema.textContent = '（未校验：拉不到官方 spec，不影响上架）';
+    } else if (sc.status === 'ok' && sc.lastValidated) {
+      pfSchema.textContent = '✓ 正常（spec ' + sc.lastValidated + '）';
+    } else {
+      pfSchema.textContent = '—';
+    }
 
     fillSelect('fShip', PREF.shippingProfiles, '选择配送模板', true);
     fillSelect('fReady', PREF.readinessStates, '选择处理档案', true);
