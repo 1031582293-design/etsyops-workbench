@@ -671,13 +671,16 @@ function createPreflight(client) {
 
 async function loadAll(client) {
   const sid = client.shopId();
-  const [sections, shipping, readiness, shop] = await Promise.all([
+  const [sections, shipping, readiness, shop, returnPolicies] = await Promise.all([
     client.get(`/shops/${sid}/sections`).catch(e => ({ __err: e.message, results: [] })),
     client.get(`/shops/${sid}/shipping-profiles`).catch(e => ({ __err: e.message, results: [] })),
     client.get(`/shops/${sid}/readiness-state-definitions`).catch(e => ({ __err: e.message, results: [] })),
     client.get(`/shops/${sid}`).catch(e => ({ __err: e.message })),
+    // 退货政策：官方字段只有 return_policy_id / accepts_returns / accepts_exchanges / return_deadline，
+    // 没有「名字」，前端拼成「退货+换货 · 30 天」这类可读名。
+    client.get(`/shops/${sid}/policies/return`).catch(e => ({ __err: e.message, results: [] })),
   ]);
-  return { sections, shipping, readiness, shop };
+  return { sections, shipping, readiness, shop, returnPolicies };
 }
 
 /** 在 seller 类目树里按关键词找taxonomy_id。AI 给的类目名只是候选，必须用这个换真实 ID。 */

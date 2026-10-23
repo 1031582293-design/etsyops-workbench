@@ -220,6 +220,7 @@
             <tr><td>店铺分区 Shop section</td><td id="pfSection">—</td></tr>
             <tr><td>配送模板 Shipping profile</td><td id="pfShip">—</td></tr>
             <tr><td>处理档案 Processing profile</td><td id="pfReady">—</td></tr>
+            <tr><td>退货政策 Return policy</td><td id="pfReturn">—</td></tr>
           </table>
         </div>
 
@@ -476,8 +477,8 @@
             <input type="text" id="fMat" placeholder="Ceramic" />
           </div>
           <div>
-            <label class="fld">退货政策 ID<span class="hint">可留空</span></label>
-            <input type="text" id="fReturn" placeholder="留空则用店铺默认" />
+            <label class="fld">退货政策 Return policy<span class="hint">可留空</span></label>
+            <select id="fReturn"><option value="">留空则用店铺默认</option></select>
           </div>
         </div>
 
@@ -965,9 +966,12 @@ async function loadPreflight(force){
       ? PREF.shippingProfiles.map(x => x.title + '（' + x.id + '）').join('、') : '⚠️ 还没有配送模板';
     document.getElementById('pfReady').textContent = (PREF.readinessStates || []).length
       ? PREF.readinessStates.map(x => x.title + '（' + x.id + '）').join('、') : '⚠️ 还没有处理档案';
+    document.getElementById('pfReturn').textContent = (PREF.returnPolicies || []).length
+      ? PREF.returnPolicies.map(x => x.title + '（' + x.id + '）').join('、') : '（未拉取，留空用店铺默认）';
 
     fillSelect('fShip', PREF.shippingProfiles, '选择配送模板', true);
     fillSelect('fReady', PREF.readinessStates, '选择处理档案', true);
+    fillSelect('fReturn', PREF.returnPolicies, '留空则用店铺默认', false);
     const secSel = document.getElementById('fSection');
     secSel.innerHTML = '<option value="">未分类</option>' +
       (PREF.sections || []).map(x => '<option value="' + x.id + '">' + esc(x.title) + '</option>').join('');
@@ -2751,14 +2755,11 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
 
 /* 模板：第 1 行列名、第 2 行填法说明、第 3 行示例（示例行用前须删除） */
 document.getElementById('btnImportTpl').addEventListener('click', () => {
+  // 列顺序按「字段总表」分组：标识 → 图片 → 类目 → 文案 → 价格库存 → 制作信息 → 材质属性变体 → 物理尺寸 → 店铺配置 → 辅助
   const rows = [
-    ['图片文件名', '类目关键词', '价格', '数量', '制作方', '制作时间', '材质', '变体维度', '是否定制', '产品净重', '长度', '宽度', '高度', '适合人群', '类目ID', '标题', '描述', '标签', '生产伙伴'],
-    ['【必填】逗号分隔多个文件名', '英文物品名，Agent 自动搜类目选叶子', '【必填】美元数字', '【必填】正整数', 'i_did / someone_else / collective',
-     'made_to_order / 2020_2026', '逗号分隔', '英文属性名逗号分隔，如 Primary color, Size', '是 / 否',
-     '克或千克', 'cm', 'cm', 'cm', '非 Etsy 字段，建议写进描述',
-     '留空则用类目关键词自动查', '可留空由 AI 生成', '可留空由 AI 生成', '逗号分隔，最多 13 个', '可留空'],
-    ['wolf-head-01.jpg', 'fursuit head base', '30.70', '10', 'i_did', '2020_2026', 'EVA foam, sandwich mesh', 'Primary color, Size', '否', '2250', '50', '50', '30',
-     'Standard size with adjustable foam blocks', '', '（示例行，用前请删除）', '（示例行）', 'wolf fursuit head, wolf mask', ''],
+    ['编号', '图片文件名', '商品类型', '类目关键词', '类目ID', '标题', '描述', '标签', '价格', '数量', '制作方', '制作时间', '是否手工材料', '是否定制', '材质', '属性', '变体维度', '变体SKU', '产品净重', '重量单位', '长度', '宽度', '高度', '尺寸单位', '配送模板', '处理档案', '退货政策', '店铺分区', '生产伙伴', '交付文件名', '适合人群'],
+    ['主条目编号，组合行留空', '【必填】逗号分隔多个文件名', 'physical / digital，留空默认实物', '英文物品名，Agent 自动搜类目选叶子', '留空则用类目关键词自动查', '可留空由 AI 生成', '可留空由 AI 生成', '逗号分隔，最多 13 个', '【必填】美元数字', '【必填】正整数', 'i_did / someone_else / collective', 'made_to_order / 2020_2026', '是 / 否，成品填 否', '是 / 否', '逗号分隔，建议英文', '属性名=值，分号分隔', '英文属性名逗号分隔，如 Primary color, Size', '每个组合一个，自由文本', '克或千克', 'g / kg / oz / lb', 'cm', 'cm', 'cm', 'cm / mm / m / in', '店铺配送模板 ID，第 1 步可见', '店铺处理档案 ID，第 1 步可见', '店铺退货政策 ID，可留空', '店铺分区 ID，可留空=未分类', '数字 ID，纯英文逗号分隔', '仅数字商品，可留空', '非 Etsy 字段，建议写进描述'],
+    ['WOLF-HEAD-001', 'wolf-head-01.jpg', 'physical', 'fursuit head base', '', '（示例行，用前请删除）', '（示例行）', 'wolf fursuit head, wolf mask', '30.70', '10', 'i_did', '2020_2026', '否', '否', 'EVA foam, sandwich mesh', '', 'Primary color, Size', '', '2250', 'g', '50', '50', '30', 'cm', '', '', '', '', '', '', 'Standard size with adjustable foam blocks'],
   ];
   const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
   // 带 BOM：Excel / WPS 打开中文 CSV 才不会乱码

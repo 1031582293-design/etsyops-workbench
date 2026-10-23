@@ -2767,10 +2767,19 @@ async function handleApi(req, res) {
         sections: (d.sections.results || []).map(s => ({ id: s.shop_section_id, title: s.title, num: s.num_listings })),
         shippingProfiles: (d.shipping.results || []).map(s => ({ id: s.shipping_profile_id, title: s.title, origin: s.origin_country_iso, delivery: s.delivery_time_min, maxDelivery: s.delivery_time_max })),
         readinessStates: (d.readiness.results || []).map(s => ({ id: s.readiness_state_id, title: s.title, processing_min: s.processing_time_min, processing_max: s.processing_time_max, is_made_to_order: s.is_made_to_order })),
+        returnPolicies: (d.returnPolicies.results || []).map(p => ({
+          id: p.return_policy_id,
+          accepts_returns: p.accepts_returns,
+          accepts_exchanges: p.accepts_exchanges,
+          return_deadline: p.return_deadline,
+          title: ([p.accepts_returns ? '退货' : '', p.accepts_exchanges ? '换货' : ''].filter(Boolean).join('+')
+            + (p.return_deadline ? ' · ' + p.return_deadline + ' 天' : '')) || '不接受退换',
+        })),
         warnings: [
           d.sections.__err && '店铺分区读取失败：' + d.sections.__err,
           d.shipping.__err && '配送模板读取失败：' + d.shipping.__err,
           d.readiness.__err && '处理档案读取失败：' + d.readiness.__err,
+          d.returnPolicies.__err && '退货政策读取失败：' + d.returnPolicies.__err,
         ].filter(Boolean),
         note: '实物商品建草稿必须有 shipping_profile_id 与 readiness_state_id；类目 taxonomy_id 请用 /api/etsy/taxonomy 按关键词查。',
       });
