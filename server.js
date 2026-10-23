@@ -15,6 +15,7 @@ import * as selection from './etsy-selection.js';
 import * as mail from './mail-ingest.js';
 import * as mailNotify from './mail-notify.js';
 import * as schemaCheck from './etsy-schema-check.js';
+import * as translate from './etsy-translate.js';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)));
 
@@ -688,6 +689,29 @@ const ETSY_AI_IMAGE_MODEL = (process.env.ETSY_AI_IMAGE_MODEL || '').trim() || AI
 const AI_PROXY = (process.env.AI_PROXY || '').trim();
 const ETSY_AI_PROXY = (process.env.ETSY_AI_PROXY || '').trim() || AI_PROXY;
 const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 120000; // 文案生成一般 20~60 秒；120s 兜底
+
+/* ===================== 模板中文 → 英文 翻译 =====================
+ * 默认引擎 = 腾讯云机器翻译 TMT（每月 500 万字符免费，国内直连，不走代理）。
+ * TRANSLATE_PROVIDER=ai 可整体切成 AI 精翻；页面「精翻」按钮则是对单个字段用 AI。
+ * 术语表 data/translate-glossary.json 可增删（格式 {"中文":"English"}），加载时覆盖默认表。 */
+const TRANSLATE_PROVIDER = (process.env.TRANSLATE_PROVIDER || 'tencent').trim().toLowerCase();
+const TENCENT_SECRET_ID = (process.env.TENCENT_SECRET_ID || '').trim();
+const TENCENT_SECRET_KEY = (process.env.TENCENT_SECRET_KEY || '').trim();
+const TENCENT_TMT_REGION = (process.env.TENCENT_TMT_REGION || 'ap-guangzhou').trim();
+const TRANSLATE_GLOSSARY_FILE = join(DATA_DIR, 'translate-glossary.json');
+
+function translateGlossary() {
+  try {
+    const raw = readFileSync(TRANSLATE_GLOSSARY_FILE, 'utf8');
+    return translate.loadGlossary(JSON.parse(raw));
+  } catch {
+    return translate.loadGlossary(null);   // 文件不存在 / 损坏 → 用默认表
+  }
+}
+
+function tmtConfigured() {
+  return Boolean(TENCENT_SECRET_ID && TENCENT_SECRET_KEY);
+}
 
 function aiConfigured() {
   return Boolean(AI_API_KEY);
@@ -2608,6 +2632,40 @@ async function handleApi(req, res) {
         note: String((e && e.message) || e),
       });
     }
+  }
+
+  /* 模板字段 一键中→英：items=[{field,text}]，术语表直替 + 引擎翻译。
+     provider = tencent（默认，TMT 免费）| ai（AI 精翻）。返回与输入等长的 results。 */
+  if (p === '/api/etsy/translate' && req.method === 'POST') {
+    let body;
+    try { body = await readJson(req); }
+    catch (e) { return json(res, 400, { ok: false, error: 'bad_json', note: String((e && e.message) || e) }); }
+    const items = Array.isArray(body.items) ? body.items : [];
+    const provider = String(body.provider || TRANSLATE_PROVIDER).toLowerCase();
+    if (!items.length) return json(res, 400, { ok: false, error: 'no_items', note: '没有要翻译的内容。' });
+
+    const glossary = translateGlossary();
+    let engine;
+    if (provider === 'ai') {
+      if (!etsyAiConfigured()) {
+        return json(res, 400, { ok: false, error: 'ai_not_configured', note: 'AI 未配置：.env 需要 ETSY_AI_API_KEY / ETSY_AI_BASE_URL / ETSY_AI_MODEL。' });
+      }
+      engine = translate.makeAiEngine(glossary,
+        (sys, usr) => etsyAiGenerate(sys, usr, { temperature: 0.2, max_tokens: 500, model: ETSY_AI_MODEL, label: '模板翻译' }));
+    } else {
+      if (!tmtConfigured()) {
+        return json(res, 400, { ok: false, error: 'tencent_not_configured', note: '腾讯云 TMT 未配置：.env 需要 TENCENT_SECRET_ID / TENCENT_SECRET_KEY（每月 500 万字符免费）。' });
+      }
+      engine = translate.makeTmtEngine(glossary, { secretId: TENCENT_SECRET_ID, secretKey: TENCENT_SECRET_KEY, region: TENCENT_TMT_REGION });
+    }
+    const results = await translate.translateAll(items, glossary, engine);
+    const failCount = results.filter(x => !x.ok).length;
+    return json(res, 200, { ok: true, provider, results, failCount });
+  }
+
+  /* 返回当前生效的术语表（默认 + data/translate-glossary.json 覆盖），供展示/后续编辑。 */
+  if (p === '/api/etsy/translate/glossary' && req.method === 'GET') {
+    return json(res, 200, { ok: true, glossary: translateGlossary() });
   }
 
   if (p === '/api/selection/reports' && req.method === 'GET') {

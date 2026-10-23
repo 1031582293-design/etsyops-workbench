@@ -253,7 +253,9 @@
           <button class="btn sm" id="btnImportFile">选择 CSV 文件</button>
           <button class="btn sm" id="btnImportParse">解析表格</button>
           <button class="btn sm ghost" id="btnImportTpl">下载模板</button>
+          <button class="btn sm" id="btnTranslate" title="把材质/变体维度/变体值/属性/类目关键词里的中文批量翻成英文（腾讯云 TMT 免费）">一键中→英</button>
         </div>
+        <div id="translateMsg" class="msg hidden"></div>
         <input type="file" id="importFile" accept=".csv,.tsv,.txt" class="hidden" />
         <div id="importMsg" class="msg"></div>
 
@@ -2876,6 +2878,73 @@ function renderImportList() {
 }
 
 document.getElementById('btnImportParse').addEventListener('click', doParseImport);
+
+/* ---------- 一键中→英（模板中文字段批量翻译） ----------
+ * 只翻「会直接进 Etsy、且店主常填中文」的字段：
+ *   材质 / 变体维度 / 变体值 / 属性 / 类目关键词 / 适合人群。
+ * 标题描述标签是 AI 生成的英文、枚举与数字不是文字 —— 都不翻。
+ * 术语表直替优先（fursuit 专有词 + Etsy 属性名绝不翻错），残留中文交引擎。
+ * 引擎默认腾讯云 TMT（免费）；字段级「精翻」后续走 AI。 */
+function collectTranslateUnits() {
+  const units = [];   // { field, text, apply(en) }
+  const push = (field, text, apply) => { if (text && String(text).trim()) units.push({ field, text: String(text).trim(), apply }); };
+  for (const it of IMPORT_BATCH) {
+    (it.materials || []).forEach((m, i) => push('material', m, en => { it.materials[i] = en; }));
+    (it.variation_dims || []).forEach((d, i) => push('dim', d, en => {
+      it.variation_dims[i] = en;
+      if (it._varTable) it._varTable.dims[i] = en;   // 维度名要和变体表保持一致
+    }));
+    if (it._varTable) {
+      (it._varTable.rows || []).forEach((row) => {
+        (row.values || []).forEach((v, vi) => push('varval', v, en => { row.values[vi] = en; }));
+      });
+    }
+    push('attr', it.attributes_json, en => { it.attributes_json = en; });
+    push('keyword', it.taxonomy_keyword, en => { it.taxonomy_keyword = en; });
+    push('note', it.audience_note, en => { it.audience_note = en; });
+  }
+  return units;
+}
+
+document.getElementById('btnTranslate').addEventListener('click', async () => {
+  const box = document.getElementById('translateMsg');
+  if (!IMPORT_BATCH.length) { importMsg('err', '先解析表格，再点「一键中→英」。'); return; }
+  const units = collectTranslateUnits();
+  if (!units.length) {
+    box.className = 'msg info'; box.style.display = 'block';
+    box.innerHTML = '没发现中文字段，无需翻译。';
+    return;
+  }
+  const btn = document.getElementById('btnTranslate');
+  btn.disabled = true;
+  box.className = 'msg info'; box.style.display = 'block';
+  box.innerHTML = '正在翻译 ' + units.length + ' 处中文字段（腾讯云 TMT 免费额度）…';
+  try {
+    const r = await apiCall('/api/etsy/translate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: units.map(u => ({ field: u.field, text: u.text })) }),
+    });
+    if (!r || !r.ok) throw new Error((r && r.note) || '翻译失败');
+    let ok = 0, fail = 0;
+    r.results.forEach((res, i) => {
+      if (res && res.ok && res.en) { units[i].apply(res.en); ok++; }
+      else fail++;
+    });
+    renderImportList();
+    if (CURRENT_IDX >= 0) applyImportRow(IMPORT_BATCH[CURRENT_IDX]);   // 同步当前条目表单
+    const fails = r.results.filter(x => !x.ok).slice(0, 5);
+    box.className = fail ? 'msg warn' : 'msg ok';
+    box.innerHTML = '翻译完成：<b>' + ok + '</b> 处已回填英文'
+      + (fail ? '，<b style="color:var(--bad)">' + fail + '</b> 处失败' : '')
+      + (fail ? '<br>' + fails.map(x => esc(String(x.zh || '').slice(0, 20) + '：' + (x.note || '未知原因'))).join('<br>') : '');
+  } catch (e) {
+    box.className = 'msg err';
+    box.innerHTML = '翻译失败：' + esc((e && e.message) || e);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 document.getElementById('btnToAi').addEventListener('click', () => {
   goto(2);   // 进页自动开跑批量候选词（startKwBatch 自己会报进度，这里不再盖消息）
