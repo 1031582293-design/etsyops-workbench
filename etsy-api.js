@@ -857,13 +857,20 @@ function validateDraftInput(inp) {
   // ★ Etsy 市场准入规则（2026-10-21 实锤：who_made=someone_else + 非材料 + 非古董
   //   被 Etsy 400 拒绝 invalid_marketplace「Oh dear, you cannot sell this item on Etsy.」）：
   //   someone_else（不是你做的）只允许两类 —— ①手工材料/工具（is_supply=true）
-  //   ②20 年以上的古董（when_made 早于 2006）。成品代卖会被拒。
+  //   ②20 年以上的古董（官网下拉 Vintage 段：2000_2006 及更早）。
+  const WHEN_MADE_ENUM = ['made_to_order', '2020_2026', '2010_2019', '2007_2009', 'before_2007',
+    '2000_2006', '1990s', '1980s', '1970s', '1960s', '1950s', '1940s', '1930s', '1920s',
+    '1910s', '1900s', '1800s', '1700s', 'before_1700'];
+  if (when && !WHEN_MADE_ENUM.includes(String(when))) {
+    errs.push(`when_made「${when}」不是 Etsy 的合法值。官网下拉对应：Not yet made=made_to_order、`
+      + 'Recently=2020_2026 / 2010_2019 / 2007_2009、Vintage=before_2007 / 2000_2006 / 1990s…before_1700。');
+  }
   if (who === 'someone_else' && !inp.is_supply) {
-    const vintage = /^(2000_2005|1990_1999|1980s|1970s|before_2006|before_2000|antique)/i.test(String(when || ''));
+    const vintage = /^(before_2007|2000_2006|1990s|1980s|1970s|1960s|1950s|1940s|1930s|1920s|1910s|1900s|1800s|1700s|before_1700)$/i.test(String(when || ''));
     if (!vintage) {
       errs.push('「制作方 = 别人做的（someone_else）」且不是材料包、也不是 20 年以上古董 —— '
         + 'Etsy 会直接拒绝（invalid_marketplace「you cannot sell this item」）。'
-        + '请把给料的「制作方」改成 i_did（自制/自己设计），或勾选「是手工材料」，或把制作时间改成 2005 年及更早（古董）。');
+        + '请把给料的「制作方」改成 i_did（自制/自己设计），或勾选「是手工材料」，或把制作时间改成 Vintage 段（2000_2006 及更早）。');
     }
   }
 

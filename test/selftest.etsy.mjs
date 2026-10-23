@@ -153,8 +153,10 @@ console.log('\n【4】建草稿前校验（能在本地拦下的，绝不浪费 
   ok(!e7.ok && /invalid_marketplace|someone_else/.test(e7.errors.join()), '★ someone_else + 非材料 + 非古董被拦（Etsy 会拒）');
   ok(etsy.validateDraftInput({ ...good, who_made: 'someone_else', is_supply: true, when_made: '2020_2026' }).ok,
     'someone_else + 材料包 → 放行');
-  ok(etsy.validateDraftInput({ ...good, who_made: 'someone_else', is_supply: false, when_made: '2000_2005' }).ok,
-    'someone_else + 古董（2000_2005）→ 放行');
+  ok(etsy.validateDraftInput({ ...good, who_made: 'someone_else', is_supply: false, when_made: '2000_2006' }).ok,
+    'someone_else + 古董（2000_2006，官方 Vintage 枚举）→ 放行');
+  ok(!etsy.validateDraftInput({ ...good, when_made: '2008_2009' }).ok,
+    '★ when_made「2008_2009」（旧下拉猜的错值）→ 拦下并提示合法值');
 }
 
 // ========== 5. draft form 组装 ==========
